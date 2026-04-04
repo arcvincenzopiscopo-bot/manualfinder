@@ -110,7 +110,7 @@ def _build_inail_prompt() -> str:
   "documenti_da_richiedere": [
     "Documento che l'ispettore deve richiedere al datore di lavoro, con riferimento normativo che ne impone la tenuta (es. 'Dichiarazione di conformità CE [Dir. 2006/42/CE Art. 7]', 'Registro verifiche periodiche [Art. 71 c.11 D.Lgs. 81/08]', 'Attestato formazione operatore [Art. 37 D.Lgs. 81/08 + Accordo S-R 22/02/2012]')"
   ],
-  "verifiche_periodiche": "Obblighi di verifica periodica previsti dalla normativa VIGENTE: cadenza, soggetto abilitato, riferimento normativo aggiornato (D.Lgs. 81/08 Allegato VII nella versione attualmente in vigore e decreti attuativi). Null se non previsti per questa categoria.",
+  "verifiche_periodiche": "Obblighi di verifica periodica. Se applicabile: 1) categoria di appartenenza secondo Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma; 2) cadenza; 3) soggetto abilitato; 4) riferimento normativo VIGENTE aggiornato. Null se non previsti per questa categoria.",
   "checklist": [
     "Verifica [componente/elemento specifico] — [dove trovarlo fisicamente sulla macchina] — [criterio di conformità: cosa rende la verifica positiva o negativa] [Art. X D.Lgs. 81/08 o Allegato Y punto Z]"
   ],
@@ -210,7 +210,7 @@ def _build_analysis_prompt(brand: str, model: str) -> str:
   "documenti_da_richiedere": [
     "documento che l'ispettore deve richiedere al datore di lavoro [riferimento normativo che lo impone]"
   ],
-  "verifiche_periodiche": "Obblighi di verifica periodica con cadenza e soggetto abilitato — cita la normativa VIGENTE più aggiornata (D.Lgs. 81/08 Allegato VII e decreti attuativi nella versione attuale). Null se non previsti.",
+  "verifiche_periodiche": "Obblighi di verifica periodica. Se applicabile: 1) categoria di appartenenza secondo Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma; 2) cadenza; 3) soggetto abilitato; 4) riferimento normativo VIGENTE aggiornato. Null se non previsti.",
   "limiti_operativi": [
     "limite con VALORE NUMERICO e unità di misura esplicitamente riportato nel documento (es. 'Portata massima: 3.500 kg')"
   ],
@@ -274,7 +274,7 @@ Genera una scheda di sicurezza INDICATIVA:
   "documenti_da_richiedere": [
     "documento essenziale per l'ispettore con riferimento normativo che ne impone la tenuta"
   ],
-  "verifiche_periodiche": "Obblighi di verifica periodica per questa categoria — cita la normativa VIGENTE più aggiornata (D.Lgs. 81/08 Allegato VII e decreti attuativi nella versione attuale). Null se non previsti.",
+  "verifiche_periodiche": "Obblighi di verifica periodica. Se applicabile: 1) categoria di appartenenza secondo Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma; 2) cadenza; 3) soggetto abilitato; 4) riferimento normativo VIGENTE aggiornato. Null se non previsti.",
   "limiti_operativi": [],
   "procedure_emergenza": [
     "Procedura di emergenza tipica per questa categoria: Passo 1 — [azione]. Passo 2 — [azione]."
@@ -344,7 +344,7 @@ Restituisci UN SOLO JSON con la struttura completa:
   ],
   "abilitazione_operatore": "formazione o patentino obbligatorio per legge, null se non previsto",
   "documenti_da_richiedere": ["documento con riferimento normativo"],
-  "verifiche_periodiche": "obbligo di verifica periodica con cadenza e soggetto abilitato — normativa VIGENTE più aggiornata, null se non previsto",
+  "verifiche_periodiche": "Se applicabile: 1) categoria Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo; 2) cadenza; 3) soggetto abilitato; 4) normativa VIGENTE aggiornata. Null se non previsto",
   "limiti_operativi": ["limite con valore numerico e unità di misura"],
   "procedure_emergenza": ["Passo 1: ... — Passo 2: ..."],
   "pittogrammi_sicurezza": ["avvertenza/pittogramma obbligatorio sulla macchina"],
@@ -370,7 +370,7 @@ Rispondi SOLO con un JSON valido con questi due campi:
 
 {{
   "abilitazione_operatore": "Descrizione completa dell'obbligo di abilitazione/formazione previsto dalla normativa italiana ATTUALMENTE IN VIGORE per questa categoria di macchina. Indica: la norma più aggiornata applicabile (es. Accordo Stato-Regioni nella versione vigente, o norma settoriale specifica), nome esatto del titolo abilitativo, durata minima del corso (ore teoriche + pratiche), soggetti formatori autorizzati, eventuale obbligo di aggiornamento periodico. Se non prevista da nessuna norma vigente, scrivi null.",
-  "verifiche_periodiche": "Descrizione completa degli obblighi di verifica periodica previsti dalla normativa ATTUALMENTE IN VIGORE per questa categoria di macchina. Indica: la norma più aggiornata applicabile (D.Lgs. 81/08 e suoi aggiornamenti, decreti attuativi, circolari INAIL vigenti), cadenza, soggetto abilitato, eventuali soglie (portata, potenza, ecc.) che fanno scattare l'obbligo. Se non previste, scrivi null."
+  "verifiche_periodiche": "Descrizione completa degli obblighi di verifica periodica. Struttura obbligatoria: 1) Categoria di appartenenza secondo l'Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma (es. 'Apparecchi di sollevamento materiali con portata superiore a 200 kg, non azionati a mano, di tipo mobile o trasferibile, con modalità di utilizzo regolare'); 2) Cadenza della verifica; 3) Soggetto abilitato (INAIL/ASL/organismo notificato); 4) Riferimento normativo vigente aggiornato. Se la macchina non rientra in nessuna categoria dell'Allegato VII, scrivi null."
 }}
 
 ISTRUZIONI:
