@@ -580,9 +580,9 @@ async def _analyze_dual_source(
         producer_label,
     )
     pittogrammi_sicurezza = producer_json.get("pittogrammi_sicurezza") or []
-    abilitazione_operatore = inail_json.get("abilitazione_operatore")
+    abilitazione_operatore = _nullable_str(inail_json.get("abilitazione_operatore"))
     documenti_da_richiedere = inail_json.get("documenti_da_richiedere") or []
-    verifiche_periodiche = inail_json.get("verifiche_periodiche")
+    verifiche_periodiche = _nullable_str(inail_json.get("verifiche_periodiche"))
 
     # Nota combinata
     notes = []
@@ -824,7 +824,7 @@ def _parse_json_response(text: str) -> dict:
     for str_field in ["gap_ce_ante", "abilitazione_operatore", "verifiche_periodiche", "confidence_ai"]:
         m_str = re.search(rf'"{str_field}"\s*:\s*"([^"]+)"', text)
         if m_str:
-            result[str_field] = m_str.group(1)
+            result[str_field] = _nullable_str(m_str.group(1))
     if result:
         result.setdefault("rischi_principali", [])
         result.setdefault("dispositivi_protezione", [])
@@ -841,6 +841,16 @@ def _parse_json_response(text: str) -> dict:
         "rischi_residui": [],
         "note": f"Errore parsing. Risposta raw: {text[:300]}",
     }
+
+
+_NULL_STR_VALUES = {"null", "none", "n/a", "non previsto", "non applicabile"}
+
+def _nullable_str(value) -> Optional[str]:
+    """Restituisce None se il valore è una stringa null-like (es. 'Null', 'None', 'N/A')."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return None if s.lower() in _NULL_STR_VALUES else s
 
 
 def _build_safety_card(
@@ -885,9 +895,9 @@ def _build_safety_card(
         procedure_emergenza=_tag(data.get("procedure_emergenza") or []),
         limiti_operativi=_tag(data.get("limiti_operativi") or []),
         pittogrammi_sicurezza=data.get("pittogrammi_sicurezza") or [],
-        abilitazione_operatore=data.get("abilitazione_operatore"),
+        abilitazione_operatore=_nullable_str(data.get("abilitazione_operatore")),
         documenti_da_richiedere=data.get("documenti_da_richiedere") or [],
-        verifiche_periodiche=data.get("verifiche_periodiche"),
+        verifiche_periodiche=_nullable_str(data.get("verifiche_periodiche")),
         confidence_ai=data.get("confidence_ai"),
         fonte_manuale=fonte_url,
         fonte_tipo=fonte_tipo,
