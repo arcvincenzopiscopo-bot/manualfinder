@@ -1,0 +1,8 @@
+INFO:     Will watch for changes in these directories: ['C:\\Users\\ARCVI\\OneDrive\\Desktop\\progetto lettura manuali da etichetta\\manualfinder\\backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [23596] using WatchFiles
+INFO:     Started server process [16832]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\models\responses.py'. Reloading...
+ 
