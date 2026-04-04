@@ -106,11 +106,11 @@ def _build_inail_prompt() -> str:
       "verifica_ispezione": "Verifica/Controlla/Accertati [DOVE trovarlo fisicamente] — [COME verificare che funzioni o sia presente] [rif. normativo se applicabile]"
     }
   ],
-  "abilitazione_operatore": "Formazione e/o patentino obbligatorio per l'operatore secondo normativa italiana. Esempio: 'Abilitazione obbligatoria Accordo Stato-Regioni 22/02/2012 — corso teorico-pratico specifico per PLE (minimo 10h teoriche + addestramento pratico)'. Null se non previsto per questa categoria.",
+  "abilitazione_operatore": "Formazione e/o patentino obbligatorio per l'operatore secondo normativa italiana VIGENTE. Cita la norma più aggiornata in vigore (es. Accordo Stato-Regioni nella versione attuale, non necessariamente quella del 22/02/2012 se aggiornata). Indica: tipo corso, durata minima, soggetti formatori. Null se non previsto per questa categoria.",
   "documenti_da_richiedere": [
     "Documento che l'ispettore deve richiedere al datore di lavoro, con riferimento normativo che ne impone la tenuta (es. 'Dichiarazione di conformità CE [Dir. 2006/42/CE Art. 7]', 'Registro verifiche periodiche [Art. 71 c.11 D.Lgs. 81/08]', 'Attestato formazione operatore [Art. 37 D.Lgs. 81/08 + Accordo S-R 22/02/2012]')"
   ],
-  "verifiche_periodiche": "Obblighi di verifica periodica previsti dalla normativa: cadenza, soggetto abilitato, riferimento normativo. Esempio: 'Verifica annuale da soggetto abilitato INAIL/ASL ex Art. 71 c.11 D.Lgs. 81/08 + Allegato VII — per apparecchi di sollevamento con portata >200 kg'. Null se non previsti per questa categoria.",
+  "verifiche_periodiche": "Obblighi di verifica periodica previsti dalla normativa VIGENTE: cadenza, soggetto abilitato, riferimento normativo aggiornato (D.Lgs. 81/08 Allegato VII nella versione attualmente in vigore e decreti attuativi). Null se non previsti per questa categoria.",
   "checklist": [
     "Verifica [componente/elemento specifico] — [dove trovarlo fisicamente sulla macchina] — [criterio di conformità: cosa rende la verifica positiva o negativa] [Art. X D.Lgs. 81/08 o Allegato Y punto Z]"
   ],
@@ -123,7 +123,7 @@ VINCOLI:
 - dispositivi_sicurezza: 2-5 dispositivi di sicurezza richiesti dalla normativa per questa categoria di macchina.
 - checklist: 4-6 voci azionabili IMMEDIATAMENTE in sopralluogo. Ogni voce DEVE rispondere a tre domande: COSA verificare, DOVE trovarlo, COME stabilire la conformità. Includi il riferimento normativo tra parentesi quadre.
 - documenti_da_richiedere: 3-6 documenti con il riferimento normativo che ne impone la tenuta/esibizione. ESSENZIALE per l'attività ispettiva.
-- abilitazione_operatore: se prevista dall'Accordo Stato-Regioni 22/02/2012 o da normativa specifica, descrivila in dettaglio (tipo corso, durata minima, ente formatore).
+- abilitazione_operatore: se prevista da normativa vigente (Accordo Stato-Regioni nella versione più aggiornata in vigore, o norma settoriale specifica), descrivila in dettaglio (tipo corso, durata minima, ente formatore). Cita sempre la versione normativa attualmente in vigore, non necessariamente quella del 22/02/2012 se aggiornata.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo documento. Non integrare con conoscenze generali.
 - Usa terminologia precisa del D.Lgs. 81/2008.
 - Rispondi SOLO con il JSON valido."""
@@ -206,11 +206,11 @@ def _build_analysis_prompt(brand: str, model: str) -> str:
       "verifica_ispezione": "Verifica/Controlla/Accertati [dove trovarlo fisicamente] — [come verificare il funzionamento] [rif. sezione documento]"
     }}
   ],
-  "abilitazione_operatore": "Formazione obbligatoria richiesta dalla normativa italiana per questo tipo di macchina (Accordo Stato-Regioni 22/02/2012 o normativa specifica). Null se non obbligatoria.",
+  "abilitazione_operatore": "Formazione obbligatoria richiesta dalla normativa italiana VIGENTE per questo tipo di macchina (cita la versione aggiornata dell'Accordo Stato-Regioni in vigore, o normativa settoriale specifica). Null se non obbligatoria.",
   "documenti_da_richiedere": [
     "documento che l'ispettore deve richiedere al datore di lavoro [riferimento normativo che lo impone]"
   ],
-  "verifiche_periodiche": "Obblighi di verifica periodica con cadenza e soggetto abilitato [Art. 71 c.11 D.Lgs. 81/08 o normativa specifica]. Null se non previsti.",
+  "verifiche_periodiche": "Obblighi di verifica periodica con cadenza e soggetto abilitato — cita la normativa VIGENTE più aggiornata (D.Lgs. 81/08 Allegato VII e decreti attuativi nella versione attuale). Null se non previsti.",
   "limiti_operativi": [
     "limite con VALORE NUMERICO e unità di misura esplicitamente riportato nel documento (es. 'Portata massima: 3.500 kg')"
   ],
@@ -270,11 +270,11 @@ Genera una scheda di sicurezza INDICATIVA:
       "verifica_ispezione": "Verifica/Controlla/Accertati [dove trovarlo] — [come verificarlo]"
     }}
   ],
-  "abilitazione_operatore": "Formazione obbligatoria prevista dalla normativa italiana per questa categoria di macchina (Accordo Stato-Regioni 22/02/2012 se applicabile). Null se non prevista.",
+  "abilitazione_operatore": "Formazione obbligatoria prevista dalla normativa italiana VIGENTE per questa categoria di macchina (cita la versione aggiornata dell'Accordo Stato-Regioni in vigore, o norma settoriale specifica). Null se non prevista.",
   "documenti_da_richiedere": [
     "documento essenziale per l'ispettore con riferimento normativo che ne impone la tenuta"
   ],
-  "verifiche_periodiche": "Obblighi di verifica periodica per questa categoria [Art. 71 c.11 D.Lgs. 81/08 o norma specifica]. Null se non previsti.",
+  "verifiche_periodiche": "Obblighi di verifica periodica per questa categoria — cita la normativa VIGENTE più aggiornata (D.Lgs. 81/08 Allegato VII e decreti attuativi nella versione attuale). Null se non previsti.",
   "limiti_operativi": [],
   "procedure_emergenza": [
     "Procedura di emergenza tipica per questa categoria: Passo 1 — [azione]. Passo 2 — [azione]."
@@ -344,7 +344,7 @@ Restituisci UN SOLO JSON con la struttura completa:
   ],
   "abilitazione_operatore": "formazione o patentino obbligatorio per legge, null se non previsto",
   "documenti_da_richiedere": ["documento con riferimento normativo"],
-  "verifiche_periodiche": "obbligo di verifica periodica con cadenza e soggetto abilitato, null se non previsto",
+  "verifiche_periodiche": "obbligo di verifica periodica con cadenza e soggetto abilitato — normativa VIGENTE più aggiornata, null se non previsto",
   "limiti_operativi": ["limite con valore numerico e unità di misura"],
   "procedure_emergenza": ["Passo 1: ... — Passo 2: ..."],
   "pittogrammi_sicurezza": ["avvertenza/pittogramma obbligatorio sulla macchina"],
@@ -361,6 +361,43 @@ ISTRUZIONI DI CONSOLIDAMENTO:
 - limiti_operativi: includi SOLO valori esplicitamente presenti nel manuale — non generare valori ipotetici
 - Per ogni sezione lista: 3-8 elementi totali, preferendo i più specifici e verificabili
 - Rispondi SOLO con il JSON valido."""
+
+LEGAL_ENRICH_PROMPT = """Sei un esperto di normativa italiana sulla sicurezza sul lavoro con conoscenza aggiornata delle norme vigenti.
+
+Tipo di macchina: {machine_label}
+
+Rispondi SOLO con un JSON valido con questi due campi:
+
+{{
+  "abilitazione_operatore": "Descrizione completa dell'obbligo di abilitazione/formazione previsto dalla normativa italiana ATTUALMENTE IN VIGORE per questa categoria di macchina. Indica: la norma più aggiornata applicabile (es. Accordo Stato-Regioni nella versione vigente, o norma settoriale specifica), nome esatto del titolo abilitativo, durata minima del corso (ore teoriche + pratiche), soggetti formatori autorizzati, eventuale obbligo di aggiornamento periodico. Se non prevista da nessuna norma vigente, scrivi null.",
+  "verifiche_periodiche": "Descrizione completa degli obblighi di verifica periodica previsti dalla normativa ATTUALMENTE IN VIGORE per questa categoria di macchina. Indica: la norma più aggiornata applicabile (D.Lgs. 81/08 e suoi aggiornamenti, decreti attuativi, circolari INAIL vigenti), cadenza, soggetto abilitato, eventuali soglie (portata, potenza, ecc.) che fanno scattare l'obbligo. Se non previste, scrivi null."
+}}
+
+ISTRUZIONI:
+- Usa SEMPRE la versione più aggiornata della normativa vigente alla data odierna — non fermarti a citare la versione originale di una norma se è stata modificata, integrata o sostituita
+- Per le abilitazioni operatore: l'Accordo Stato-Regioni 22/02/2012 è stato aggiornato più volte; verifica se esistono accordi successivi o integrazioni per la categoria in esame e cita quello più recente in vigore
+- Per le verifiche periodiche: il D.Lgs. 81/08 Allegato VII è stato aggiornato da decreti successivi; cita il riferimento normativo attuale corretto
+- Se la norma originale non è stata modificata, citala pure — l'importante è che sia ancora in vigore
+- Se la macchina non rientra in nessuna categoria normata, scrivi null — NON inventare obblighi inesistenti
+- Cita sempre: nome della norma, data/numero, articolo o allegato specifico
+- Rispondi SOLO con il JSON valido, senza testo aggiuntivo"""
+
+
+async def _enrich_legal_fields(card, machine_label: str, provider: str) -> None:
+    """
+    Arricchisce in-place i campi abilitazione_operatore e verifiche_periodiche
+    ricavandoli dalla normativa vigente in base al tipo di macchina.
+    Chiamato solo quando uno o entrambi i campi sono None dopo l'analisi documentale.
+    """
+    try:
+        prompt = LEGAL_ENRICH_PROMPT.format(machine_label=machine_label)
+        result = await _call_ai_with_text("", prompt, provider, is_fallback=True)
+        if card.abilitazione_operatore is None:
+            card.abilitazione_operatore = _nullable_str(result.get("abilitazione_operatore"))
+        if card.verifiche_periodiche is None:
+            card.verifiche_periodiche = _nullable_str(result.get("verifiche_periodiche"))
+    except Exception:
+        pass  # Campo resta None — non bloccare la generazione della scheda
 
 
 async def generate_safety_card(
@@ -471,6 +508,13 @@ async def generate_safety_card(
         card.allegato_v_label = av_category_data["label"]
         card.allegato_v_requisiti = av_category_data["requisiti"]
         card.tabella_ce_ante = av_category_data["tabella_ce"]
+
+    # Arricchimento normativo: se abilitazione o verifiche periodiche non sono state
+    # estratte dal documento (il manuale del produttore spesso non le riporta),
+    # le ricava dalla normativa vigente in base al tipo di macchina.
+    if card.abilitazione_operatore is None or card.verifiche_periodiche is None:
+        machine_label = machine_type or f"{brand} {model}"
+        await _enrich_legal_fields(card, machine_label, provider)
 
     return card
 
