@@ -759,13 +759,48 @@ async def _generate_fallback(
     return card
 
 
+import logging as _logging
+_ai_logger = _logging.getLogger(__name__)
+
+
+def _check_anthropic_finish_reason(response) -> None:
+    """Logga un warning se la risposta Claude è stata troncata per limite token."""
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        usage = getattr(response, "usage", None)
+        out = getattr(usage, "output_tokens", "?") if usage else "?"
+        _ai_logger.warning(
+            "Claude: risposta troncata per limite token (output_tokens=%s). "
+            "Il JSON potrebbe essere incompleto — considera di aumentare max_tokens.", out
+        )
+
+
+def _check_gemini_finish_reason(response) -> None:
+    """Logga un warning se la risposta Gemini è stata troncata per limite token."""
+    try:
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate is None:
+            return
+        reason = getattr(candidate, "finish_reason", None)
+        # Il valore può essere l'enum o la stringa a seconda della versione SDK
+        reason_str = reason.name if hasattr(reason, "name") else str(reason)
+        if reason_str in ("MAX_TOKENS", "2"):  # 2 = MAX_TOKENS nell'enum gRPC
+            _ai_logger.warning(
+                "Gemini: risposta troncata per limite token (finish_reason=%s). "
+                "Il JSON potrebbe essere incompleto — considera di aumentare max_output_tokens.",
+                reason_str
+            )
+    except Exception:
+        pass  # Non bloccare mai per un warning di diagnostica
+
+
 async def _call_claude_with_pdf(pdf_b64: str, prompt: str) -> dict:
     import anthropic
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=8192,
+        max_tokens=16000,
+        temperature=0,
         system=SYSTEM_PROMPT,
         messages=[{
             "role": "user",
@@ -782,6 +817,7 @@ async def _call_claude_with_pdf(pdf_b64: str, prompt: str) -> dict:
             ],
         }],
     )
+    _check_anthropic_finish_reason(response)
     return _parse_json_response(response.content[0].text)
 
 
@@ -800,10 +836,12 @@ async def _call_ai_with_text(
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         response = await client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=8192,
+            max_tokens=16000,
+            temperature=0,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": full_prompt}],
         )
+        _check_anthropic_finish_reason(response)
         return _parse_json_response(response.content[0].text)
 
     elif provider == "gemini":
@@ -815,9 +853,11 @@ async def _call_ai_with_text(
             contents=full_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
-                max_output_tokens=8192,
+                max_output_tokens=16000,
+                temperature=0.0,
             ),
         )
+        _check_gemini_finish_reason(response)
         return _parse_json_response(response.text)
 
     else:
@@ -864,9 +904,14 @@ def _parse_json_response(text: str) -> dict:
                 result[field] = json.loads(m.group(1))
             except Exception:
                 pass
-    # Campi stringa singola
+    # Campi stringa singola — gestisce anche valori con virgolette escapate e testo lungo
     for str_field in ["gap_ce_ante", "abilitazione_operatore", "verifiche_periodiche", "confidence_ai"]:
-        m_str = re.search(rf'"{str_field}"\s*:\s*"([^"]+)"', text)
+        # Cerca sia "campo": "valore" che "campo": null
+        m_null = re.search(rf'"{str_field}"\s*:\s*null', text, re.IGNORECASE)
+        if m_null:
+            result[str_field] = None
+            continue
+        m_str = re.search(rf'"{str_field}"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL)
         if m_str:
             result[str_field] = _nullable_str(m_str.group(1))
     if result:

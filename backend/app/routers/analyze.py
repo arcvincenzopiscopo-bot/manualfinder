@@ -197,13 +197,25 @@ async def _pipeline(request: FullAnalysisRequest):
             message=f"Download {' + '.join(download_parts)} in corso...",
         ))
 
-        # Scarica scheda INAIL — prova fino a 3 candidati
-        for candidate in inail_candidates[:3]:
+        # Scarica scheda INAIL — prova fino a 3 candidati in parallelo, scegli il più pertinente
+        async def _download_inail(candidate):
             pdf_data, _ = await pdf_service.download_pdf(candidate.url)
             if pdf_data:
-                inail_bytes = pdf_data
-                inail_url = candidate.url
-                break
+                score = pdf_service.score_pdf_safety_relevance(
+                    pdf_data, brand=brand, model=model, machine_type=machine_type or ""
+                )
+                return (score, pdf_data, candidate.url)
+            return None
+
+        inail_downloads = await asyncio.gather(
+            *[_download_inail(c) for c in inail_candidates[:3]], return_exceptions=True
+        )
+        inail_scored = sorted(
+            [r for r in inail_downloads if isinstance(r, tuple)],
+            key=lambda x: x[0], reverse=True
+        )
+        if inail_scored:
+            _, inail_bytes, inail_url = inail_scored[0]
 
         # Filtra URL con domini o path chiaramente non industriali prima di scaricare
         def _is_industrial_url(url: str) -> bool:
@@ -291,7 +303,13 @@ async def _pipeline(request: FullAnalysisRequest):
         MIN_MANUAL_PAGES = 8
 
         if producer_scored:
-            producer_scored.sort(key=lambda x: x[0], reverse=True)
+            # Sort combinato: content score (70%) + autorità fonte dalla ricerca (30%).
+            # Evita che un PDF da fonte sconosciuta con score marginalmente più alto
+            # batta un PDF dal sito ufficiale del produttore.
+            producer_scored.sort(
+                key=lambda x: x[0] * 0.7 + x[3] * 0.3,
+                reverse=True
+            )
 
             # Cerca il migliore che soddisfi almeno un criterio di qualità
             best = None

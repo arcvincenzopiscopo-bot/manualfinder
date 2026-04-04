@@ -639,15 +639,19 @@ _TITLE_NEGATIVE = [
 ]
 
 
-def _score_result(url: str, title: str, is_pdf: bool, is_inail: bool = False) -> int:
+def _score_result(
+    url: str, title: str, is_pdf: bool,
+    is_inail: bool = False,
+    brand: str = "", model: str = "",
+) -> int:
     """
     Assegna uno score di rilevanza al risultato di ricerca (0–100).
 
     Criteri (in ordine di peso):
     1. Autorità fonte: INAIL/istituzionale > produttore ufficiale > portale noleggio > aggregatore > web
     2. Tipo documento: PDF > pagina HTML
-    3. Contenuto titolo: penalizza cataloghi ricambi e manuali officina
-    4. Lingua: italiano preferito
+    3. Corrispondenza brand/modello nel titolo — segnale diretto di pertinenza
+    4. Contenuto titolo: penalizza cataloghi ricambi e manuali officina
     """
     score = 0
     url_lower = url.lower()
@@ -669,7 +673,29 @@ def _score_result(url: str, title: str, is_pdf: bool, is_inail: bool = False) ->
     if is_pdf or url_lower.endswith(".pdf"):
         score += 22  # PDF scaricabile: analizzabile direttamente dall'AI
 
-    # ── 3. Qualità titolo ────────────────────────────────────────────────
+    # ── 3. Corrispondenza brand/modello nel titolo ───────────────────────
+    if brand or model:
+        brand_l = brand.lower().strip()
+        model_l = model.lower().strip()
+        brand_in_title = bool(brand_l) and brand_l in title_lower
+        model_in_title = bool(model_l) and len(model_l) >= 3 and model_l in title_lower
+        combined = brand_in_title and model_in_title
+        url_brand = bool(brand_l) and brand_l in url_lower
+        url_model = bool(model_l) and len(model_l) >= 3 and model_l in url_lower
+
+        if combined:
+            score += 18  # Brand + modello entrambi nel titolo → massima pertinenza
+        elif model_in_title:
+            score += 10  # Solo modello nel titolo
+        elif brand_in_title:
+            score += 5   # Solo brand nel titolo
+
+        if url_brand and url_model:
+            score += 8   # Brand + modello nell'URL → PDF dedicato al modello
+        elif url_model:
+            score += 4
+
+    # ── 4. Qualità titolo ────────────────────────────────────────────────
     for kw, pts in _TITLE_POSITIVE:
         if kw in title_lower:
             score += pts
@@ -679,9 +705,6 @@ def _score_result(url: str, title: str, is_pdf: bool, is_inail: bool = False) ->
         if kw in title_lower:
             score += pts  # pts è negativo
             break
-
-    # ── 4. Lingua ────────────────────────────────────────────────────────
-    # (gestita implicitamente dall'autorità fonte; .it già coperto sopra)
 
     return max(0, min(100, score))
 
@@ -923,6 +946,11 @@ async def search_manual(
         except Exception:
             pass
 
+    # ── Re-scoring brand/model: applicato su tutti i risultati prima della dedup ──
+    # I singoli provider non conoscono brand/model, quindi applichiamo qui il bonus
+    # per corrispondenza nel titolo/URL. Aggiorna lo score in-place.
+    all_results = _apply_brand_model_score(all_results, brand, model)
+
     deduped = _deduplicate_results(all_results)
 
     # ── Scrittura in cache ───────────────────────────────────────────────
@@ -933,6 +961,48 @@ async def search_manual(
             pass
 
     return deduped
+
+
+def _apply_brand_model_score(
+    results: List[ManualSearchResult], brand: str, model: str
+) -> List[ManualSearchResult]:
+    """
+    Aggiunge un bonus di score basato sulla presenza di brand/modello nel titolo e nell'URL.
+    Applicato su tutti i risultati dopo la raccolta, prima della deduplicazione.
+    Non penalizza mai — aggiunge solo bonus positivi.
+    """
+    if not brand and not model:
+        return results
+
+    brand_l = brand.lower().strip()
+    model_l = model.lower().strip()
+
+    for r in results:
+        title_l = r.title.lower()
+        url_l = r.url.lower()
+        bonus = 0
+
+        brand_in_title = bool(brand_l) and brand_l in title_l
+        model_in_title = bool(model_l) and len(model_l) >= 3 and model_l in title_l
+        brand_in_url   = bool(brand_l) and brand_l in url_l
+        model_in_url   = bool(model_l) and len(model_l) >= 3 and model_l in url_l
+
+        if brand_in_title and model_in_title:
+            bonus += 18   # Corrispondenza esatta brand+modello nel titolo
+        elif model_in_title:
+            bonus += 10
+        elif brand_in_title:
+            bonus += 5
+
+        if brand_in_url and model_in_url:
+            bonus += 8    # Brand+modello nell'URL → PDF dedicato al modello
+        elif model_in_url:
+            bonus += 4
+
+        if bonus:
+            r.relevance_score = min(100, r.relevance_score + bonus)
+
+    return results
 
 
 def _apply_temporal_score(
