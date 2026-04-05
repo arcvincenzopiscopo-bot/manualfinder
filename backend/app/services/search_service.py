@@ -72,6 +72,25 @@ INAIL_MACHINE_TYPES = {
     "gru su autocarro": "camion gru",
     "piattaforma elevabile": "piattaforma di lavoro mobile elevabile PLE",
     "ple": "piattaforma di lavoro mobile elevabile PLE",
+    # Macchine da cantiere aggiuntive
+    "terna": "terna retroescavatore",
+    "terne": "terna retroescavatore",
+    "retroescavatore": "terna retroescavatore",
+    "bulldozer": "bulldozer apripista",
+    "apripista": "bulldozer apripista",
+    "piastra vibrante": "piastra vibrante costipatore",
+    "costipatore": "piastra vibrante costipatore",
+    "pompa calcestruzzo": "pompa calcestruzzo autobetonpompa",
+    "autobetonpompa": "pompa calcestruzzo autobetonpompa",
+    "pompa cls": "pompa calcestruzzo autobetonpompa",
+    "frantoio": "frantoio impianto",
+    "vibrofinitrice": "finitrice",
+    "scarificatrice": "fresatrice stradale",
+    "fresatrice stradale": "fresatrice stradale",
+    "gru autocarro": "camion gru",
+    "autocarro con gru": "camion gru",
+    "sollevatore": "sollevatore telescopico",
+    "telehandler": "sollevatore telescopico",
 }
 
 
@@ -168,21 +187,56 @@ def _get_inail_machine_type(machine_type: Optional[str]) -> Optional[str]:
     return mt
 
 
+_EDILIZIA_MACHINE_TYPES = {
+    "escavatore", "escavatori", "gru", "gru mobile", "gru a torre", "camion gru",
+    "carrello elevatore", "muletto", "sollevatore telescopico",
+    "pala caricatrice", "pala meccanica", "dumper", "autocarro ribaltabile",
+    "rullo compressore", "rullo compattatore", "compressore", "finitrice",
+    "piattaforma di lavoro mobile elevabile ple", "pompa calcestruzzo",
+    "terna", "terne", "retroescavatore", "bulldozer", "apripista",
+    "betoniera", "martello demolitore",
+}
+
+# Fonti per macchine utensili da officina (non edilizia)
+_OFFICINA_MACHINE_TYPES = {
+    "pressa piegatrice", "piegatrice", "press brake", "cesoie trancia",
+    "punzonatrice pressa", "macchina taglio laser", "tornio macchina utensile",
+    "fresatrice macchina utensile", "rettificatrice macchina utensile",
+}
+
+
 def _build_inail_queries(machine_type: Optional[str]) -> List[str]:
     """Genera query specifiche per ricerca INAIL per tipo di macchina."""
     inail_type = _get_inail_machine_type(machine_type)
     if not inail_type:
         return []
-    
-    return [
+
+    inail_type_lower = inail_type.lower()
+    is_edilizia = any(k in inail_type_lower for k in _EDILIZIA_MACHINE_TYPES)
+    is_officina = any(k in inail_type_lower for k in _OFFICINA_MACHINE_TYPES)
+
+    queries = [
         f'site:inail.it "{inail_type}" scheda tecnica',
         f'site:inail.it "{inail_type}" libretto',
         f'site:inail.it "{inail_type}" manuale sicurezza',
         # Quaderni Tecnici INAIL — serie più autorevole per cantieri e industria
         f'site:inail.it "quaderni tecnici" "{inail_type}" filetype:pdf',
         f'site:inail.it "quaderni tecnici per i cantieri" "{inail_type}" filetype:pdf',
-        # CPT Torino — collana "Le macchine in edilizia", autorità per cantieri
-        f'site:formediltorinofsc.it "{inail_type}" filetype:pdf',
+    ]
+
+    # CPT Torino / FormedilTorinoFSC — "Le macchine in edilizia":
+    # SOLO per attrezzature da cantiere/edilizia — NON per carrelli, macchine utensili, ecc.
+    if is_edilizia and not is_officina:
+        queries.append(f'site:formediltorinofsc.it "{inail_type}" filetype:pdf')
+
+    # UCIMU/Assofluid — fonti autorevoli per macchine utensili da officina
+    if is_officina:
+        queries += [
+            f'site:ucimu.it "{inail_type}" sicurezza filetype:pdf',
+            f'"{inail_type}" "D.Lgs. 81" sicurezza filetype:pdf site:ucimu.it OR site:inail.it',
+        ]
+
+    queries += [
         # PuntoSicuro — linee guida regionali e ministeriali per attrezzature
         f'site:puntosicuro.it "{inail_type}" filetype:pdf',
         # Regioni — Piani Mirati di Prevenzione con schede macchina allineate D.Lgs.81
@@ -190,6 +244,8 @@ def _build_inail_queries(machine_type: Optional[str]) -> List[str]:
         f'site:ats-milano.it "{inail_type}" filetype:pdf',
         f'"piano mirato di prevenzione" "{inail_type}" filetype:pdf',
     ]
+
+    return queries
 
 
 # Siti ufficiali internazionali del produttore — massima autorità, PDF originali
@@ -283,6 +339,8 @@ def _build_manual_queries(brand: str, model: str) -> List[str]:
         f"{brand} {model} filetype:pdf manual",
         f"{brand} {model} manuale pdf",
         f"{brand} {model} operator manual pdf",
+        # Escludi esplicitamente i cataloghi attrezzature/ricambi dai risultati
+        f"{brand} {model} \"manuale d'uso\" OR \"istruzioni per l'uso\" filetype:pdf -\"tooling catalog\" -\"catalogo ricambi\"",
     ]
 
     return queries

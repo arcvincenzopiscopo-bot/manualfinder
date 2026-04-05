@@ -8,7 +8,16 @@
       "Bash(curl -sk https://manualfinder.onrender.com/openapi.json)",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(list\\(d.get\\('paths',{}\\).keys\\(\\)\\), indent=2\\)\\)\")",
       "Bash(python3 -c ':*)",
-      "Bash(curl -sk -X POST https://manualfinder.onrender.com/analyze/full -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"brand\":\"Haulotte\",\"model\":\"H18SX\",\"machine_type\":\"piattaforma aerea\",\"year\":\"2015\",\"preferred_language\":\"it\",\"image_base64\":\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAACAAHiIbwzAAAAAElFTkSuQmCC\"}' --max-time 150)"
+      "Bash(curl -sk -X POST https://manualfinder.onrender.com/analyze/full -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"brand\":\"Haulotte\",\"model\":\"H18SX\",\"machine_type\":\"piattaforma aerea\",\"year\":\"2015\",\"preferred_language\":\"it\",\"image_base64\":\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAACAAHiIbwzAAAAAElFTkSuQmCC\"}' --max-time 150)",
+      "Bash(curl -s -X POST https://manualfinder.onrender.com/analyze/full -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"brand\":\"Haulotte\",\"model\":\"H18SX\",\"machine_type\":\"piattaforma aerea\",\"year\":\"2015\",\"preferred_language\":\"it\"}' --max-time 180)",
+      "Bash(curl -s -X POST https://manualfinder.onrender.com/analyze/full -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"brand\":\"Haulotte\",\"model\":\"H18SX\",\"machine_type\":\"piattaforma aerea\",\"year\":\"2015\",\"preferred_language\":\"it\"}' --max-time 180 --retry 2 --retry-delay 5 -k)",
+      "Bash(curl -s https://manualfinder.onrender.com/openapi.json -k)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(k, v.get\\('post',{}\\).get\\('requestBody',{}\\).get\\('content',{}\\).get\\('application/json',{}\\).get\\('schema',{}\\)\\) for k,v in d.get\\('paths',{}\\).items\\(\\) if 'analyze' in k.lower\\(\\)]\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('paths',{}\\), indent=2\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); schemas=d.get\\('components',{}\\).get\\('schemas',{}\\); print\\(json.dumps\\(schemas.get\\('FullAnalysisRequest',{}\\), indent=2\\)\\)\")",
+      "Bash(curl -s -X POST https://manualfinder.onrender.com/analyze/full -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"brand\":\"Haulotte\",\"model\":\"H18SX\",\"machine_type\":\"piattaforma aerea\",\"year\":\"2015\",\"preferred_language\":\"it\",\"image_base64\":\"\"}' --max-time 180 -k)",
+      "Bash(curl -sv -X POST https://manualfinder.onrender.com/analyze/full -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"brand\":\"Haulotte\",\"model\":\"H18SX\",\"machine_type\":\"piattaforma aerea\",\"year\":\"2015\",\"preferred_language\":\"it\"}' --max-time 180)",
+      "Bash(curl -sk -X POST https://manualfinder.onrender.com/analyze/full -H 'Content-Type: application/json' -H 'Accept: text/event-stream' -d '{\"brand\":\"Haulotte\",\"model\":\"H18SX\",\"machine_type\":\"piattaforma aerea\",\"year\":\"2015\",\"preferred_language\":\"it\"}' --max-time 180)"
     ]
   }
 }

@@ -215,7 +215,20 @@ async def _pipeline(request: FullAnalysisRequest):
             key=lambda x: x[0], reverse=True
         )
         if inail_scored:
-            _, inail_bytes, inail_url = inail_scored[0]
+            # Scegli il migliore con score minimo: un documento INAIL a 0/100 è generico
+            # (es. manuale generico edilizia invece di scheda specifica carrelli/PLE)
+            INAIL_MIN_SCORE = 5
+            for inail_entry in inail_scored:
+                _iscore, _ibytes, _iurl = inail_entry
+                if _iscore < INAIL_MIN_SCORE:
+                    continue
+                # Verifica pertinenza tipo macchina: scarta se categoricamente non correlato
+                if machine_type:
+                    _imatch = pdf_service.classify_pdf_match(_ibytes, brand, model, machine_type)
+                    if _imatch == "unrelated":
+                        continue  # prova il prossimo candidato
+                inail_bytes, inail_url = _ibytes, _iurl
+                break
 
         # Filtra URL con domini o path chiaramente non industriali prima di scaricare
         def _is_industrial_url(url: str) -> bool:

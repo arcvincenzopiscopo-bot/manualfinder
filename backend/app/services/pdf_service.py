@@ -221,6 +221,14 @@ def score_pdf_safety_relevance(
         "manuale officina", "manuale riparazione",
         "schematic diagram", "wiring diagram", "schema elettrico",
         "torque specifications", "coppie di serraggio",
+        # Cataloghi attrezzature/utensili (es. Amada tooling catalog)
+        "tooling catalog", "tooling guide", "standard tooling",
+        "punch and die", "punzone e matrice", "catalogo attrezzatura",
+        "catalogo utensili", "utensili standard", "upper tool", "lower tool",
+        "intermediate plate", "radius tooling", "hemming tool",
+        # Cataloghi commerciali / listini prezzi
+        "product catalogue", "product catalog", "catalogo prodotti",
+        "ordering code", "order code", "codice ordine", "codice articolo",
     ]
 
     # Segnali dominio sbagliato — penalità massima: NON sono manuali macchine

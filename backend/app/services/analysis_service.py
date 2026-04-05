@@ -380,7 +380,20 @@ ISTRUZIONI:
 - Se la norma originale non è stata modificata, citala pure — l'importante è che sia ancora in vigore
 - Se la macchina non rientra in nessuna categoria normata, scrivi null — NON inventare obblighi inesistenti
 - Cita sempre: nome della norma, data/numero, articolo o allegato specifico
-- Rispondi SOLO con il JSON valido, senza testo aggiuntivo"""
+- Rispondi SOLO con il JSON valido, senza testo aggiuntivo
+
+RIFERIMENTI NORMATIVI PRECISI (usa SOLO questi, non inventare):
+
+ABILITAZIONE OPERATORE — categorie coperte dall'Accordo Stato-Regioni 22/02/2012 (e successive integrazioni):
+  COPERTI (obbligo abilitazione): PLE (piattaforme di lavoro elevabili), carrelli elevatori (frontali, laterali, retrattili, trilaterali, bidirezionali, a braccio), gru per autocarro, gru mobili, gru a torre, escavatori, pale caricatrici frontali, terne, autoribaltabili a cingoli, trattori agricoli/forestali, macchine movimento terra (terne incluse), pompe per cls (gli autisti di pompa per calcestruzzo sono coperti dall'Accordo S-R 22/02/2012 come "pompa per calcestruzzo"), piattaforme di lavoro mobili elevabili.
+  NON COPERTI (nessun obbligo abilitazione specifica): compressori d'aria, generatori elettrici, piastre vibranti, rulli compattatori, fresatrici stradali, macchine per il calcestruzzo (betoniere), saldatrici, macchinari industriali fissi (presse, piegatrici), bulldozer/apripista (D6, D8, ecc.) — per questi il D.Lgs. 81/08 richiede solo la formazione generica ex Art. 37 e informazione/addestramento specifico Art. 73, senza patentino obbligatorio.
+  ATTENZIONE — NON confondere: i bulldozer/apripista NON sono coperti dall'Accordo S-R 2012; la formazione richiesta è quella generica Art. 37 + Art. 73 D.Lgs. 81/08. Per le pompe calcestruzzo (autobetonpompe) invece SÌ è previsto l'obbligo.
+
+VERIFICHE PERIODICHE Allegato VII D.Lgs. 81/08 — categorie soggette:
+  SOGGETTI a verifiche: apparecchi di sollevamento materiali con portata > 200 kg (gru, carrelli elevatori, argani, paranchi), apparecchi di sollevamento persone (PLE, ascensori da cantiere, montacarichi), recipienti in pressione, generatori di vapore/acqua surriscaldata, impianti di messa a terra, impianti parafulmine.
+  TERNE/RETROESCAVATORI: le terne (es. JCB 3CX, Case 580, Caterpillar 432) RIENTRANO nell'Allegato VII come "apparecchi di sollevamento materiali con portata > 200 kg" SOLO quando attrezzate con benna rovescia o forche — la funzione sollevamento è accessoria ma soggetta. Categoria: "Apparecchi di sollevamento materiali, non azionati a mano, con portata superiore a 200 kg". Cadenza: biennale (prima verifica INAIL, successive ASL/organismo notificato).
+  NON soggetti a verifiche Allegato VII: bulldozer/apripista, piastre vibranti, rulli compattatori, compressori d'aria (salvo serbatoi in pressione > 50 litri), generatori elettrici (salvo impianti di messa a terra), escavatori puri (senza funzione di sollevamento), macchine industriali fisse (presse, piegatrici, laser).
+  ATTENZIONE: un escavatore (Caterpillar 320, Komatsu PC200) senza gancio di sollevamento NON è soggetto a verifiche Allegato VII. Scrivi null per questi."""
 
 
 async def _enrich_legal_fields(card, machine_label: str, provider: str) -> None:
