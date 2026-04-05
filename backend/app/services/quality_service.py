@@ -76,8 +76,9 @@ _NO_VERIFICHE = {
     "compressore", "motocompressore",
     "saldatrice", "betoniera",
     "escavatore", "escavatore idraulico",   # puro, senza funzione di sollevamento
-    "pala caricatrice", "pala caricatrice frontale", "pala meccanica",  # movimento terra, non sollevamento
     "dumper", "finitrice", "rullo",
+    # Pala caricatrice: soggetta SOLO se usata per sollevamento > 200 kg con attrezzatura specifica.
+    # Non inserita qui perché il quality logger non può sapere l'utilizzo — lasciamo decidere all'AI.
 }
 
 

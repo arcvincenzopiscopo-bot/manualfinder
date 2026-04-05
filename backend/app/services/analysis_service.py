@@ -392,9 +392,12 @@ ABILITAZIONE OPERATORE — categorie coperte dall'Accordo Stato-Regioni 22/02/20
 VERIFICHE PERIODICHE Allegato VII D.Lgs. 81/08 — categorie soggette:
   SOGGETTI a verifiche: apparecchi di sollevamento materiali con portata > 200 kg (gru, carrelli elevatori, argani, paranchi), apparecchi di sollevamento persone (PLE, ascensori da cantiere, montacarichi), recipienti in pressione, generatori di vapore/acqua surriscaldata, impianti di messa a terra, impianti parafulmine.
   TERNE/RETROESCAVATORI: le terne (es. JCB 3CX, Case 580, Caterpillar 432) RIENTRANO nell'Allegato VII come "apparecchi di sollevamento materiali con portata > 200 kg" SOLO quando attrezzate con benna rovescia o forche — la funzione sollevamento è accessoria ma soggetta. Categoria: "Apparecchi di sollevamento materiali, non azionati a mano, con portata superiore a 200 kg". Cadenza: biennale (prima verifica INAIL, successive ASL/organismo notificato).
-  NON soggetti a verifiche Allegato VII: bulldozer/apripista, piastre vibranti, rulli compattatori, compressori d'aria (salvo serbatoi in pressione > 50 litri), generatori elettrici (salvo impianti di messa a terra), escavatori puri (senza funzione di sollevamento), pale caricatrici frontali (movimento terra, non sollevamento — es. Volvo L30G, Caterpillar 950, Komatsu WA), dumper, finitrici, macchine industriali fisse (presse, piegatrici, laser).
+  NON soggetti a verifiche Allegato VII: bulldozer/apripista, piastre vibranti, rulli compattatori, compressori d'aria (salvo serbatoi in pressione > 50 litri), generatori elettrici (salvo impianti di messa a terra), escavatori puri (senza funzione di sollevamento), dumper, finitrici, macchine industriali fisse (presse, piegatrici, laser).
   ATTENZIONE: un escavatore (Caterpillar 320, Komatsu PC200) senza gancio di sollevamento NON è soggetto a verifiche Allegato VII. Scrivi null per questi.
-  ATTENZIONE: una pala caricatrice frontale (wheel loader) NON è un apparecchio di sollevamento — è una macchina movimento terra. Scrivi null per verifiche_periodiche."""
+  PALE CARICATRICI FRONTALI (wheel loader — es. Volvo L30G/L60/L90, Caterpillar 950/966, Komatsu WA, Liebherr L):
+    - Se usata SOLO per movimento terra (benna per scavo/carico): NON soggetta → verifiche_periodiche = null
+    - Se usata (anche saltuariamente) per sollevamento carichi sospesi > 200 kg (balle, pallet, tubi, forche): SOGGETTA come "apparecchio di sollevamento materiali di tipo mobile" → verifiche annuali, prima verifica INAIL poi ASL/organismo notificato [Art. 71 c.11 D.Lgs. 81/08 + Allegato VII]
+    - In assenza di informazioni sull'utilizzo specifico: segnala la condizionalità — "Soggetta a verifiche periodiche annuali (INAIL poi ASL) se utilizzata per sollevamento carichi sospesi > 200 kg [Art. 71 c.11 D.Lgs. 81/08 + Allegato VII]" """
 
 
 async def _enrich_legal_fields(card, machine_label: str, provider: str) -> None:
