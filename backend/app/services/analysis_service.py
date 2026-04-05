@@ -397,7 +397,7 @@ VERIFICHE PERIODICHE Allegato VII D.Lgs. 81/08 — categorie soggette:
   PALE CARICATRICI FRONTALI (wheel loader — es. Volvo L30G/L60/L90, Caterpillar 950/966, Komatsu WA, Liebherr L):
     - Se usata SOLO per movimento terra (benna per scavo/carico): NON soggetta → verifiche_periodiche = null
     - Se usata (anche saltuariamente) per sollevamento carichi sospesi > 200 kg (balle, pallet, tubi, forche): SOGGETTA come "apparecchio di sollevamento materiali di tipo mobile" → verifiche annuali, prima verifica INAIL poi ASL/organismo notificato [Art. 71 c.11 D.Lgs. 81/08 + Allegato VII]
-    - In assenza di informazioni sull'utilizzo specifico: segnala la condizionalità — "Soggetta a verifiche periodiche annuali (INAIL poi ASL) se utilizzata per sollevamento carichi sospesi > 200 kg [Art. 71 c.11 D.Lgs. 81/08 + Allegato VII]" """
+    - In assenza di informazioni sull'utilizzo specifico: scrivi SEMPRE il seguente avviso — "⚠ VERIFICARE IN SOPRALLUOGO: se la macchina viene utilizzata (anche saltuariamente) per sollevare carichi sospesi superiori a 200 kg (es. con forche, gancio, benna rovescia), è soggetta a verifiche periodiche annuali come apparecchio di sollevamento materiali [Art. 71 c.11 D.Lgs. 81/08 + Allegato VII]. L'ispettore deve accertare l'utilizzo effettivo e richiedere il registro delle verifiche se applicabile." """
 
 
 async def _enrich_legal_fields(card, machine_label: str, provider: str) -> None:
