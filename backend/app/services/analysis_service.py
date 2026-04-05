@@ -849,14 +849,16 @@ async def _call_ai_with_text(
         from google.genai import types
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            # gemini-2.5-flash è un modello "thinking": ignora temperature e la fissa a 1.0.
-            # gemini-2.0-flash è non-thinking e rispetta correttamente temperature=0.
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=full_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 max_output_tokens=16000,
                 temperature=0.0,
+                # thinking_budget=0 disabilita il reasoning interno del modello:
+                # senza thinking, gemini-2.5-flash rispetta temperature=0 correttamente.
+                # Il reasoning non serve per estrarre JSON strutturato da un documento.
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
         _check_gemini_finish_reason(response)
