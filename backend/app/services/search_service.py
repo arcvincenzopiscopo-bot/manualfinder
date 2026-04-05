@@ -304,12 +304,17 @@ MANUFACTURER_SITES_PRIMARY = {
 # Dealer italiani ufficiali — secondari, aggiunti DOPO le query sul sito primario
 # Separati in dict distinto per evitare che sovrascrivano le chiavi primarie
 MANUFACTURER_SITES_SECONDARY = {
-    "jcb":      "jcbitalia.it",
-    "komatsu":  "komatsu-italia.it",
-    "liebherr": "liebherr-italia.com",
-    "manitou":  "manitou-italia.it",
-    "haulotte": "haulotte-italia.com",
-    "tadano":   "tadano-italia.com",
+    "jcb":          "jcbitalia.it",
+    "komatsu":      "komatsu-italia.it",
+    "liebherr":     "liebherr-italia.com",
+    "manitou":      "manitou-italia.it",
+    "haulotte":     "haulotte-italia.com",
+    "tadano":       "tadano-italia.com",
+    # Siti UK/internazionali con PDF manuali pubblici — ottima fonte
+    "fassi":        "fassiuk.com",
+    "merlo":        "merlogroup.com",
+    "wacker neuson": "wackerneuson.com",
+    "wacker":        "wackerneuson.com",
 }
 
 
