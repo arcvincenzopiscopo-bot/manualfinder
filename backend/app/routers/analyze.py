@@ -311,12 +311,17 @@ async def _pipeline(request: FullAnalysisRequest):
                 reverse=True
             )
 
-            # Cerca il migliore che soddisfi almeno un criterio di qualità
+            # Cerca il migliore che soddisfi i criteri di qualità.
+            # Documenti molto corti (< 8 pag.) richiedono score alto (≥ 45) per essere accettati:
+            # una brochure da 2 pagine con score 30 non è un manuale, anche se "passa" la soglia base.
             best = None
             for entry in producer_scored:
                 score, pdf_data, url, rel_score, pages = entry
-                if pages >= MIN_MANUAL_PAGES or score >= LOW_QUALITY_THRESHOLD:
-                    best = entry
+                if pages >= MIN_MANUAL_PAGES and score >= LOW_QUALITY_THRESHOLD:
+                    best = entry  # documento sufficientemente lungo e rilevante
+                    break
+                if pages < MIN_MANUAL_PAGES and score >= 45:
+                    best = entry  # documento corto ma con contenuto sicurezza molto specifico
                     break
 
             # Se tutti i PDF sono brochure cortissime a basso score, scarta

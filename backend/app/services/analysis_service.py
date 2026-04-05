@@ -849,7 +849,9 @@ async def _call_ai_with_text(
         from google.genai import types
         client = genai.Client(api_key=settings.gemini_api_key)
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+            # gemini-2.5-flash è un modello "thinking": ignora temperature e la fissa a 1.0.
+            # gemini-2.0-flash è non-thinking e rispetta correttamente temperature=0.
+            model="gemini-2.0-flash",
             contents=full_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
