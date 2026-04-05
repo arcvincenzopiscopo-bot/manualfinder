@@ -512,6 +512,29 @@ async def _pipeline(request: FullAnalysisRequest):
     ))
 
 
+@router.get("/infer-machine-type")
+async def infer_machine_type(brand: str, model: str, hint: str = ""):
+    """
+    Determina il tipo di macchina da brand+modello tramite AI.
+    Chiamato dal frontend quando l'utente corregge marca/modello nel form OCR.
+    Parametri:
+      brand  — marca corretta dall'utente
+      model  — modello corretto dall'utente
+      hint   — tipo estratto dall'OCR (opzionale, può essere vuoto)
+    """
+    from app.services import vision_service
+    from app.config import settings
+
+    provider = settings.get_vision_provider()
+    machine_type = await vision_service._infer_machine_type(
+        brand=brand,
+        model=model,
+        provider=provider,
+        ocr_hint=hint.strip() or None,
+    )
+    return {"machine_type": machine_type}
+
+
 @router.get("/quality-log")
 async def get_quality_log(
     only_issues: bool = False,

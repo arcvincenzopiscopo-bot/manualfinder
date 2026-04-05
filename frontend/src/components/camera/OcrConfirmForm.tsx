@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import type { PlateOCRResult } from '../../types'
+import { inferMachineType } from '../../services/api'
 
 interface Props {
   ocr: PlateOCRResult & { brightness_warning?: string }
@@ -19,6 +20,27 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
   const [machineType, setMachineType] = useState(ocr.machine_type ?? '')
   const [serial, setSerial] = useState(ocr.serial_number ?? '')
   const [year, setYear] = useState(ocr.year ?? '')
+  const [inferring, setInferring] = useState(false)
+  // Tiene traccia dell'ultima coppia brand+model per cui è stata fatta l'inferenza
+  const lastInferred = useRef<string>('')
+
+  const handleBrandModelBlur = async () => {
+    const b = brand.trim()
+    const m = model.trim()
+    if (!b && !m) return
+    const key = `${b}|${m}`
+    if (key === lastInferred.current) return  // già aggiornato per questa coppia
+    lastInferred.current = key
+    setInferring(true)
+    try {
+      const result = await inferMachineType(b, m, machineType.trim() || undefined)
+      if (result) setMachineType(result)
+    } catch {
+      // silenzioso — l'utente può inserire il tipo manualmente
+    } finally {
+      setInferring(false)
+    }
+  }
 
   const conf = CONFIDENCE_STYLE[ocr.confidence] ?? CONFIDENCE_STYLE.low
   const canConfirm = brand.trim().length > 0 || model.trim().length > 0
@@ -105,6 +127,7 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
           type="text"
           value={brand}
           onChange={e => setBrand(e.target.value)}
+          onBlur={handleBrandModelBlur}
           placeholder="es. Caterpillar"
           style={inputStyle(!!brand)}
           autoCapitalize="words"
@@ -117,6 +140,7 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
           type="text"
           value={model}
           onChange={e => setModel(e.target.value)}
+          onBlur={handleBrandModelBlur}
           placeholder="es. 320D"
           style={inputStyle(!!model)}
           autoCapitalize="characters"
@@ -124,14 +148,20 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
 
         <label style={{ ...labelStyle, marginTop: 12 }}>
           Tipo di macchina (per ricerca INAIL)
+          {inferring && (
+            <span style={{ marginLeft: 8, fontSize: 11, color: '#3b82f6', fontWeight: 400 }}>
+              ⟳ Rilevamento...
+            </span>
+          )}
         </label>
         <input
           type="text"
-          value={machineType}
-          onChange={e => setMachineType(e.target.value)}
-          placeholder="es. piattaforma aerea, escavatore, gru"
-          style={inputStyle(!!machineType)}
+          value={inferring ? '' : machineType}
+          onChange={e => { if (!inferring) setMachineType(e.target.value) }}
+          placeholder={inferring ? 'Rilevamento tipo in corso...' : 'es. piattaforma aerea, escavatore, gru'}
+          style={{ ...inputStyle(!!machineType && !inferring), opacity: inferring ? 0.6 : 1 }}
           autoCapitalize="sentences"
+          disabled={inferring}
         />
 
         <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>

@@ -73,6 +73,16 @@ export async function analyzeFullSSE(
   }
 }
 
+/** Inferisce il tipo di macchina da brand+modello tramite AI */
+export async function inferMachineType(brand: string, model: string, hint?: string): Promise<string | null> {
+  const params = new URLSearchParams({ brand, model })
+  if (hint) params.set('hint', hint)
+  const response = await fetch(`${BASE_URL}/analyze/infer-machine-type?${params}`)
+  if (!response.ok) return null
+  const data = await response.json()
+  return data.machine_type ?? null
+}
+
 export async function searchManual(brand: string, model: string, lang = 'it'): Promise<ManualSearchResult[]> {
   const params = new URLSearchParams({ brand, model, lang })
   const response = await fetch(`${BASE_URL}/manual/search?${params}`)
