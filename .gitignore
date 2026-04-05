@@ -72,6 +72,7 @@ coverage/
 .nyc_output/
 
 # ── PDF personali alla root (non dati dell'app) ───────────────
-# Le schede INAIL in "pdf manuali/" sono necessarie → INCLUSE nel repo
+# Le schede INAIL sono necessarie → INCLUSE nel repo sia a root che in backend/
 *.pdf
 !pdf manuali/*.pdf
+!backend/pdf manuali/*.pdf

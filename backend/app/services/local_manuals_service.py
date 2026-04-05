@@ -6,9 +6,11 @@ import os
 from typing import Optional, Dict, List
 from pathlib import Path
 
-# Percorso della cartella PDF manuali (relativo alla root del progetto)
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-PDF_MANUALS_DIR = PROJECT_ROOT / "pdf manuali"
+# Percorso della cartella PDF manuali.
+# I PDF sono in backend/pdf manuali/ — sia localmente che nel container Docker
+# (dockerContext: ./backend → WORKDIR /app → pdf manuali/ è dentro /app/)
+_BACKEND_ROOT = Path(__file__).parent.parent.parent  # backend/
+PDF_MANUALS_DIR = _BACKEND_ROOT / "pdf manuali"
 
 # Normalizzazione termini inglesi → italiano
 # Secondo strato di sicurezza: se l'OCR restituisce un termine inglese, lo traduce
