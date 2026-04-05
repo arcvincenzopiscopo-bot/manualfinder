@@ -109,26 +109,37 @@ async def extract_plate_info(image_base64: str) -> PlateOCRResult:
     else:
         result = await _extract_with_tesseract(image_base64)
 
-    # Se il tipo di macchina è assente o generico, lo ricava da brand+modello tramite AI
-    mt = (result.machine_type or "").strip().lower()
-    if mt in _GENERIC_TYPES and result.brand and result.model:
-        enriched = await _infer_machine_type(result.brand, result.model, provider)
+    # Determina sempre il tipo di macchina da brand+modello tramite AI.
+    # L'OCR raramente legge il tipo dalla targa (quasi mai è scritto), quindi
+    # l'AI ha sempre più contesto dal codice modello che dalla targa stessa.
+    # Il risultato OCR viene usato come hint ma l'AI ha l'ultima parola.
+    if result.brand and result.model:
+        ocr_hint = (result.machine_type or "").strip()
+        # Passa il tipo OCR come hint — l'AI può confermarlo o correggerlo
+        enriched = await _infer_machine_type(result.brand, result.model, provider, ocr_hint=ocr_hint or None)
         if enriched:
             result.machine_type = enriched
 
     return result
 
 
-async def _infer_machine_type(brand: str, model: str, provider: str) -> Optional[str]:
+async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: Optional[str] = None) -> Optional[str]:
     """
-    Chiamata AI dedicata per determinare il tipo di macchina da brand+modello
-    quando l'OCR non è riuscito a identificarlo dalla targa.
+    Determina il tipo di macchina da brand+modello tramite AI.
+    Chiamata sempre dopo l'OCR: l'AI conosce i modelli industriali meglio
+    di quanto l'OCR possa leggere dalla targa (il tipo raramente è scritto).
+    ocr_hint: tipo estratto dall'OCR, usato come contesto (può essere None).
     """
+    hint_line = f"L'OCR ha letto dalla targa il tipo: '{ocr_hint}' — verifica se è corretto o correggilo.\n" if ocr_hint else ""
     prompt = (
         f"Rispondi con UNA SOLA RIGA di testo, senza spiegazioni.\n"
         f"Qual è il tipo di macchinario industriale '{brand} {model}'?\n"
-        f"Scrivi il tipo in italiano (es: 'escavatore', 'piattaforma a forbice', "
-        f"'carrello elevatore', 'gru mobile', 'sollevatore telescopico', 'compressore', ecc.).\n"
+        f"{hint_line}"
+        f"Scrivi il tipo in italiano (es: 'escavatore idraulico', 'piattaforma a forbice', "
+        f"'carrello elevatore', 'carrello elevatore telescopico', 'gru mobile', "
+        f"'sollevatore telescopico', 'compressore', 'pala caricatrice frontale', "
+        f"'dumper', 'rullo compattatore', 'finitrice', 'pompa calcestruzzo', ecc.).\n"
+        f"Usa il termine italiano standard INAIL se esiste.\n"
         f"Se non lo conosci con certezza scrivi solo: null"
     )
     try:
