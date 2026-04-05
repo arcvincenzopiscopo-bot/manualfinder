@@ -497,6 +497,7 @@ async def generate_safety_card(
         card = await _analyze_pdf_direct(
             brand, model, inail_bytes, inail_url, provider,
             allegato_v_context=allegato_v_context,
+            fonte_tipo="inail",
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
@@ -689,6 +690,7 @@ async def _analyze_dual_source(
 async def _analyze_pdf_direct(
     brand: str, model: str, pdf_bytes: bytes, pdf_url: Optional[str], provider: str,
     allegato_v_context: Optional[str] = None,
+    fonte_tipo: str = "pdf",
 ) -> SafetyCard:
     """Analisi diretta del PDF (≤100 pagine) — inviato come documento nativo."""
     pdf_b64 = pdf_service.pdf_to_base64(pdf_bytes)
@@ -706,7 +708,7 @@ async def _analyze_pdf_direct(
     else:
         result_json = await _call_ai_with_text(text, prompt, provider)
 
-    card = _build_safety_card(brand, model, result_json, pdf_url, "pdf")
+    card = _build_safety_card(brand, model, result_json, pdf_url, fonte_tipo)
     card.gap_ce_ante = result_json.get("gap_ce_ante")
     card.bozze_prescrizioni = result_json.get("bozze_prescrizioni") or []
     return card

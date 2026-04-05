@@ -1570,122 +1570,88 @@ async def _search_gemini_grounding(query: str) -> List[ManualSearchResult]:
 
 async def _search_manualslib(brand: str, model: str) -> List[ManualSearchResult]:
     """
-    Cerca su ManualsLib per brand + model ed estrae i PDF scaricabili.
-    ManualsLib ha ~10M manuali inclusi macchinari industriali e da cantiere.
-    Strategia: trova la pagina del manuale → estrai link /download/{id}/ → PDF reale.
+    Cerca su ManualsLib per brand + model.
+    ManualsLib blocca lo scraping diretto da IP cloud, quindi usiamo DuckDuckGo
+    con site:manualslib.com per trovare le pagine, poi seguiamo il link /download/.
     """
     from bs4 import BeautifulSoup
 
     results: List[ManualSearchResult] = []
 
+    # Step 1: usa DuckDuckGo per trovare le pagine ManualsLib (aggira il blocco diretto)
+    ddg_results: list = []
+    try:
+        from duckduckgo_search import DDGS
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        query = f'site:manualslib.com "{brand} {model}" manual'
+        ddg_results = await loop.run_in_executor(
+            None,
+            lambda: list(DDGS().text(query, max_results=6, safesearch="off"))
+        )
+    except Exception:
+        pass
+
+    # Filtra solo URL /manual/
+    found_pages: dict[str, str] = {}
+    for hit in ddg_results:
+        url = hit.get("href") or ""
+        title = hit.get("title") or ""
+        if "manualslib.com/manual/" in url.lower():
+            found_pages[url] = title
+        if len(found_pages) >= 4:
+            break
+
+    if not found_pages:
+        return results
+
+    # Step 2: segui ogni pagina per trovare il link /download/
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://www.manualslib.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/",
     }
-
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
-            # Step 1: cerca la pagina indice del manuale
-            search_urls = [
-                f"https://www.manualslib.com/k/{brand.replace(' ', '+')}+{model.replace(' ', '+')}.html",
-                f"https://www.manualslib.com/search/?q={brand.replace(' ', '+')}+{model.replace(' ', '+')}",
-            ]
-
-            found_pages: dict[str, str] = {}  # url → title
-
-            for search_url in search_urls:
-                try:
-                    resp = await client.get(search_url)
-                    if resp.status_code != 200:
-                        continue
-
-                    soup = BeautifulSoup(resp.text, "html.parser")
-
-                    for a in soup.find_all("a", href=True):
-                        href = a["href"]
-                        if not (href.startswith("/manual/") and href.endswith(".html")):
-                            continue
-
-                        title = ""
-                        parent = a.find_parent(["div", "li", "tr"])
-                        if parent:
-                            title_tag = parent.find(["h2", "h3", "strong", "b"])
-                            if title_tag:
-                                title = title_tag.get_text(strip=True)
-                        if not title:
-                            title = a.get_text(strip=True)
-                        if not title or len(title) < 3:
-                            slug = href.replace(".html", "").split("/")[-1]
-                            title = slug.replace("-", " ").title()
-
-                        full_url = f"https://www.manualslib.com{href}"
-                        if full_url not in found_pages:
-                            found_pages[full_url] = title
-
-                    if len(found_pages) >= 4:
-                        break
-                except Exception:
-                    continue
-
-            # Step 2: per ogni pagina manuale trovata, estrai il link download PDF
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
             for page_url, page_title in list(found_pages.items())[:4]:
                 try:
                     resp = await client.get(page_url)
                     if resp.status_code != 200:
-                        # Fallback: aggiungi la pagina HTML come risultato non-PDF
                         results.append(ManualSearchResult(
-                            url=page_url,
-                            title=f"{page_title} — ManualsLib",
-                            source_type="manufacturer",
-                            language="unknown",
-                            is_pdf=False,
-                            relevance_score=25,
+                            url=page_url, title=f"{page_title} — ManualsLib",
+                            source_type="manufacturer", language="unknown",
+                            is_pdf=False, relevance_score=25,
                         ))
                         continue
 
                     soup = BeautifulSoup(resp.text, "html.parser")
 
-                    # Cerca link di download: /download/{id}/ o link con testo "Download"
                     dl_url = None
                     for a in soup.find_all("a", href=True):
                         href = a["href"]
                         if "/download/" in href and href.startswith("/"):
-                            # URL relativa ManualsLib: /download/12345/ oppure /download/12345/?page=1
-                            dl_url = f"https://www.manualslib.com{href.split('?')[0]}"
-                            if not dl_url.endswith("/"):
-                                dl_url += "/"
+                            dl_url = f"https://www.manualslib.com{href.split('?')[0].rstrip('/')}"
                             break
-                        # Cerca anche link con testo esplicito
-                        if a.get_text(strip=True).lower() in ("download", "download pdf", "pdf") and href.startswith("http"):
+                        if a.get_text(strip=True).lower() in ("download", "download pdf") and href.startswith("http"):
                             dl_url = href
                             break
 
                     if dl_url:
-                        # Costruisci URL PDF con parametro agree=yes
-                        pdf_url = dl_url if "?" in dl_url else f"{dl_url}?agree=yes&page=1"
+                        pdf_url = f"{dl_url}?agree=yes&page=1"
                         results.append(ManualSearchResult(
-                            url=pdf_url,
-                            title=f"{page_title} — ManualsLib",
-                            source_type="manufacturer",
-                            language="unknown",
+                            url=pdf_url, title=f"{page_title} — ManualsLib",
+                            source_type="manufacturer", language="unknown",
                             is_pdf=True,
                             relevance_score=_score_result(pdf_url, page_title, True),
                         ))
                     else:
-                        # Nessun download trovato: aggiungi la pagina come riferimento
                         results.append(ManualSearchResult(
-                            url=page_url,
-                            title=f"{page_title} — ManualsLib",
-                            source_type="manufacturer",
-                            language="unknown",
-                            is_pdf=False,
-                            relevance_score=25,
+                            url=page_url, title=f"{page_title} — ManualsLib",
+                            source_type="manufacturer", language="unknown",
+                            is_pdf=False, relevance_score=25,
                         ))
                 except Exception:
                     continue
-
     except Exception:
         pass
 
@@ -1903,106 +1869,80 @@ async def _search_manualmachine(brand: str, model: str) -> List[ManualSearchResu
 
 async def _search_safemanuals(brand: str, model: str) -> List[ManualSearchResult]:
     """
-    Cerca su SafeManuals.com — aggregatore con PDF diretti scaricabili,
-    efficace per macchinari meno recenti e attrezzature industriali.
-    Struttura: /brand/{slug}/ → lista modelli → pagina manuale → PDF diretto.
+    Cerca su SafeManuals.com tramite DuckDuckGo (il sito blocca scraping diretto da IP cloud).
+    Poi segue i link trovati per estrarre PDF diretti.
     """
     from bs4 import BeautifulSoup
-    from urllib.parse import quote_plus
+    from urllib.parse import urljoin
 
     results: List[ManualSearchResult] = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
 
-    search_url = f"https://www.safemanuals.com/?s={quote_plus(brand)}+{quote_plus(model)}"
-    brand_slug = brand.lower().replace(" ", "-")
-
-    search_urls = [
-        search_url,
-        f"https://www.safemanuals.com/brand/{brand_slug}/",
-    ]
-
-    found_pages: dict[str, str] = {}  # url → title
-    found_pdfs: dict[str, str] = {}   # url → title
-
+    # Step 1: DuckDuckGo site: search per trovare le pagine SafeManuals
+    ddg_results: list = []
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
-            for url in search_urls:
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code != 200:
-                        continue
-
-                    soup = BeautifulSoup(resp.text, "html.parser")
-
-                    # PDF diretti
-                    for a in soup.find_all("a", href=True):
-                        href = a["href"]
-                        if not href:
-                            continue
-                        if href.lower().endswith(".pdf"):
-                            title = a.get_text(strip=True) or href.split("/")[-1]
-                            if href not in found_pdfs:
-                                found_pdfs[href] = title
-                        # Pagine manuale (contengono brand+model nell'URL)
-                        elif "safemanuals.com" in href and any(
-                            term in href.lower() for term in [
-                                model.lower().replace(" ", "-"),
-                                brand.lower().replace(" ", "-"),
-                            ]
-                        ) and len(href) > 30:
-                            title = a.get_text(strip=True) or ""
-                            parent = a.find_parent(["div", "li", "article"])
-                            if parent:
-                                h = parent.find(["h2", "h3", "h4", "strong"])
-                                if h:
-                                    title = h.get_text(strip=True)
-                            if not title or len(title) < 4:
-                                title = href.rstrip("/").split("/")[-1].replace("-", " ").title()
-                            if href not in found_pages and len(found_pages) < 5:
-                                found_pages[href] = title
-
-                    if len(found_pdfs) >= 3:
-                        break
-                except Exception:
-                    continue
-
-            # Segui le pagine manuale per estrarre PDF diretti
-            for page_url, page_title in list(found_pages.items())[:3]:
-                try:
-                    resp = await client.get(page_url)
-                    if resp.status_code != 200:
-                        continue
-                    page_soup = BeautifulSoup(resp.text, "html.parser")
-                    for a in page_soup.find_all("a", href=True):
-                        href = a["href"]
-                        if href.lower().endswith(".pdf") and href not in found_pdfs:
-                            found_pdfs[href] = a.get_text(strip=True) or page_title
-                    # Cerca anche link "Download" o "View PDF"
-                    for a in page_soup.find_all("a", href=True):
-                        href = a["href"]
-                        text = a.get_text(strip=True).lower()
-                        if any(kw in text for kw in ["download", "view pdf", "open pdf"]):
-                            if href not in found_pdfs and not href.startswith("#"):
-                                found_pdfs[href] = page_title
-                except Exception:
-                    continue
-
+        from duckduckgo_search import DDGS
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        query = f'site:safemanuals.com "{brand} {model}"'
+        ddg_results = await loop.run_in_executor(
+            None,
+            lambda: list(DDGS().text(query, max_results=6, safesearch="off"))
+        )
     except Exception:
         pass
 
-    # Risultati: PDF diretti (score pieno) + pagine come riferimento se nessun PDF
+    found_pages: dict[str, str] = {}
+    found_pdfs: dict[str, str] = {}
+
+    for hit in ddg_results:
+        url = hit.get("href") or ""
+        title = hit.get("title") or ""
+        if "safemanuals.com" in url.lower():
+            if url.lower().endswith(".pdf"):
+                found_pdfs[url] = title
+            else:
+                found_pages[url] = title
+        if len(found_pages) + len(found_pdfs) >= 5:
+            break
+
+    if not found_pages and not found_pdfs:
+        return results
+
+    # Step 2: segui le pagine per trovare PDF diretti
+    if found_pages:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.google.com/",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
+                for page_url, page_title in list(found_pages.items())[:3]:
+                    try:
+                        resp = await client.get(page_url)
+                        if resp.status_code != 200:
+                            continue
+                        soup = BeautifulSoup(resp.text, "html.parser")
+                        for a in soup.find_all("a", href=True):
+                            href = a["href"]
+                            abs_url = urljoin(page_url, href)
+                            if abs_url.lower().endswith(".pdf") and abs_url not in found_pdfs:
+                                found_pdfs[abs_url] = a.get_text(strip=True) or page_title
+                            text = a.get_text(strip=True).lower()
+                            if any(kw in text for kw in ["download", "view pdf", "open pdf"]):
+                                if abs_url not in found_pdfs and not href.startswith("#"):
+                                    found_pdfs[abs_url] = page_title
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
     for url, title in list(found_pdfs.items())[:4]:
         is_pdf = url.lower().endswith(".pdf")
         source_type, language = _classify_source(url)
         results.append(ManualSearchResult(
-            url=url,
-            title=f"{title} — SafeManuals",
-            source_type=source_type or "web",
-            language=language,
+            url=url, title=f"{title} — SafeManuals",
+            source_type=source_type or "web", language=language,
             is_pdf=is_pdf,
             relevance_score=_score_result(url, title, is_pdf),
         ))
@@ -2010,12 +1950,9 @@ async def _search_safemanuals(brand: str, model: str) -> List[ManualSearchResult
     if not found_pdfs:
         for url, title in list(found_pages.items())[:2]:
             results.append(ManualSearchResult(
-                url=url,
-                title=f"{title} — SafeManuals",
-                source_type="web",
-                language="unknown",
-                is_pdf=False,
-                relevance_score=12,
+                url=url, title=f"{title} — SafeManuals",
+                source_type="web", language="unknown",
+                is_pdf=False, relevance_score=18,
             ))
 
     return results
