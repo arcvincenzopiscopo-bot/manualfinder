@@ -1345,16 +1345,65 @@ async def _search_google_cse(query: str) -> List[ManualSearchResult]:
 
 
 async def _search_duckduckgo(query: str) -> List[ManualSearchResult]:
-    """Ricerca DuckDuckGo con scraping HTML migliorato."""
+    """Ricerca DuckDuckGo tramite libreria ddgs (più affidabile dello scraping HTML)."""
+    results: List[ManualSearchResult] = []
+
+    try:
+        from duckduckgo_search import DDGS
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        # DDGS è sincrono — lo eseguiamo in un thread separato per non bloccare l'event loop
+        def _ddgs_search():
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, max_results=12, safesearch="off"))
+
+        hits = await loop.run_in_executor(None, _ddgs_search)
+
+        for hit in hits:
+            url = hit.get("href") or hit.get("url") or ""
+            if not url:
+                continue
+            title = hit.get("title") or url
+            snippet = hit.get("body") or ""
+            is_pdf = url.lower().endswith(".pdf") or "filetype=pdf" in url.lower() or ".pdf" in url.lower()
+            source_type, language = _classify_source(url)
+            is_inail = "inail.it" in url.lower()
+            results.append(ManualSearchResult(
+                url=url,
+                title=title,
+                source_type=source_type,
+                language=language,
+                is_pdf=is_pdf,
+                relevance_score=_score_result(url, title, is_pdf, is_inail),
+                snippet=snippet,
+            ))
+
+    except ImportError:
+        # Fallback: scraping HTML se ddgs non installato
+        logger.warning("duckduckgo-search non installato, uso scraping HTML")
+        results = await _search_duckduckgo_html(query)
+    except Exception as e:
+        logger.warning("_search_duckduckgo (ddgs) failed: %s: %s", type(e).__name__, e)
+        # Tenta fallback HTML
+        try:
+            results = await _search_duckduckgo_html(query)
+        except Exception:
+            pass
+
+    return results
+
+
+async def _search_duckduckgo_html(query: str) -> List[ManualSearchResult]:
+    """Fallback: scraping HTML di DuckDuckGo (meno affidabile, usato se ddgs fallisce)."""
     from bs4 import BeautifulSoup
     from urllib.parse import unquote, parse_qs, urlparse
 
     results: List[ManualSearchResult] = []
-
     try:
         async with httpx.AsyncClient(
             timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
             follow_redirects=True,
         ) as client:
             response = await client.get(
@@ -1364,46 +1413,33 @@ async def _search_duckduckgo(query: str) -> List[ManualSearchResult]:
             response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "html.parser")
-
-        # Estrai risultati da div.result
         for result_div in soup.find_all("div", class_="result"):
             link_tag = result_div.find("a", class_="result__url")
             if not link_tag:
                 continue
-            
             href = link_tag.get("href", "")
             if not href:
                 continue
-
-            # Risolvi redirect DuckDuckGo
             if "/l/?uddg=" in href:
                 parsed = urlparse(href)
                 params = parse_qs(parsed.query)
                 url = unquote(params.get("uddg", [""])[0])
             else:
                 url = href
-
             if not url or "duckduckgo.com" in url:
                 continue
-
             title = link_tag.get_text(strip=True) or url
             snippet_tag = result_div.find("a", class_="result__snippet")
             snippet = snippet_tag.get_text(strip=True) if snippet_tag else ""
-            
             is_pdf = url.lower().endswith(".pdf") or "pdf" in url.lower() or "pdf" in snippet.lower()
             source_type, language = _classify_source(url)
             is_inail = "inail.it" in url.lower()
-
             results.append(ManualSearchResult(
-                url=url,
-                title=title,
-                source_type=source_type,
-                language=language,
+                url=url, title=title,
+                source_type=source_type, language=language,
                 is_pdf=is_pdf,
                 relevance_score=_score_result(url, title, is_pdf, is_inail),
             ))
-
-        # Fallback: cerca pattern PDF nel testo della pagina
         if not results:
             pdf_urls = re.findall(r'(https?://[^\s"<>]+\.pdf[^\s"<>]*)', response.text)
             for url in pdf_urls[:6]:
@@ -1412,17 +1448,13 @@ async def _search_duckduckgo(query: str) -> List[ManualSearchResult]:
                 source_type, language = _classify_source(url)
                 is_inail = "inail.it" in url.lower()
                 results.append(ManualSearchResult(
-                    url=url,
-                    title=f"PDF: {url.split('/')[-1]}",
-                    source_type=source_type,
-                    language=language,
+                    url=url, title=f"PDF: {url.split('/')[-1]}",
+                    source_type=source_type, language=language,
                     is_pdf=True,
                     relevance_score=_score_result(url, url, True, is_inail),
                 ))
-
     except Exception:
         pass
-
     return results
 
 

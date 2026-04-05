@@ -45,6 +45,7 @@ class ManualSearchResult(BaseModel):
     language: str = "unknown"     # "it" | "en" | "de" | "unknown"
     is_pdf: bool = False
     relevance_score: int = 0      # 0-100, per ordinamento
+    snippet: Optional[str] = None  # estratto testo dal risultato di ricerca
 
 
 class SafetyCard(BaseModel):
