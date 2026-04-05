@@ -319,7 +319,7 @@ async def _pipeline(request: FullAnalysisRequest):
         ordered_candidates = (tier1 + tier2)[:5]
 
         async def _download_and_score(candidate):
-            pdf_data, _ = await pdf_service.download_pdf(candidate.url)
+            pdf_data, err = await pdf_service.download_pdf(candidate.url)
             if pdf_data:
                 pages = pdf_service.count_pdf_pages(pdf_data)
                 score = pdf_service.score_pdf_safety_relevance(
@@ -327,6 +327,8 @@ async def _pipeline(request: FullAnalysisRequest):
                     machine_type=machine_type or "",
                 )
                 return (score, pdf_data, candidate.url, candidate.relevance_score, pages)
+            import logging as _log
+            _log.getLogger(__name__).info("PDF download failed: %s — %s", candidate.url[:80], err)
             return None
 
         download_tasks = [_download_and_score(c) for c in ordered_candidates]
@@ -335,43 +337,51 @@ async def _pipeline(request: FullAnalysisRequest):
         _producer_scored_count = len(producer_scored)  # conta prima degli scarti
 
         # Soglie qualità:
-        # - safety score < 20 → bassa pertinenza sicurezza (raised from 12 to reject catalogs)
-        # - pagine < 8 → quasi certamente brochure/datasheet, non manuale
-        # Se il PDF è sia corto che a basso score, viene scartato in favore del fallback AI
-        LOW_QUALITY_THRESHOLD = 20
-        MIN_MANUAL_PAGES = 8
+        # Un PDF viene accettato se:
+        #   A) Ha testo estraibile (score > 0) ed è abbastanza lungo (>= 8 pag.)
+        #   B) È molto lungo (>= 30 pag.) anche con score 0 — probabilmente scansionato
+        #      ma comunque un documento reale, non una brochure da 2 pagine
+        #   C) È corto ma con score di sicurezza molto alto (>= 40) — spec sheet con
+        #      sezioni sicurezza esplicite
+        # Viene scartato SOLO se è corto E non ha contenuto sicurezza rilevante.
+        LOW_QUALITY_THRESHOLD = 8   # score minimo per PDF corti (< 30 pag.)
+        MIN_MANUAL_PAGES = 8        # sotto questa soglia serve score >= 40
+        SCANNED_PAGES_THRESHOLD = 30  # PDF lungo anche senza testo → probabilmente scansionato
 
         if producer_scored:
             # Sort combinato: content score (70%) + autorità fonte dalla ricerca (30%).
-            # Evita che un PDF da fonte sconosciuta con score marginalmente più alto
-            # batta un PDF dal sito ufficiale del produttore.
             producer_scored.sort(
                 key=lambda x: x[0] * 0.7 + x[3] * 0.3,
                 reverse=True
             )
 
-            # Cerca il migliore che soddisfi i criteri di qualità.
-            # Documenti molto corti (< 8 pag.) richiedono score alto (≥ 45) per essere accettati:
-            # una brochure da 2 pagine con score 30 non è un manuale, anche se "passa" la soglia base.
             best = None
+            rejection_reasons = []
             for entry in producer_scored:
                 score, pdf_data, url, rel_score, pages = entry
+                short_url = url[-60:]
+                # Accetta PDF lunghi anche se scansionati (score=0): sono documenti reali
+                if pages >= SCANNED_PAGES_THRESHOLD:
+                    best = entry
+                    break
+                # Accetta PDF con testo e abbastanza pagine
                 if pages >= MIN_MANUAL_PAGES and score >= LOW_QUALITY_THRESHOLD:
-                    best = entry  # documento sufficientemente lungo e rilevante
+                    best = entry
                     break
-                if pages < MIN_MANUAL_PAGES and score >= 45:
-                    best = entry  # documento corto ma con contenuto sicurezza molto specifico
+                # Accetta PDF corti ma con alto contenuto sicurezza
+                if pages < MIN_MANUAL_PAGES and score >= 40:
+                    best = entry
                     break
+                rejection_reasons.append(f"{pages}pp score={score} ({short_url})")
 
-            # Se tutti i PDF sono brochure cortissime a basso score, scarta
             if best is None:
                 best_pages = producer_scored[0][4]
                 best_score_val = producer_scored[0][0]
-                # Logga il motivo dello scarto nel messaggio SSE (sotto)
+                reasons_str = "; ".join(rejection_reasons[:3])
                 producer_scored = []  # forza fallback AI
                 _brochure_note = (
                     f"PDF scartato: {best_pages} pag., score {best_score_val}/100 "
-                    "(brochure o datasheet senza dati di sicurezza). Procedo con analisi AI."
+                    f"(brochure/datasheet). Dettagli: {reasons_str}. Procedo con analisi AI."
                 )
             else:
                 _brochure_note = None
@@ -416,12 +426,19 @@ async def _pipeline(request: FullAnalysisRequest):
                 f"selezionato tra {n_tried} — sicurezza: {safety_score}/100{quality_label}{match_label})"
             )
 
+        n_pdf_found = len(pdf_candidates)
+        n_downloaded = _producer_scored_count + (1 if inail_bytes else 0)
+
         if not parts_ok and _brochure_note:
             dl_msg = _brochure_note
         elif parts_ok:
             dl_msg = f"Scaricati: {', '.join(parts_ok)}."
+        elif n_pdf_found > 0 and n_downloaded == 0:
+            dl_msg = f"Trovati {n_pdf_found} PDF ma nessuno scaricabile (timeout o accesso negato). Procedo con analisi AI."
+        elif n_pdf_found > 0 and n_downloaded > 0:
+            dl_msg = f"Trovati {n_pdf_found} PDF, {n_downloaded} scaricati ma tutti scartati (score troppo basso o non pertinenti). Procedo con analisi AI."
         else:
-            dl_msg = "Impossibile scaricare i PDF. Procedo con analisi AI."
+            dl_msg = "Nessun PDF trovato nella ricerca. Procedo con analisi AI."
 
         yield _sse(SSEEvent(
             step="download", status="completed", progress=60,

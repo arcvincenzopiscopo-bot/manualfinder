@@ -1138,12 +1138,21 @@ Includi TUTTI i {min(len(pdf_candidates), 12)} candidati. Nessun testo aggiuntiv
         scores_list = json.loads(m.group(0))
         score_map = {item["i"]: item["score"] for item in scores_list if "i" in item and "score" in item}
 
-        # Applica i punteggi AI ai candidati PDF
+        # Applica i punteggi AI ai candidati PDF.
+        # L'AI agisce come BOOST selettivo, non come penalità globale:
+        # - score AI >= 70 (manuale reale): bonus +20 capped a 100
+        # - score AI 40-69 (documento pertinente): score invariato
+        # - score AI < 40 (catalogo/brochure): penalità -15
+        # In questo modo non abbassa i candidati legittimi che l'AI non riconosce
+        # (es. PDF scansionati senza testo nel titolo/snippet).
         for idx, r in enumerate(pdf_candidates[:12]):
             ai_score = score_map.get(idx + 1)
-            if ai_score is not None:
-                # Blend: 60% AI + 40% score esistente (keyword + brand/model bonus)
-                r.relevance_score = int(ai_score * 0.6 + r.relevance_score * 0.4)
+            if ai_score is None:
+                continue
+            if ai_score >= 70:
+                r.relevance_score = min(100, r.relevance_score + 20)
+            elif ai_score < 40:
+                r.relevance_score = max(0, r.relevance_score - 15)
 
     except Exception:
         pass  # Fallback silenzioso — la lista torna invariata

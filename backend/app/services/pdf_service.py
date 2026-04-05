@@ -407,8 +407,9 @@ def classify_pdf_match(
     try:
         import fitz
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        pages = min(15, len(doc))
-        text = "".join(doc[i].get_text() for i in range(pages)).lower()
+        total_pages = len(doc)
+        sample_pages = min(15, total_pages)
+        text = "".join(doc[i].get_text() for i in range(sample_pages)).lower()
         doc.close()
 
         brand_norm = brand.lower().strip()
@@ -420,16 +421,21 @@ def classify_pdf_match(
         if brand_found or model_found:
             return "exact"
 
+        # PDF scansionato (solo immagini, nessun testo): non possiamo verificare la categoria,
+        # ma è comunque un documento reale — restituiamo "category" per non scartarlo.
+        if len(text.strip()) < 200 and total_pages >= 10:
+            return "category"
+
         # Cerca categoria in tutte le lingue supportate.
-        # Richiede che la keyword appaia almeno 3 volte: un documento generico che copre TUTTE le
-        # categorie (es. "Macchine in edilizia") può menzionare "carrello elevatore" 2 volte in
-        # 300 pagine — questo non basta per considerarlo pertinente a un carrello elevatore.
+        # Soglia occorrenze dipende dalla dimensione del documento:
+        # - PDF lungo (>20 pag): servono >=3 occorrenze per evitare falsi positivi su
+        #   documenti generici multi-categoria (es. "Macchine in edilizia")
+        # - PDF corto (<=20 pag): basta 1 occorrenza — è un documento focalizzato
         cat_keywords = _get_category_keywords(machine_type)
         if cat_keywords:
-            # Usa il testo completo (non solo prime 15 pagine) per il conteggio
-            full_text_lower = text  # già limitato alle prime 15 pag nel blocco sopra
-            total_count = sum(full_text_lower.count(kw) for kw in cat_keywords)
-            if total_count >= 3:
+            total_count = sum(text.count(kw) for kw in cat_keywords)
+            min_occ = 1 if total_pages <= 20 else 3
+            if total_count >= min_occ:
                 return "category"
 
         return "unrelated"
