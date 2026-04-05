@@ -50,23 +50,34 @@ _NO_PATENTINO = {
 }
 
 # Macchine soggette a verifiche Allegato VII D.Lgs. 81/08
+# Criteri: apparecchi di sollevamento materiali portata > 200 kg, sollevamento persone,
+# recipienti in pressione > 50L, impianti di messa a terra/parafulmine
 _SHOULD_HAVE_VERIFICHE = {
-    "carrello elevatore", "muletto", "sollevatore telescopico", "telehandler",
-    "gru mobile", "gru a torre", "gru su autocarro", "camion gru",
-    "piattaforma aerea", "ple", "piattaforma elevabile",
-    "pompa calcestruzzo", "autobetonpompa",
+    # Sollevamento materiali > 200 kg
+    "carrello elevatore", "carrello elevatore telescopico", "carrello elevatore a contrappeso",
+    "muletto", "sollevatore telescopico", "telehandler",
+    "gru", "gru mobile", "gru a torre", "gru su autocarro", "camion gru", "gru su camion",
+    "argano", "verricello", "paranco", "paranchi",
+    # Sollevamento persone
+    "piattaforma aerea", "ple", "piattaforma elevabile", "piattaforma a forbice",
+    "piattaforma a braccio", "ascensore di cantiere", "montacarichi", "elevatore a bandiera",
+    # Accessoria (sollevamento con attrezzatura specifica)
     "terna", "terne", "retroescavatore",
-    "argano", "verricello", "montacarichi",
+    # Pressione
+    "pompa calcestruzzo", "autobetonpompa",
 }
 
 # Macchine per cui verifiche_periodiche deve essere null
+# (non sollevamento, non pressione, movimento terra puro)
 _NO_VERIFICHE = {
     "piastra vibrante", "costipatore",
     "rullo compattatore", "rullo compressore",
     "bulldozer", "apripista",
     "compressore", "motocompressore",
     "saldatrice", "betoniera",
-    "escavatore",  # puro, senza funzione di sollevamento
+    "escavatore", "escavatore idraulico",   # puro, senza funzione di sollevamento
+    "pala caricatrice", "pala caricatrice frontale", "pala meccanica",  # movimento terra, non sollevamento
+    "dumper", "finitrice", "rullo",
 }
 
 
