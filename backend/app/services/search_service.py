@@ -299,6 +299,25 @@ MANUFACTURER_SITES_PRIMARY = {
     "hyundai":     "hd-hyundaice.com",
     "sandvik":     "sandvik.com",
     "atlas copco": "atlascopco.com",
+    # Rulli compattatori / finitrici stradali
+    "bomag":       "bomag.com",
+    "wirtgen":     "wirtgen.com",
+    "hamm":        "hamm.ag",
+    "dynapac":     "dynapac.com",
+    "ammann":      "ammann-group.com",
+    "sakai":       "sakai-world.com",
+    # Perforatrici / trivelle
+    "soilmec":     "soilmec.com",
+    "bauer":       "bauer.de",
+    # Sollevatori telescopici aggiuntivi
+    "skyjack":     "skyjack.com",
+    "snorkel":     "snorkellifts.com",
+    "dieci":       "diecisrl.com",
+    # Compressori cantiere aggiuntivi
+    "ceccato":     "ceccato.com",
+    "kaeser":      "kaeser.com",
+    "fini":        "fini-group.com",
+    "abac":        "abac.com",
 }
 
 # Dealer italiani ufficiali — secondari, aggiunti DOPO le query sul sito primario
@@ -348,7 +367,15 @@ def _build_manual_queries(brand: str, model: str) -> List[str]:
         sec = MANUFACTURER_SITES_SECONDARY[normalized]
         queries.append(f"{brand} {model} manuale filetype:pdf site:{sec}")
 
-    # 3) Query generiche in coda
+    # 3) Aggregatori specializzati manuali
+    queries += [
+        f'"{brand} {model}" manual site:manualzz.com',
+        f'"{brand} {model}" manual site:manualsbase.com',
+        f'"{brand} {model}" operator manual site:scribd.com',
+        f'"{brand} {model}" manuale operatore site:issuu.com',
+    ]
+
+    # 4) Query generiche in coda
     queries += [
         f"{brand} {model} filetype:pdf manuale",
         f"{brand} {model} filetype:pdf manual",
@@ -884,6 +911,7 @@ async def search_manual(
     # LIVELLO 3a: Fonti dirette indipendenti (in parallelo)
     direct_tasks = [
         _search_manualslib(brand, model),
+        _search_manualsplus(brand, model),
         _search_heavyequipments(brand, model),
         _search_manualmachine(brand, model),
         _search_safemanuals(brand, model),
