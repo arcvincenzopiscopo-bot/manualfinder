@@ -1207,17 +1207,34 @@ def _apply_temporal_score(
 
 
 async def _search_with_provider(query: str, provider: str) -> List[ManualSearchResult]:
-    """Esegue la ricerca con il provider specificato."""
+    """
+    Esegue la ricerca con il provider specificato.
+    Se il provider primario restituisce 0 risultati, fallback automatico a DuckDuckGo.
+    """
     if provider == "perplexity":
-        return await _search_perplexity(query)
+        results = await _search_perplexity(query)
     elif provider == "brave":
-        return await _search_brave(query)
+        results = await _search_brave(query)
     elif provider == "google_cse":
-        return await _search_google_cse(query)
+        results = await _search_google_cse(query)
     elif provider == "gemini_search":
-        return await _search_gemini_grounding(query)
+        results = await _search_gemini_grounding(query)
     else:
-        return await _search_duckduckgo(query)
+        results = await _search_duckduckgo(query)
+
+    # Fallback a DuckDuckGo se il provider primario non ha trovato niente
+    if not results and provider not in ("duckduckgo", None):
+        import logging as _log
+        _log.getLogger(__name__).info(
+            "_search_with_provider: %s returned 0 results for %r, falling back to DuckDuckGo",
+            provider, query[:60]
+        )
+        try:
+            results = await _search_duckduckgo(query)
+        except Exception:
+            pass
+
+    return results
 
 
 async def _search_perplexity(query: str) -> List[ManualSearchResult]:
@@ -1504,8 +1521,9 @@ async def _search_gemini_grounding(query: str) -> List[ManualSearchResult]:
                     relevance_score=_score_result(url, url, is_pdf, is_inail),
                 ))
 
-    except Exception:
-        pass
+    except Exception as e:
+        import logging as _log
+        _log.getLogger(__name__).warning("_search_gemini_grounding failed: %s: %s", type(e).__name__, e)
 
     return results
 
