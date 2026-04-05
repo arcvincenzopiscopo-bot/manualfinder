@@ -321,19 +321,29 @@ MANUFACTURER_SITES_SECONDARY = {
 def _build_manual_queries(brand: str, model: str) -> List[str]:
     """
     Genera query per ricerca manuale specifico del produttore.
-    Ordine: sito produttore primario → dealer italiano → generiche.
+    Ordine: query filetype:pdf aperte → sito produttore → dealer → generiche.
     """
     normalized = _normalize_brand(brand)
     queries = []
 
-    # 1) Sito produttore ufficiale — massima priorità
+    # 0) Query filetype:pdf SENZA restrizioni di sito — trovano PDF ovunque sul web
+    # (archive.org, scribd, dealer minori, siti produttore con struttura URL diversa)
+    # Messe PRIMA delle query site-specific per catturare più risultati con ddgs
+    queries += [
+        f'"{brand} {model}" operator manual filetype:pdf',
+        f'"{brand} {model}" manuale operatore filetype:pdf',
+        f'"{brand} {model}" "operator\'s manual" filetype:pdf',
+        f'"{model}" operator manual filetype:pdf -"spare parts" -"parts catalog"',
+        f'"{brand} {model}" manuale uso manutenzione filetype:pdf',
+    ]
+
+    # 1) Sito produttore ufficiale — alta priorità
     if normalized in MANUFACTURER_SITES_PRIMARY:
         site = MANUFACTURER_SITES_PRIMARY[normalized]
         queries.insert(0, f"{brand} {model} operator manual filetype:pdf site:{site}")
         queries.insert(1, f"{brand} {model} manuale site:{site}")
-        queries.insert(2, f"{brand} {model} manual site:{site}")
 
-    # 2) Dealer italiano ufficiale — seconda scelta, appended dopo le primarie
+    # 2) Dealer italiano ufficiale
     if normalized in MANUFACTURER_SITES_SECONDARY:
         sec = MANUFACTURER_SITES_SECONDARY[normalized]
         queries.append(f"{brand} {model} manuale filetype:pdf site:{sec}")
@@ -342,10 +352,7 @@ def _build_manual_queries(brand: str, model: str) -> List[str]:
     queries += [
         f"{brand} {model} filetype:pdf manuale",
         f"{brand} {model} filetype:pdf manual",
-        f"{brand} {model} manuale pdf",
         f"{brand} {model} operator manual pdf",
-        # Escludi esplicitamente i cataloghi attrezzature/ricambi dai risultati
-        f"{brand} {model} \"manuale d'uso\" OR \"istruzioni per l'uso\" filetype:pdf -\"tooling catalog\" -\"catalogo ricambi\"",
     ]
 
     return queries
@@ -875,11 +882,12 @@ async def search_manual(
                 continue
 
     # LIVELLO 3a: Fonti dirette indipendenti (in parallelo)
-    # SafeManuals e Manuals+ sostituiti da ManualMachine e ManualeIstruzioni
     direct_tasks = [
         _search_manualslib(brand, model),
         _search_heavyequipments(brand, model),
         _search_manualmachine(brand, model),
+        _search_safemanuals(brand, model),
+        _search_all_guides(brand, model),
     ]
     for direct_results in await asyncio.gather(*direct_tasks, return_exceptions=True):
         if isinstance(direct_results, list):
@@ -1562,11 +1570,9 @@ async def _search_gemini_grounding(query: str) -> List[ManualSearchResult]:
 
 async def _search_manualslib(brand: str, model: str) -> List[ManualSearchResult]:
     """
-    Cerca su ManualsLib per brand + model.
-    ManualsLib è gratuito, senza login, ~10M manuali inclusi macchinari da cantiere.
-    Nota: ManualsLib rende le pagine via JS (immagini), quindi restituiamo link alle
-    pagine del manuale (non PDF diretti). Utili come riferimento per l'utente e
-    come base per Gemini Search che può trovare PDF ospitati altrove.
+    Cerca su ManualsLib per brand + model ed estrae i PDF scaricabili.
+    ManualsLib ha ~10M manuali inclusi macchinari industriali e da cantiere.
+    Strategia: trova la pagina del manuale → estrai link /download/{id}/ → PDF reale.
     """
     from bs4 import BeautifulSoup
 
@@ -1576,19 +1582,20 @@ async def _search_manualslib(brand: str, model: str) -> List[ManualSearchResult]
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.manualslib.com/",
     }
 
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
-            # Prova due URL di ricerca: /k/ e /search/
-            queries = [
+            # Step 1: cerca la pagina indice del manuale
+            search_urls = [
                 f"https://www.manualslib.com/k/{brand.replace(' ', '+')}+{model.replace(' ', '+')}.html",
                 f"https://www.manualslib.com/search/?q={brand.replace(' ', '+')}+{model.replace(' ', '+')}",
             ]
 
-            found_links: dict[str, str] = {}  # url → title
+            found_pages: dict[str, str] = {}  # url → title
 
-            for search_url in queries:
+            for search_url in search_urls:
                 try:
                     resp = await client.get(search_url)
                     if resp.status_code != 200:
@@ -1596,47 +1603,88 @@ async def _search_manualslib(brand: str, model: str) -> List[ManualSearchResult]
 
                     soup = BeautifulSoup(resp.text, "html.parser")
 
-                    # Cerca container risultati (div.result o simili)
-                    # ManualsLib usa href del tipo /manual/XXXXXX/Brand-Model.html
                     for a in soup.find_all("a", href=True):
                         href = a["href"]
                         if not (href.startswith("/manual/") and href.endswith(".html")):
                             continue
 
-                        # Risali all'elemento padre per trovare titolo completo
                         title = ""
                         parent = a.find_parent(["div", "li", "tr"])
                         if parent:
-                            # Cerca il tag con il titolo del manuale
                             title_tag = parent.find(["h2", "h3", "strong", "b"])
                             if title_tag:
                                 title = title_tag.get_text(strip=True)
                         if not title:
                             title = a.get_text(strip=True)
                         if not title or len(title) < 3:
-                            # Ricava dal path: /manual/1507002/Terex-Ta9.html → "Terex Ta9"
-                            slug = href.rstrip(".html").split("/")[-1]
+                            slug = href.replace(".html", "").split("/")[-1]
                             title = slug.replace("-", " ").title()
 
                         full_url = f"https://www.manualslib.com{href}"
-                        if full_url not in found_links:
-                            found_links[full_url] = title
+                        if full_url not in found_pages:
+                            found_pages[full_url] = title
 
-                    if len(found_links) >= 4:
+                    if len(found_pages) >= 4:
                         break
                 except Exception:
                     continue
 
-            # Costruisci risultati
-            for manual_url, title in list(found_links.items())[:5]:
-                results.append(ManualSearchResult(
-                    url=manual_url,
-                    title=f"{title} — ManualsLib",
-                    source_type="manufacturer",
-                    language="unknown",
-                    is_pdf=False,
-                    relevance_score=20,  # Non PDF ma fonte affidabile
-                ))
+            # Step 2: per ogni pagina manuale trovata, estrai il link download PDF
+            for page_url, page_title in list(found_pages.items())[:4]:
+                try:
+                    resp = await client.get(page_url)
+                    if resp.status_code != 200:
+                        # Fallback: aggiungi la pagina HTML come risultato non-PDF
+                        results.append(ManualSearchResult(
+                            url=page_url,
+                            title=f"{page_title} — ManualsLib",
+                            source_type="manufacturer",
+                            language="unknown",
+                            is_pdf=False,
+                            relevance_score=25,
+                        ))
+                        continue
+
+                    soup = BeautifulSoup(resp.text, "html.parser")
+
+                    # Cerca link di download: /download/{id}/ o link con testo "Download"
+                    dl_url = None
+                    for a in soup.find_all("a", href=True):
+                        href = a["href"]
+                        if "/download/" in href and href.startswith("/"):
+                            # URL relativa ManualsLib: /download/12345/ oppure /download/12345/?page=1
+                            dl_url = f"https://www.manualslib.com{href.split('?')[0]}"
+                            if not dl_url.endswith("/"):
+                                dl_url += "/"
+                            break
+                        # Cerca anche link con testo esplicito
+                        if a.get_text(strip=True).lower() in ("download", "download pdf", "pdf") and href.startswith("http"):
+                            dl_url = href
+                            break
+
+                    if dl_url:
+                        # Costruisci URL PDF con parametro agree=yes
+                        pdf_url = dl_url if "?" in dl_url else f"{dl_url}?agree=yes&page=1"
+                        results.append(ManualSearchResult(
+                            url=pdf_url,
+                            title=f"{page_title} — ManualsLib",
+                            source_type="manufacturer",
+                            language="unknown",
+                            is_pdf=True,
+                            relevance_score=_score_result(pdf_url, page_title, True),
+                        ))
+                    else:
+                        # Nessun download trovato: aggiungi la pagina come riferimento
+                        results.append(ManualSearchResult(
+                            url=page_url,
+                            title=f"{page_title} — ManualsLib",
+                            source_type="manufacturer",
+                            language="unknown",
+                            is_pdf=False,
+                            relevance_score=25,
+                        ))
+                except Exception:
+                    continue
 
     except Exception:
         pass
@@ -1968,6 +2016,110 @@ async def _search_safemanuals(brand: str, model: str) -> List[ManualSearchResult
                 language="unknown",
                 is_pdf=False,
                 relevance_score=12,
+            ))
+
+    return results
+
+
+async def _search_all_guides(brand: str, model: str) -> List[ManualSearchResult]:
+    """
+    Cerca su all-guides.com — aggregatore con buona copertura macchine industriali
+    europee. Ha PDF diretti scaricabili senza login. Struttura:
+    /brand/{slug}/ → lista modelli → /manual/{id}/ → PDF diretto.
+    """
+    from bs4 import BeautifulSoup
+    from urllib.parse import quote_plus, urljoin
+
+    results: List[ManualSearchResult] = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    brand_slug = re.sub(r'[^a-z0-9]', '-', brand.lower()).strip('-')
+    model_lower = model.lower()
+
+    search_urls = [
+        f"https://all-guides.com/search/?q={quote_plus(brand)}+{quote_plus(model)}",
+        f"https://all-guides.com/brand/{brand_slug}/",
+    ]
+
+    found_pages: dict[str, str] = {}
+    found_pdfs: dict[str, str] = {}
+
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
+            for url in search_urls:
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code != 200:
+                        continue
+                    soup = BeautifulSoup(resp.text, "html.parser")
+
+                    for a in soup.find_all("a", href=True):
+                        href = a["href"]
+                        abs_url = urljoin(url, href)
+                        abs_lower = abs_url.lower()
+
+                        if abs_lower.endswith(".pdf") and abs_url not in found_pdfs:
+                            title = a.get_text(strip=True) or f"{brand} {model}"
+                            found_pdfs[abs_url] = title
+                        elif "all-guides.com" in abs_lower and (
+                            model_lower.replace(" ", "-") in abs_lower
+                            or model_lower.replace(" ", "") in abs_lower
+                        ) and "/manual/" in abs_lower and abs_url not in found_pages:
+                            title = a.get_text(strip=True) or f"{brand} {model}"
+                            if len(found_pages) < 4:
+                                found_pages[abs_url] = title
+
+                    if len(found_pdfs) >= 3:
+                        break
+                except Exception:
+                    continue
+
+            # Segui pagine manuale per trovare PDF diretti
+            for page_url, page_title in list(found_pages.items())[:3]:
+                try:
+                    resp = await client.get(page_url)
+                    if resp.status_code != 200:
+                        continue
+                    page_soup = BeautifulSoup(resp.text, "html.parser")
+                    for a in page_soup.find_all("a", href=True):
+                        href = a["href"]
+                        abs_url = urljoin(page_url, href)
+                        if abs_url.lower().endswith(".pdf") and abs_url not in found_pdfs:
+                            found_pdfs[abs_url] = a.get_text(strip=True) or page_title
+                        # Cerca link "Download PDF" o "Download"
+                        text = a.get_text(strip=True).lower()
+                        if any(kw in text for kw in ["download", "pdf"]) and "/download/" in abs_url.lower():
+                            if abs_url not in found_pdfs:
+                                found_pdfs[abs_url] = page_title
+                except Exception:
+                    continue
+
+    except Exception:
+        pass
+
+    for url, title in list(found_pdfs.items())[:4]:
+        source_type, language = _classify_source(url)
+        results.append(ManualSearchResult(
+            url=url,
+            title=f"{title} — All-Guides",
+            source_type=source_type or "web",
+            language=language,
+            is_pdf=True,
+            relevance_score=_score_result(url, title, True),
+        ))
+
+    if not found_pdfs:
+        for url, title in list(found_pages.items())[:2]:
+            results.append(ManualSearchResult(
+                url=url,
+                title=f"{title} — All-Guides",
+                source_type="web",
+                language="unknown",
+                is_pdf=False,
+                relevance_score=18,
             ))
 
     return results
