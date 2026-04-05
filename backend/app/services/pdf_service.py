@@ -420,10 +420,17 @@ def classify_pdf_match(
         if brand_found or model_found:
             return "exact"
 
-        # Cerca categoria in tutte le lingue supportate
+        # Cerca categoria in tutte le lingue supportate.
+        # Richiede che la keyword appaia almeno 3 volte: un documento generico che copre TUTTE le
+        # categorie (es. "Macchine in edilizia") può menzionare "carrello elevatore" 2 volte in
+        # 300 pagine — questo non basta per considerarlo pertinente a un carrello elevatore.
         cat_keywords = _get_category_keywords(machine_type)
-        if cat_keywords and any(kw in text for kw in cat_keywords):
-            return "category"
+        if cat_keywords:
+            # Usa il testo completo (non solo prime 15 pagine) per il conteggio
+            full_text_lower = text  # già limitato alle prime 15 pag nel blocco sopra
+            total_count = sum(full_text_lower.count(kw) for kw in cat_keywords)
+            if total_count >= 3:
+                return "category"
 
         return "unrelated"
     except Exception:

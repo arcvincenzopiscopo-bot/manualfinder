@@ -164,6 +164,13 @@ async def _pipeline(request: FullAnalysisRequest):
         "salute.gov.it", "lavoro.gov.it", "inail.it",
         "ausl.", "asl.", "spresal", "spisal",
         "portaleagenti.it", "sicurezzaentipubblici",
+        # CPT/FormedilTorino: "Le macchine in edilizia" — buono per cantiere,
+        # ma è un documento GENERICO multi-categoria → trattalo come INAIL e
+        # applica il classify_pdf_match per verificare la pertinenza al tipo specifico
+        "formediltorinofsc.it",
+        # PuntoSicuro e altri portali istituzionali sicurezza
+        "puntosicuro.it",
+        "suva.ch",
     ]
 
     def _is_inail_mirror(url: str) -> bool:
@@ -261,6 +268,16 @@ async def _pipeline(request: FullAnalysisRequest):
             if any(p in full for p in OFFICE_EQUIPMENT):
                 return False
 
+            # Cataloghi attrezzature/utensili — non manuali d'uso sicurezza
+            CATALOG_URL_SIGNALS = [
+                "tooling_catalog", "tooling-catalog", "tooling_guide",
+                "parts_catalog", "parts-catalog", "spare_parts",
+                "catalogo_ricambi", "catalogo_attrezzature", "catalogo_utensili",
+                "price_list", "listino_prezzi",
+            ]
+            if any(p in path.replace(" ", "_").replace("%20", "_") for p in CATALOG_URL_SIGNALS):
+                return False
+
             return True
 
         producer_candidates = [c for c in producer_candidates if _is_industrial_url(c.url)]
@@ -309,10 +326,10 @@ async def _pipeline(request: FullAnalysisRequest):
         _brochure_note = None  # impostato sotto se il PDF viene scartato
 
         # Soglie qualità:
-        # - safety score < 12 → bassa pertinenza sicurezza
+        # - safety score < 20 → bassa pertinenza sicurezza (raised from 12 to reject catalogs)
         # - pagine < 8 → quasi certamente brochure/datasheet, non manuale
         # Se il PDF è sia corto che a basso score, viene scartato in favore del fallback AI
-        LOW_QUALITY_THRESHOLD = 12
+        LOW_QUALITY_THRESHOLD = 20
         MIN_MANUAL_PAGES = 8
 
         if producer_scored:
