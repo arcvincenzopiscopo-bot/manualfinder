@@ -10,7 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from app.models.requests import PlateAnalysisRequest, FullAnalysisRequest
 from app.models.responses import SSEEvent
-from app.services import image_service, vision_service, search_service, pdf_service, analysis_service, safety_gate_service
+from app.services import image_service, vision_service, search_service, pdf_service, analysis_service, safety_gate_service, quality_service
 
 router = APIRouter()
 
@@ -462,14 +462,45 @@ async def _pipeline(request: FullAnalysisRequest):
     if safety_alerts_data:
         safety_card.safety_alerts = safety_alerts_data
 
+    # ── Quality logging (non-blocking, non solleva eccezioni) ─────────────
+    quality_service.log_analysis(
+        brand=brand, model=model, machine_type=machine_type,
+        safety_card=safety_card,
+        producer_match_type=producer_match_type,
+        producer_pages=producer_pages,
+        inail_url=inail_url,
+        producer_url=producer_url,
+    )
+
     yield _sse(SSEEvent(step="analysis", status="completed", progress=90, message="Scheda generata."))
 
-    # ── COMPLETE ─────────────────────────────────────────────────────────
+    # ── COMPLETE ──────────────────────��──────────────────────────────────
     yield _sse(SSEEvent(
         step="complete", status="completed", progress=100,
         message="Analisi completata.",
         data={"safety_card": safety_card.model_dump()},
     ))
+
+
+@router.get("/quality-log")
+async def get_quality_log(
+    only_issues: bool = False,
+    severity: str = "low",
+    summary_only: bool = False,
+):
+    """
+    Log di qualità delle analisi accumulate in questa sessione del server.
+    Parametri:
+      only_issues=true   → mostra solo analisi con almeno un issue
+      severity=medium    → mostra solo issue di severità >= medium/high
+      summary_only=true  → solo statistiche aggregate, nessun dettaglio
+    """
+    if summary_only:
+        return quality_service.get_summary()
+    return {
+        "summary": quality_service.get_summary(),
+        "entries": quality_service.get_log(only_with_issues=only_issues, min_severity=severity),
+    }
 
 
 @router.post("/full")
