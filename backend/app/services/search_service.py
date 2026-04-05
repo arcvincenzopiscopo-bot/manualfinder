@@ -803,6 +803,14 @@ def _score_result(
             score += pts  # pts è negativo
             break
 
+    # ── 5. Penalità URL — percorsi che indicano documento non pertinente ────
+    _URL_NEGATIVE_PATHS = (
+        "brochure", "environmental", "/epd/", "declaration", "sustainability",
+        "emissions", "carbon", "/flyer", "/promo", "/news/", "/press-release",
+    )
+    if any(p in url_lower for p in _URL_NEGATIVE_PATHS):
+        score -= 40  # Penalità forte: molto probabilmente non è un manuale d'uso
+
     return max(0, min(100, score))
 
 
@@ -2197,10 +2205,13 @@ async def _search_manualsplus(brand: str, model: str) -> List[ManualSearchResult
 
 # ── Scraping PDF da pagine HTML ───────────────────────────────────────────────
 
-# Parole che indicano un PDF NON pertinente — ricambi, cataloghi prezzo, schemi elettrici
+# Parole che indicano un PDF NON pertinente — ricambi, cataloghi prezzo, schemi elettrici, brochure
 _PDF_EXCLUDE_TERMS = frozenset([
     "spare", "parts", "ricambi", "catalog", "listino", "price", "pricelist",
     "schema", "wiring", "electrical", "circuit", "exploded",
+    # Documenti ambientali / commerciali — non sono manuali d'uso
+    "brochure", "environmental", "epd", "declaration", "sustainability",
+    "product-declaration", "enviro", "emissions", "carbon",
 ])
 
 # Parole che indicano un PDF pertinente — manuale d'uso

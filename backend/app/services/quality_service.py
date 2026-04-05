@@ -143,6 +143,8 @@ def evaluate(
     suspicious_url_fragments = [
         "tooling", "catalog", "catalogue", "spare", "ricambi", "datasheet",
         "spec-sheet", "spec_sheet", "brochure", "listino",
+        "environmental", "declaration", "/epd/", "sustainability", "emissions",
+        "press-release", "/news/", "flyer", "promo",
     ]
     if producer_url:
         url_lower = producer_url.lower()
