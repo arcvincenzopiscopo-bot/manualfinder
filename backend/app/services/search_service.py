@@ -1014,6 +1014,11 @@ async def search_manual(
     # per corrispondenza nel titolo/URL. Aggiorna lo score in-place.
     all_results = _apply_brand_model_score(all_results, brand, model)
 
+    # ── AI ranking: Gemini Flash classifica i candidati PDF per pertinenza ──
+    # ~800 token, ~$0.00006, ~1s — chiamata non bloccante sul percorso critico
+    # se fallisce, la lista resta quella del ranking rule-based precedente.
+    all_results = await ai_rank_candidates(all_results, brand, model, machine_type)
+
     deduped = _deduplicate_results(all_results)
 
     # ── Scrittura in cache ───────────────────────────────────────────────
@@ -1064,6 +1069,84 @@ def _apply_brand_model_score(
 
         if bonus:
             r.relevance_score = min(100, r.relevance_score + bonus)
+
+    return results
+
+
+async def ai_rank_candidates(
+    results: List[ManualSearchResult],
+    brand: str,
+    model: str,
+    machine_type: Optional[str],
+) -> List[ManualSearchResult]:
+    """
+    Usa Gemini Flash per riordinare i candidati PDF prima del download.
+    Input: titolo + URL + snippet di ogni risultato (~800 token totali).
+    Output: stessa lista con relevance_score aggiornato dall'AI.
+
+    Se l'AI non è disponibile o fallisce, restituisce la lista invariata.
+    Costa ~$0.00006 per chiamata — trascurabile.
+    """
+    pdf_candidates = [r for r in results if r.is_pdf]
+    if len(pdf_candidates) < 2:
+        return results  # niente da riordinare
+
+    # Prepara il contesto — solo i PDF candidati, massimo 12
+    candidates_text = "\n".join(
+        f"{i+1}. TITLE: {r.title[:100]}\n   URL: {r.url[:120]}\n   SNIPPET: {(r.snippet or '')[:120]}"
+        for i, r in enumerate(pdf_candidates[:12])
+    )
+
+    prompt = f"""Sei un esperto di macchinari industriali. Devi selezionare i manuali d'uso e sicurezza per: {brand} {model} (tipo: {machine_type or 'non specificato'}).
+
+Candidati trovati online:
+{candidates_text}
+
+Per ogni candidato assegna un punteggio da 0 a 100:
+- 90-100: manuale d'uso/operatore/sicurezza specifico per {brand} {model} o modello molto simile
+- 70-89: manuale d'uso per la stessa categoria di macchina ({machine_type or 'stessa categoria'}) ma brand diverso
+- 40-69: scheda tecnica, datasheet o documento normativo pertinente alla categoria
+- 10-39: documento parzialmente pertinente (noleggio, vendita con documentazione allegata)
+- 0-9: catalogo ricambi, catalogo attrezzature/utensili, brochure commerciale, spec sheet, documento non pertinente
+
+Rispondi SOLO con un JSON array di oggetti con i campi "i" (numero 1-based) e "score":
+[{{"i": 1, "score": 85}}, {{"i": 2, "score": 20}}, ...]
+
+Includi TUTTI i {min(len(pdf_candidates), 12)} candidati. Nessun testo aggiuntivo."""
+
+    try:
+        from app.config import settings
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = await client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=300,
+                temperature=0.0,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        import json, re
+        text = response.text
+        # Estrai JSON array dalla risposta
+        m = re.search(r'\[.*\]', text, re.DOTALL)
+        if not m:
+            return results
+        scores_list = json.loads(m.group(0))
+        score_map = {item["i"]: item["score"] for item in scores_list if "i" in item and "score" in item}
+
+        # Applica i punteggi AI ai candidati PDF
+        for idx, r in enumerate(pdf_candidates[:12]):
+            ai_score = score_map.get(idx + 1)
+            if ai_score is not None:
+                # Blend: 60% AI + 40% score esistente (keyword + brand/model bonus)
+                r.relevance_score = int(ai_score * 0.6 + r.relevance_score * 0.4)
+
+    except Exception:
+        pass  # Fallback silenzioso — la lista torna invariata
 
     return results
 

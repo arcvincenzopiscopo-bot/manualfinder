@@ -191,6 +191,8 @@ async def _pipeline(request: FullAnalysisRequest):
     producer_pages = 0
     producer_match_type = "unknown"
     producer_source_label = f"Produttore ({brand})"
+    _brochure_note = None
+    _producer_scored_count = 0
 
     if pdf_candidates:
         download_parts = []
@@ -229,8 +231,15 @@ async def _pipeline(request: FullAnalysisRequest):
                 _iscore, _ibytes, _iurl = inail_entry
                 if _iscore < INAIL_MIN_SCORE:
                     continue
-                # Verifica pertinenza tipo macchina: scarta se categoricamente non correlato
-                if machine_type:
+                # I PDF locali (/manuals/local/) sono già verificati per categoria in fase
+                # di indicizzazione — bypass sia score minimo che classify_pdf_match:
+                # non contengono brand/modello specifici (sono schede INAIL generiche per
+                # categoria), quindi score e match restituirebbero falsi negativi.
+                is_local = _iurl.startswith("/manuals/local/")
+                if is_local:
+                    inail_bytes, inail_url = _ibytes, _iurl
+                    break
+                if not is_local and machine_type:
                     _imatch = pdf_service.classify_pdf_match(_ibytes, brand, model, machine_type)
                     if _imatch == "unrelated":
                         continue  # prova il prossimo candidato
@@ -323,7 +332,7 @@ async def _pipeline(request: FullAnalysisRequest):
         download_tasks = [_download_and_score(c) for c in ordered_candidates]
         download_results = await asyncio.gather(*download_tasks)
         producer_scored: list[tuple[int, bytes, str, int, int]] = [r for r in download_results if r is not None]
-        _brochure_note = None  # impostato sotto se il PDF viene scartato
+        _producer_scored_count = len(producer_scored)  # conta prima degli scarti
 
         # Soglie qualità:
         # - safety score < 20 → bassa pertinenza sicurezza (raised from 12 to reject catalogs)
@@ -378,6 +387,10 @@ async def _pipeline(request: FullAnalysisRequest):
             elif producer_match_type == "unrelated":
                 producer_bytes = None
                 producer_source_label = "AI"
+                _brochure_note = (
+                    f"PDF scartato: non pertinente per {machine_type or brand} "
+                    "(documento di categoria diversa). Procedo con analisi AI."
+                )
 
         # Deduplica: se il PDF produttore è lo stesso documento dell'INAIL (mirror),
         # non ha senso analizzarlo due volte — meglio fallback AI per le raccomandazioni
@@ -394,7 +407,7 @@ async def _pipeline(request: FullAnalysisRequest):
         if inail_bytes:
             parts_ok.append(f"INAIL ({pdf_service.count_pdf_pages(inail_bytes)} pag.)")
         if producer_bytes:
-            n_tried = len(producer_scored)
+            n_tried = _producer_scored_count
             safety_score = producer_scored[0][0] if producer_scored else 0
             quality_label = "" if safety_score >= LOW_QUALITY_THRESHOLD else " ⚠ bassa pertinenza"
             match_label = "" if producer_match_type == "exact" else " ⚠ categoria simile"
@@ -487,6 +500,7 @@ async def get_quality_log(
     only_issues: bool = False,
     severity: str = "low",
     summary_only: bool = False,
+    report: bool = False,
 ):
     """
     Log di qualità delle analisi accumulate in questa sessione del server.
@@ -494,7 +508,11 @@ async def get_quality_log(
       only_issues=true   → mostra solo analisi con almeno un issue
       severity=medium    → mostra solo issue di severità >= medium/high
       summary_only=true  → solo statistiche aggregate, nessun dettaglio
+      report=true        → genera analisi critica AI con suggerimenti miglioramento
+                           (~$0.0003, chiamare manualmente quando il log è popolato)
     """
+    if report:
+        return await quality_service.generate_improvement_report()
     if summary_only:
         return quality_service.get_summary()
     return {

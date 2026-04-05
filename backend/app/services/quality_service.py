@@ -295,3 +295,92 @@ def get_summary() -> dict:
         "issue_rate": round(with_issues / total, 2) if total else 0,
         "issue_type_counts": sorted_issues,
     }
+
+
+async def generate_improvement_report() -> dict:
+    """
+    Analisi critica AI del log accumulato.
+    Legge tutti gli issue del log e produce suggerimenti concreti per migliorare
+    prompt, logica di ricerca e regole di scoring.
+
+    Costo: ~3-5k token Gemini Flash (~$0.0003). Da chiamare manualmente via
+    GET /analyze/quality-log?report=true — non viene chiamata ad ogni analisi.
+    """
+    if not _quality_log:
+        return {"error": "Log vuoto — esegui alcune analisi prima di generare il report."}
+
+    entries_with_issues = [e for e in _quality_log if e["n_issues"] > 0]
+    if not entries_with_issues:
+        return {"message": "Nessun issue rilevato nelle analisi accumulate. Ottimo!", "summary": get_summary()}
+
+    # Prepara il digest del log — compresso per risparmiare token
+    log_digest = []
+    for e in entries_with_issues[-50:]:  # max 50 entries più recenti con issue
+        log_digest.append({
+            "m": e["macchina"],
+            "mt": e["machine_type"],
+            "ft": e["fonte_tipo"],
+            "pm": e["producer_match"],
+            "pp": e["producer_pages"],
+            "pu": e["producer_url"][-60:] if e["producer_url"] else "",
+            "nr": e["n_rischi"],
+            "nc": e["n_checklist"],
+            "issues": [{"t": i["type"], "s": i["severity"], "m": i["message"][:100]} for i in e["issues"]],
+        })
+
+    import json
+    summary = get_summary()
+
+    prompt = f"""Sei un ingegnere software che analizza i problemi di qualità di ManualFinder, un sistema che:
+1. Cerca manuali di sicurezza per macchinari industriali online (Google/Brave/Perplexity)
+2. Scarica i PDF trovati e li classifica per pertinenza
+3. Usa Gemini AI per estrarre una scheda sicurezza strutturata dal PDF
+
+Hai accesso al log di qualità delle ultime analisi. Ogni entry ha:
+- macchina (brand+model), tipo, fonte usata, URL produttore, n. pagine
+- issues: problemi rilevati (tipo + severità + messaggio)
+
+STATISTICHE GLOBALI:
+{json.dumps(summary, ensure_ascii=False, indent=2)}
+
+LOG DETTAGLIATO (ultime {len(log_digest)} analisi con problemi):
+{json.dumps(log_digest, ensure_ascii=False)}
+
+Analizza i pattern e produci un report con:
+
+1. **PROBLEMI RICORRENTI** (ordinati per frequenza): per ogni tipo di issue spiega la causa radice probabile
+
+2. **SUGGERIMENTI RICERCA** (search_service.py): modifiche specifiche alle query, ai filtri URL/titolo, alla logica di selezione candidati, ai domini da includere/escludere — con il codice Python da modificare
+
+3. **SUGGERIMENTI PROMPT** (analysis_service.py / LEGAL_ENRICH_PROMPT): testo specifico da aggiungere/modificare nei prompt AI per risolvere i casi problematici osservati
+
+4. **SUGGERIMENTI SCORING** (pdf_service.py): keyword da aggiungere a NEGATIVE_SIGNALS o BROCHURE_SIGNALS, soglie da cambiare
+
+5. **CASI ANOMALI**: analisi con combinazione insolita di issues che potrebbero indicare un bug nel codice (non solo un prompt sbagliato)
+
+Sii CONCRETO e SPECIFICO: cita i tipi di macchine problematici, i domini problematici, le keyword mancanti. Niente consigli generici.
+Rispondi in italiano con markdown."""
+
+    try:
+        from app.config import settings
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        response = await client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=4000,
+                temperature=0.0,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "summary": summary,
+            "n_entries_analyzed": len(log_digest),
+            "report": response.text,
+        }
+    except Exception as e:
+        return {"error": f"Generazione report fallita: {e}", "summary": summary}
