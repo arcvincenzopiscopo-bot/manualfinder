@@ -538,6 +538,51 @@ async def get_quality_log(
     }
 
 
+@router.get("/debug-search")
+async def debug_search(brand: str = "Doosan", model: str = "D20NXP", machine_type: str = "carrello elevatore"):
+    """
+    Endpoint di diagnostica: testa local INAIL lookup + DuckDuckGo search.
+    Non usare in produzione per utenti reali.
+    """
+    import os
+    from app.services import local_manuals_service, search_service
+    from app.config import settings
+
+    # 1. Test percorso PDF locali
+    pdf_dir = local_manuals_service.PDF_MANUALS_DIR
+    pdf_dir_exists = pdf_dir.exists()
+    pdf_files = list(pdf_dir.glob("*.pdf")) if pdf_dir_exists else []
+
+    # 2. Test find_local_manual
+    local_result = local_manuals_service.find_local_manual(machine_type)
+
+    # 3. Test DuckDuckGo search
+    ddg_results = []
+    ddg_error = None
+    try:
+        from duckduckgo_search import DDGS
+        import asyncio
+        loop = asyncio.get_event_loop()
+        hits = await loop.run_in_executor(None, lambda: list(DDGS().text(f"{brand} {model} manual pdf", max_results=5, safesearch="off")))
+        ddg_results = [{"title": h.get("title"), "url": h.get("href")} for h in hits]
+    except Exception as e:
+        ddg_error = f"{type(e).__name__}: {e}"
+
+    # 4. Test provider configurato
+    provider = settings.get_search_provider()
+
+    return {
+        "pdf_dir": str(pdf_dir),
+        "pdf_dir_exists": pdf_dir_exists,
+        "pdf_files_count": len(pdf_files),
+        "pdf_files": [f.name for f in pdf_files[:5]],
+        "local_manual_found": local_result,
+        "search_provider": provider,
+        "ddg_results": ddg_results,
+        "ddg_error": ddg_error,
+    }
+
+
 @router.post("/full")
 async def analyze_full(request: Request, body: FullAnalysisRequest):
     """
