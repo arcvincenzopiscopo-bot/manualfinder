@@ -1357,7 +1357,7 @@ async def _search_duckduckgo(query: str) -> List[ManualSearchResult]:
     results: List[ManualSearchResult] = []
 
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         import asyncio
 
         loop = asyncio.get_event_loop()
@@ -1581,13 +1581,14 @@ async def _search_manualslib(brand: str, model: str) -> List[ManualSearchResult]
     # Step 1: usa DuckDuckGo per trovare le pagine ManualsLib (aggira il blocco diretto)
     ddg_results: list = []
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         import asyncio as _asyncio
         loop = _asyncio.get_event_loop()
-        query = f'site:manualslib.com "{brand} {model}" manual'
+        # site: operator non funziona bene su DDG — cerchiamo "manualslib" nel testo
+        query = f'manualslib "{brand} {model}" operator manual'
         ddg_results = await loop.run_in_executor(
             None,
-            lambda: list(DDGS().text(query, max_results=6, safesearch="off"))
+            lambda: list(DDGS().text(query, max_results=8, safesearch="off"))
         )
     except Exception:
         pass
@@ -1880,13 +1881,13 @@ async def _search_safemanuals(brand: str, model: str) -> List[ManualSearchResult
     # Step 1: DuckDuckGo site: search per trovare le pagine SafeManuals
     ddg_results: list = []
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         import asyncio as _asyncio
         loop = _asyncio.get_event_loop()
-        query = f'site:safemanuals.com "{brand} {model}"'
+        query = f'safemanuals "{brand} {model}" manual'
         ddg_results = await loop.run_in_executor(
             None,
-            lambda: list(DDGS().text(query, max_results=6, safesearch="off"))
+            lambda: list(DDGS().text(query, max_results=8, safesearch="off"))
         )
     except Exception:
         pass
@@ -1894,14 +1895,18 @@ async def _search_safemanuals(brand: str, model: str) -> List[ManualSearchResult
     found_pages: dict[str, str] = {}
     found_pdfs: dict[str, str] = {}
 
+    # Aggregatori PDF affidabili accettati anche se non sono safemanuals.com
+    _SAFE_AGGREGATORS = ("safemanuals.com", "all-guidesbox.com", "manualmachine.com",
+                         "all-guides.com", "manualzz.com")
+
     for hit in ddg_results:
         url = hit.get("href") or ""
         title = hit.get("title") or ""
-        if "safemanuals.com" in url.lower():
-            if url.lower().endswith(".pdf"):
-                found_pdfs[url] = title
-            else:
-                found_pages[url] = title
+        url_l = url.lower()
+        if url_l.endswith(".pdf"):
+            found_pdfs[url] = title
+        elif any(a in url_l for a in _SAFE_AGGREGATORS):
+            found_pages[url] = title
         if len(found_pages) + len(found_pdfs) >= 5:
             break
 
