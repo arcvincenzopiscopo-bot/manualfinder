@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     max_pdf_size_mb: int = 50
     max_pdf_pages_per_chunk: int = 30
 
+    # === Database ===
+    database_url: Optional[str] = None  # postgresql://postgres.[PWD]@aws-0-eu-west-1.pooler.supabase.com:6543/postgres
+
     # === Server ===
     # In produzione su Render, sovrascrivere con l'URL reale del frontend via variabile ALLOWED_ORIGINS
     allowed_origins: str = "http://localhost:5173,https://manualfinder.vercel.app,https://manualfinder-frontend.onrender.com"

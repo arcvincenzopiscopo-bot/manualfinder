@@ -90,6 +90,33 @@ export async function searchManual(brand: string, model: string, lang = 'it'): P
   return response.json()
 }
 
+export interface SaveManualPayload {
+  search_brand?: string
+  search_model?: string
+  search_machine_type?: string
+  manual_brand: string
+  manual_model: string
+  manual_machine_type: string
+  manual_year?: string
+  manual_language?: string
+  url: string
+  title?: string
+  is_pdf?: boolean
+  notes?: string
+}
+
+export async function saveManual(data: SaveManualPayload): Promise<void> {
+  const response = await fetch(`${BASE_URL}/manuals/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`Errore salvataggio (HTTP ${response.status}): ${text}`)
+  }
+}
+
 export async function checkHealth(): Promise<boolean> {
   try {
     const response = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(5000) })

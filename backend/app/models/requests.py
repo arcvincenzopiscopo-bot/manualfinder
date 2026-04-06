@@ -8,6 +8,25 @@ class PlateAnalysisRequest(BaseModel):
     image_mime: str = "image/jpeg"
 
 
+class SaveManualRequest(BaseModel):
+    # Macchina cercata dall'ispettore (contesto)
+    search_brand: Optional[str] = None
+    search_model: Optional[str] = None
+    search_machine_type: Optional[str] = None
+    # Manuale reale trovato (può essere di un modello simile)
+    manual_brand: str
+    manual_model: str
+    manual_machine_type: str
+    manual_year: Optional[str] = None
+    manual_language: str = "en"
+    # Link
+    url: str
+    title: Optional[str] = None
+    is_pdf: bool = True
+    # Note libere dell'ispettore
+    notes: Optional[str] = None
+
+
 class FullAnalysisRequest(BaseModel):
     """
     Usato per la pipeline completa (search → download → analisi).
