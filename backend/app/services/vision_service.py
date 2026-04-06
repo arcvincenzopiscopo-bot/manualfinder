@@ -123,32 +123,241 @@ async def extract_plate_info(image_base64: str) -> PlateOCRResult:
     return result
 
 
+# ── Lookup deterministico brand → tipo macchina ──────────────────────────────
+# Usato PRIMA dell'AI: per brand noti restituisce il tipo corretto senza chiamate.
+# Chiave: brand normalizzato (lower, strip). Valore: tipo INAIL in italiano.
+_BRAND_TYPE_MAP: dict[str, str] = {
+    # ── Macchine per lavorazione legno ────────────────────────────────────────
+    "polieri":      "sega circolare",
+    "casadei":      "sega circolare",
+    "scm":          "sega circolare",       # SCM Group — varie, ma prevalenza seghe
+    "griggio":      "sega circolare",
+    "felder":       "sega circolare",
+    "altendorf":    "sega circolare",
+    "robland":      "sega circolare",
+    "maka":         "centro di lavoro CNC per legno",
+    "biesse":       "centro di lavoro CNC per legno",
+    "homag":        "centro di lavoro CNC per legno",
+    "weinig":       "pialla quattro facce",
+    "martin":       "sega circolare",       # Martin GmbH
+    "oertli":       "fresatrice per legno",
+    "steton":       "sega circolare",
+    # ── Macchine per lavorazione lamiera / metallo ────────────────────────────
+    "trumpf":       "macchina taglio laser",
+    "bystronic":    "macchina taglio laser",
+    "amada":        "pressa piegatrice",
+    "salvagnini":   "pannellatrice",
+    "prima industrie": "macchina taglio laser",
+    "ermaksan":     "pressa piegatrice",
+    "durmapress":   "pressa piegatrice",
+    "safan":        "pressa piegatrice",
+    "gasparini":    "pressa piegatrice",
+    "ficep":        "punzonatrice",
+    "euromac":      "punzonatrice",
+    "rainer":       "pressa piegatrice",
+    "promecam":     "pressa piegatrice",
+    "haco":         "pressa piegatrice",
+    "durma":        "pressa piegatrice",
+    "accurpress":   "pressa piegatrice",
+    # ── Accessori idraulici / attrezzature per escavatori ────────────────────
+    "rozzi":        "attrezzatura idraulica per escavatore",
+    "indeco":       "martello demolitore idraulico",
+    "mb crusher":   "frantoio da escavatore",
+    "mb":           "attrezzatura per escavatore",
+    "epiroc":       "martello demolitore idraulico",
+    "furukawa":     "martello demolitore idraulico",
+    "atlas copco rock drills": "martello demolitore idraulico",
+    "montabert":    "martello demolitore idraulico",
+    "rammer":       "martello demolitore idraulico",
+    "brokk":        "robot demolitore",
+    "demoq":        "attrezzatura demolitiva",
+    # ── Piattaforme aeree / sollevamento ──────────────────────────────────────
+    "haulotte":     "piattaforma aerea",
+    "genie":        "piattaforma aerea",
+    "jlg":          "piattaforma aerea",
+    "skyjack":      "piattaforma a forbice",
+    "snorkel":      "piattaforma aerea",
+    "niftylift":    "piattaforma aerea a braccio",
+    "manitou":      "sollevatore telescopico",
+    "merlo":        "sollevatore telescopico",
+    "dieci":        "sollevatore telescopico",
+    "jcb":          "sollevatore telescopico",  # JCB prevalenza — overridden by model prefix later
+    "faresin":      "sollevatore telescopico",
+    "magni":        "sollevatore telescopico rotante",
+    "tadano":       "gru mobile",
+    "liebherr ltm": "gru mobile",
+    "fassi":        "gru su autocarro",
+    "hiab":         "gru su autocarro",
+    "palfinger":    "gru su autocarro",
+    "effer":        "gru su autocarro",
+    "pesci":        "gru su autocarro",
+    "atlas":        "gru su autocarro",         # Atlas Maschinen (gru), non Atlas Copco
+    # ── Movimento terra ───────────────────────────────────────────────────────
+    "caterpillar":  "escavatore",               # default — raffinato da prefisso modello
+    "komatsu":      "escavatore",
+    "volvo ce":     "escavatore",
+    "volvo":        "escavatore",
+    "doosan":       "escavatore",
+    "hitachi":      "escavatore",
+    "hyundai":      "escavatore",
+    "case":         "escavatore",
+    "new holland":  "escavatore",
+    "bobcat":       "minipala",
+    "wacker neuson":"rullo compattatore",
+    "bomag":        "rullo compattatore",
+    "hamm":         "rullo compattatore",
+    "dynapac":      "rullo compattatore",
+    "ammann":       "rullo compattatore",
+    "sakai":        "rullo compattatore",
+    "wirtgen":      "fresatrice stradale",
+    "vögele":       "finitrice",
+    "vogele":       "finitrice",
+    "bauer":        "trivella da fondazione",
+    "soilmec":      "trivella da fondazione",
+    # ── Carrelli elevatori ────────────────────────────────────────────────────
+    "linde":        "carrello elevatore",
+    "still":        "carrello elevatore",
+    "jungheinrich": "carrello elevatore",
+    "toyota":       "carrello elevatore",
+    "hyster":       "carrello elevatore",
+    "yale":         "carrello elevatore",
+    "crown":        "carrello elevatore",
+    "nissan":       "carrello elevatore",
+    "mitsubishi":   "carrello elevatore",
+    "clark":        "carrello elevatore",
+    "om":           "carrello elevatore",       # OM Carrelli (brand italiano)
+    # ── Pompe / calcestruzzo ──────────────────────────────────────────────────
+    "schwing":      "pompa calcestruzzo",
+    "putzmeister":  "pompa calcestruzzo",
+    "cifa":         "pompa calcestruzzo",
+    "sermac":       "pompa calcestruzzo",
+    # ── Compressori / generatori ──────────────────────────────────────────────
+    "atlas copco":  "compressore",
+    "kaeser":       "compressore",
+    "ceccato":      "compressore",
+    "fini":         "compressore",
+    "abac":         "compressore",
+    "ingersoll rand": "compressore",
+    "boge":         "compressore",
+    "almig":        "compressore",
+    "kohler":       "generatore",
+    "sdmo":         "generatore",
+    "pramac":       "generatore",
+    "cummins":      "generatore",
+    "perkins":      "generatore",
+}
+
+# Prefissi modello che specificano meglio il tipo per brand multi-prodotto
+_MODEL_PREFIX_OVERRIDES: list[tuple[str, str, str]] = [
+    # (brand_lower, model_prefix_lower, tipo)
+    ("caterpillar", "320", "escavatore"),
+    ("caterpillar", "323", "escavatore"),
+    ("caterpillar", "330", "escavatore"),
+    ("caterpillar", "336", "escavatore"),
+    ("caterpillar", "345", "escavatore"),
+    ("caterpillar", "950", "pala caricatrice"),
+    ("caterpillar", "966", "pala caricatrice"),
+    ("caterpillar", "972", "pala caricatrice"),
+    ("caterpillar", "420", "terna"),
+    ("caterpillar", "432", "terna"),
+    ("caterpillar", "444", "terna"),
+    ("caterpillar", "770", "dumper"),
+    ("caterpillar", "773", "dumper"),
+    ("komatsu", "pc",  "escavatore"),
+    ("komatsu", "wa",  "pala caricatrice"),
+    ("komatsu", "hd",  "dumper"),
+    ("komatsu", "d",   "bulldozer"),
+    ("jcb", "3cx",     "terna"),
+    ("jcb", "4cx",     "terna"),
+    ("jcb", "js",      "escavatore"),
+    ("jcb", "535",     "sollevatore telescopico"),
+    ("jcb", "541",     "sollevatore telescopico"),
+    ("jcb", "550",     "sollevatore telescopico"),
+    ("haulotte", "h",  "piattaforma a forbice"),
+    ("haulotte", "ha", "piattaforma aerea a braccio"),
+    ("haulotte", "ht", "piattaforma aerea a braccio"),
+    ("genie", "gs",    "piattaforma a forbice"),
+    ("genie", "z-",    "piattaforma aerea a braccio"),
+    ("genie", "s-",    "piattaforma aerea a braccio"),
+    ("jlg", "2646",    "piattaforma a forbice"),
+    ("jlg", "3246",    "piattaforma a forbice"),
+    ("jlg", "4069",    "piattaforma a forbice"),
+    ("jlg", "600aj",   "piattaforma aerea a braccio"),
+    ("jlg", "800aj",   "piattaforma aerea a braccio"),
+    ("volvo", "ew",    "escavatore"),
+    ("volvo", "ec",    "escavatore"),
+    ("volvo", "l",     "pala caricatrice"),
+    ("volvo", "a",     "dumper articolato"),
+    ("liebherr", "ltm","gru mobile"),
+    ("liebherr", "ltc","gru mobile"),
+    ("liebherr", "ltr","gru cingolata"),
+    ("liebherr", "ec", "gru a torre"),
+    ("liebherr", "l",  "pala caricatrice"),
+    ("liebherr", "r",  "escavatore"),
+    ("rozzi", "rr",    "benna a polipo"),
+    ("rozzi", "rb",    "benna a mordacchia"),
+    ("rozzi", "rc",    "cesoia demolitrice"),
+    ("rozzi", "rm",    "martello demolitore"),
+]
+
+
+def _lookup_brand_type(brand: str, model: str) -> Optional[str]:
+    """
+    Lookup deterministico: prima controlla prefissi modello specifici,
+    poi fallback sul brand. Restituisce None se brand sconosciuto.
+    """
+    brand_l = brand.strip().lower()
+    model_l = model.strip().lower()
+
+    # 1) Controlla sovrascritture per prefisso modello
+    for b, mp, tipo in _MODEL_PREFIX_OVERRIDES:
+        if brand_l == b and model_l.startswith(mp):
+            return tipo
+
+    # 2) Fallback brand esatto
+    if brand_l in _BRAND_TYPE_MAP:
+        return _BRAND_TYPE_MAP[brand_l]
+
+    # 3) Fallback brand parziale (gestisce "Volvo CE" vs "Volvo")
+    for key, tipo in _BRAND_TYPE_MAP.items():
+        if key in brand_l or brand_l in key:
+            if len(key) >= 4:  # evita match troppo corti
+                return tipo
+
+    return None
+
+
 async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: Optional[str] = None) -> Optional[str]:
     """
-    Determina il tipo di macchina da brand+modello tramite AI.
-    Chiamata sempre dopo l'OCR: l'AI conosce i modelli industriali meglio
-    di quanto l'OCR possa leggere dalla targa (il tipo raramente è scritto).
-    ocr_hint: tipo estratto dall'OCR, usato come contesto (può essere None).
+    Determina il tipo di macchina da brand+modello.
+    1. Lookup deterministico su _BRAND_TYPE_MAP (istantaneo, 100% affidabile per brand noti)
+    2. Se brand sconosciuto → AI con prompt mirato
+    ocr_hint: tipo estratto dall'OCR, usato solo come contesto per l'AI.
     """
-    hint_line = f"L'OCR ha letto dalla targa il tipo: '{ocr_hint}' — verifica se è corretto o correggilo.\n" if ocr_hint else ""
+    # Step 1: lookup deterministico — nessuna chiamata AI
+    lookup = _lookup_brand_type(brand, model)
+    if lookup:
+        return lookup
+
+    # Step 2: brand sconosciuto — chiedi all'AI con istruzioni precise
+    hint_line = f"Nota: l'OCR ha letto dalla targa '{ocr_hint}' come tipo — verifica se è corretto.\n" if ocr_hint else ""
     prompt = (
         f"Rispondi con UNA SOLA RIGA di testo, senza spiegazioni.\n"
-        f"Qual è il tipo di macchinario industriale '{brand} {model}'?\n"
+        f"Qual è il tipo esatto di macchinario industriale '{brand} {model}'?\n"
         f"{hint_line}"
-        f"Usa il brand come indizio forte per la categoria:\n"
-        f"- Polieri, Casadei, SCM, Griggio, Felder, Altendorf → macchine per la lavorazione del legno\n"
-        f"- Trumpf, Amada, Bystronic, Prima Industrie, Salvagnini → macchine per la lavorazione della lamiera\n"
-        f"- Manitou, JLG, Haulotte, Genie, Skyjack, Merlo → macchine di sollevamento\n"
-        f"- Caterpillar, Komatsu, Volvo CE, JCB, Liebherr → macchine movimento terra\n"
-        f"Esempi cantiere/sollevamento: 'escavatore idraulico', 'piattaforma a forbice', "
-        f"'carrello elevatore', 'carrello elevatore telescopico', 'gru mobile', "
-        f"'sollevatore telescopico', 'compressore', 'pala caricatrice frontale', "
-        f"'dumper', 'rullo compattatore', 'finitrice', 'pompa calcestruzzo', 'betoniera'.\n"
-        f"Esempi macchine utensili: 'sega circolare', 'sega a nastro', 'sega a disco', "
-        f"'pialla', 'fresatrice CNC', 'tornio', 'pressa piegatrice', 'punzonatrice', "
-        f"'laser taglio', 'saldatrice', 'cesoie', 'troncatrice'.\n"
-        f"Usa il termine italiano standard INAIL se esiste.\n"
-        f"Se non lo conosci con certezza scrivi solo: null"
+        f"REGOLE:\n"
+        f"- Usa SOLO la tua conoscenza certa del brand e del modello specifico\n"
+        f"- NON indovinare: se non sei sicuro al 100%, scrivi null\n"
+        f"- NON confondere accessori/attrezzature (benne, martelli, forche) con macchine autonome\n"
+        f"- Scrivi in italiano, termine INAIL se esiste\n"
+        f"Esempi validi: 'escavatore idraulico', 'pala caricatrice', 'carrello elevatore', "
+        f"'sollevatore telescopico', 'piattaforma a forbice', 'piattaforma aerea a braccio', "
+        f"'gru mobile', 'gru a torre', 'rullo compattatore', 'compressore', 'generatore', "
+        f"'pompa calcestruzzo', 'finitrice', 'dumper', 'betoniera', 'terna', 'bulldozer', "
+        f"'sega circolare', 'sega a nastro', 'pialla', 'fresatrice CNC', 'tornio', "
+        f"'pressa piegatrice', 'punzonatrice', 'laser taglio', 'martello demolitore idraulico', "
+        f"'benna a polipo', 'attrezzatura idraulica per escavatore'.\n"
+        f"Se non sei sicuro: null"
     )
     try:
         if provider == "anthropic":
@@ -156,7 +365,7 @@ async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: O
             client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
             resp = await client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=30,
+                max_tokens=50,
                 temperature=0,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -169,7 +378,7 @@ async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: O
                 model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    max_output_tokens=30,
+                    max_output_tokens=50,
                     temperature=0.0,
                     thinking_config=types.ThinkingConfig(thinking_budget=0),
                 ),
