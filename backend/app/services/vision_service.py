@@ -226,6 +226,22 @@ _BRAND_TYPE_MAP: dict[str, str] = {
     "mitsubishi":   "carrello elevatore",
     "clark":        "carrello elevatore",
     "om":           "carrello elevatore",       # OM Carrelli (brand italiano)
+    "konecranes":   "carrello elevatore",       # SMV = reach stacker / heavy forklift
+    "kalmar":       "carrello elevatore",       # reach stacker portuali
+    "cvs ferrari":  "carrello elevatore",       # reach stacker italiani
+    "cvs":          "carrello elevatore",
+    "svetruck":     "carrello elevatore",       # carrelli pesanti svedesi
+    "terberg":      "carrello elevatore",       # terminal tractors / heavy movers
+    "combilift":    "carrello elevatore",       # carrelli multidirezionali
+    "bendi":        "carrello elevatore",
+    "aisle-master": "carrello elevatore",
+    "doosan":       "carrello elevatore",       # override: Doosan produce anche carrelli (SMV)
+    "hangcha":      "carrello elevatore",
+    "heli":         "carrello elevatore",
+    "ep equipment": "carrello elevatore",
+    "unicarriers":  "carrello elevatore",
+    "nichiyu":      "carrello elevatore",
+    "rocla":        "carrello elevatore",
     # ── Pompe / calcestruzzo ──────────────────────────────────────────────────
     "schwing":      "pompa calcestruzzo",
     "putzmeister":  "pompa calcestruzzo",
@@ -294,10 +310,32 @@ _MODEL_PREFIX_OVERRIDES: list[tuple[str, str, str]] = [
     ("liebherr", "ec", "gru a torre"),
     ("liebherr", "l",  "pala caricatrice"),
     ("liebherr", "r",  "escavatore"),
-    ("rozzi", "rr",    "benna a polipo"),
-    ("rozzi", "rb",    "benna a mordacchia"),
-    ("rozzi", "rc",    "cesoia demolitrice"),
-    ("rozzi", "rm",    "martello demolitore"),
+    ("rozzi", "rr",       "benna a polipo"),
+    ("rozzi", "rb",       "benna a mordacchia"),
+    ("rozzi", "rc",       "cesoia demolitrice"),
+    ("rozzi", "rm",       "martello demolitore"),
+    # Konecranes: SMV = reach stacker (carrello elevatore pesante da porto/cantiere)
+    ("konecranes", "smv", "reach stacker"),
+    ("konecranes", "eco", "carrello elevatore"),
+    ("konecranes", "smc", "carrello elevatore"),
+    # Kalmar: reach stacker / straddle carrier
+    ("kalmar", "drf",     "reach stacker"),
+    ("kalmar", "dck",     "reach stacker"),
+    ("kalmar", "dcf",     "carrello elevatore"),
+    # Doosan (carrelli): serie B/G/D = carrelli elevatori, non escavatori
+    ("doosan", "b",       "carrello elevatore"),
+    ("doosan", "g",       "carrello elevatore"),
+    ("doosan", "d",       "carrello elevatore"),
+    # Doosan (escavatori): serie DX / DL
+    ("doosan", "dx",      "escavatore"),
+    ("doosan", "dl",      "pala caricatrice"),
+    # Case: serie CX = escavatori, WX = escavatori gomm., 580/590 = terna
+    ("case", "cx",        "escavatore"),
+    ("case", "wx",        "escavatore"),
+    ("case", "580",       "terna"),
+    ("case", "590",       "terna"),
+    ("case", "621",       "pala caricatrice"),
+    ("case", "721",       "pala caricatrice"),
 ]
 
 
