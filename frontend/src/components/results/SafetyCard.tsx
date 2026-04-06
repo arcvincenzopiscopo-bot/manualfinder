@@ -26,19 +26,29 @@ const SOURCE_BADGE_COLORS: Record<string, { bg: string; color: string }> = {
 function SourceBadge({ label, size = 10 }: { label: string; size?: number }) {
   // "Produttore (Brand)" → usa il colore blu default
   const style = SOURCE_BADGE_COLORS[label] ?? { bg: '#e0f2fe', color: '#0369a1' }
+  // Tronca etichette lunghe (es. "Manuale categoria simile (carrello elevatore)")
+  const MAX = 32
+  const display = label.length > MAX ? label.slice(0, MAX) + '…' : label
   return (
-    <span style={{
-      padding: '1px 6px',
-      borderRadius: 8,
-      background: style.bg,
-      color: style.color,
-      fontSize: size,
-      fontWeight: 700,
-      letterSpacing: '0.02em',
-      whiteSpace: 'nowrap',
-      flexShrink: 0,
-    }}>
-      {label}
+    <span
+      title={label}
+      style={{
+        padding: '1px 6px',
+        borderRadius: 8,
+        background: style.bg,
+        color: style.color,
+        fontSize: size,
+        fontWeight: 700,
+        letterSpacing: '0.02em',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+        maxWidth: 160,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        display: 'inline-block',
+      }}
+    >
+      {display}
     </span>
   )
 }

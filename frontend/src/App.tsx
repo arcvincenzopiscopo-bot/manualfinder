@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { usePipeline } from './hooks/usePipeline'
 import { useOfflineCache } from './hooks/useOfflineCache'
-import { ocrPlate } from './services/api'
+import { ocrPlate, checkHealth } from './services/api'
 import { CameraCapture } from './components/camera/CameraCapture'
 import { ImagePreview } from './components/camera/ImagePreview'
 import { OcrConfirmForm } from './components/camera/OcrConfirmForm'
@@ -13,9 +13,41 @@ import type { PlateOCRResult } from './types'
 
 type AppState = 'idle' | 'preview' | 'ocr_loading' | 'confirming' | 'running' | 'done' | 'error'
 
+/** Attende che il backend risponda all'health check (max 60 tentativi × 2s = 2 minuti). */
+function useBackendReady() {
+  const [ready, setReady] = useState<boolean | null>(null) // null = checking
+  const attempts = useRef(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const MAX = 60
+
+    async function poll() {
+      const ok = await checkHealth()
+      if (cancelled) return
+      if (ok) {
+        setReady(true)
+        return
+      }
+      attempts.current += 1
+      if (attempts.current >= MAX) {
+        setReady(false) // timeout — lascia comunque procedere
+        return
+      }
+      setTimeout(poll, 2000)
+    }
+
+    poll()
+    return () => { cancelled = true }
+  }, [])
+
+  return ready
+}
+
 export default function App() {
   const { state: pipeline, run, reset } = usePipeline()
   const { cached, isOnline, save } = useOfflineCache()
+  const backendReady = useBackendReady()
 
   const [appState, setAppState] = useState<AppState>('idle')
   const [imageBase64, setImageBase64] = useState<string | null>(null)
@@ -119,11 +151,28 @@ export default function App() {
         )}
       </header>
 
+      {/* Banner backend in avvio (Render cold start) */}
+      {backendReady === null && (
+        <div style={{
+          background: '#fffbeb',
+          borderBottom: '1px solid #fde68a',
+          padding: '10px 16px',
+          fontSize: 13,
+          color: '#92400e',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}>
+          <span style={{ fontSize: 16 }}>⏳</span>
+          <span>Backend in avvio, attendi qualche secondo prima di scattare la foto…</span>
+        </div>
+      )}
+
       <main>
         {/* IDLE */}
         {appState === 'idle' && (
           <>
-            <CameraCapture onImageReady={handleImageReady} />
+            <CameraCapture onImageReady={handleImageReady} disabled={backendReady === null} />
             {!isOnline && cached && (
               <div style={{ padding: '0 16px 16px' }}>
                 <p style={{ fontSize: 13, color: '#64748b', fontWeight: 600 }}>ULTIMA ANALISI SALVATA</p>

@@ -3,9 +3,10 @@ import { useImagePreprocess } from '../../hooks/useImagePreprocess'
 
 interface Props {
   onImageReady: (base64: string, previewUrl: string) => void
+  disabled?: boolean
 }
 
-export function CameraCapture({ onImageReady }: Props) {
+export function CameraCapture({ onImageReady, disabled = false }: Props) {
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const galleryInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
@@ -48,7 +49,7 @@ export function CameraCapture({ onImageReady }: Props) {
         {/* Pulsante fotocamera — apre direttamente la camera posteriore */}
         <button
           onClick={() => cameraInputRef.current?.click()}
-          disabled={loading}
+          disabled={loading || disabled}
           style={{
             flex: 1,
             maxWidth: 180,
@@ -59,12 +60,13 @@ export function CameraCapture({ onImageReady }: Props) {
             border: '2px solid #93c5fd',
             borderRadius: 16,
             padding: '20px 12px',
-            cursor: loading ? 'not-allowed' : 'pointer',
-            background: '#eff6ff',
-            color: '#1e40af',
+            cursor: (loading || disabled) ? 'not-allowed' : 'pointer',
+            background: disabled ? '#f1f5f9' : '#eff6ff',
+            color: disabled ? '#94a3b8' : '#1e40af',
             fontWeight: 600,
             fontSize: 15,
             transition: 'background 0.2s',
+            opacity: disabled ? 0.6 : 1,
           }}
         >
           <span style={{ fontSize: 32 }}>📷</span>
@@ -74,7 +76,7 @@ export function CameraCapture({ onImageReady }: Props) {
         {/* Pulsante raccolta — apre la galleria foto senza capture */}
         <button
           onClick={() => galleryInputRef.current?.click()}
-          disabled={loading}
+          disabled={loading || disabled}
           style={{
             flex: 1,
             maxWidth: 180,
@@ -85,12 +87,13 @@ export function CameraCapture({ onImageReady }: Props) {
             border: '2px solid #a5b4fc',
             borderRadius: 16,
             padding: '20px 12px',
-            cursor: loading ? 'not-allowed' : 'pointer',
-            background: '#eef2ff',
-            color: '#3730a3',
+            cursor: (loading || disabled) ? 'not-allowed' : 'pointer',
+            background: disabled ? '#f1f5f9' : '#eef2ff',
+            color: disabled ? '#94a3b8' : '#3730a3',
             fontWeight: 600,
             fontSize: 15,
             transition: 'background 0.2s',
+            opacity: disabled ? 0.6 : 1,
           }}
         >
           <span style={{ fontSize: 32 }}>🖼️</span>

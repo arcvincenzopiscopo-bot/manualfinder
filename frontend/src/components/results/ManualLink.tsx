@@ -12,7 +12,6 @@ interface Props {
   machineType?: string
 }
 
-/** Converte l'URL interno del backend in un link apribile nel browser. */
 function buildPublicUrl(url: string): string {
   if (url.startsWith('/manuals/local/')) {
     const filename = url.replace('/manuals/local/', '')
@@ -64,6 +63,7 @@ function SaveManualForm({
   onSaved: () => void
   onCancel: () => void
 }) {
+  const [isGeneric, setIsGeneric] = useState(false)
   const [brand, setBrand] = useState(defaultBrand)
   const [model, setModel] = useState(defaultModel)
   const [machineType, setMachineType] = useState(defaultMachineType)
@@ -74,7 +74,7 @@ function SaveManualForm({
   const [error, setError] = useState<string | null>(null)
 
   const handleSave = async () => {
-    if (!brand.trim() || !model.trim() || !machineType.trim()) return
+    if (!machineType.trim()) return
     setSaving(true)
     setError(null)
     try {
@@ -82,14 +82,17 @@ function SaveManualForm({
         search_brand: searchBrand,
         search_model: searchModel,
         search_machine_type: searchMachineType,
-        manual_brand: brand.trim(),
-        manual_model: model.trim(),
+        manual_brand: isGeneric ? 'GENERICO' : brand.trim(),
+        manual_model: isGeneric ? 'CATEGORIA' : model.trim(),
         manual_machine_type: machineType.trim(),
         manual_year: year.trim() || undefined,
         manual_language: language,
         url: defaultUrl,
-        is_pdf: defaultUrl.toLowerCase().includes('.pdf'),
-        notes: notes.trim() || undefined,
+        is_pdf: defaultUrl.toLowerCase().includes('.pdf') || defaultUrl.includes('/local/'),
+        notes: [
+          isGeneric ? 'Manuale generico di categoria — non riferito a marca/modello specifici' : '',
+          notes.trim(),
+        ].filter(Boolean).join(' | ') || undefined,
       })
       onSaved()
     } catch (e: unknown) {
@@ -117,6 +120,7 @@ function SaveManualForm({
     marginBottom: 4,
     textTransform: 'uppercase',
   }
+  const canSave = machineType.trim().length > 0 && (isGeneric || (brand.trim().length > 0 && model.trim().length > 0))
 
   return (
     <div style={{
@@ -130,20 +134,44 @@ function SaveManualForm({
         💾 Salva manuale nel database
       </p>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Marca manuale</label>
-          <input style={inputStyle} value={brand} onChange={e => setBrand(e.target.value)} placeholder="es. JCB" />
+      {/* Toggle generico / specifico */}
+      <label style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 12,
+        cursor: 'pointer',
+        fontSize: 13,
+        color: '#475569',
+      }}>
+        <input
+          type="checkbox"
+          checked={isGeneric}
+          onChange={e => setIsGeneric(e.target.checked)}
+          style={{ width: 16, height: 16, accentColor: '#1e40af' }}
+        />
+        <span>
+          <strong>Manuale generico di categoria</strong>
+          <span style={{ color: '#94a3b8', marginLeft: 4 }}>(es. manuale INAIL di terzi, guida di settore)</span>
+        </span>
+      </label>
+
+      {!isGeneric && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Marca manuale</label>
+            <input style={inputStyle} value={brand} onChange={e => setBrand(e.target.value)} placeholder="es. JCB" />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Modello manuale</label>
+            <input style={inputStyle} value={model} onChange={e => setModel(e.target.value)} placeholder="es. 3CX" />
+          </div>
         </div>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle}>Modello manuale</label>
-          <input style={inputStyle} value={model} onChange={e => setModel(e.target.value)} placeholder="es. 3CX" />
-        </div>
-      </div>
+      )}
 
       <div style={{ marginBottom: 8 }}>
-        <label style={labelStyle}>Tipo di macchina</label>
-        <input style={inputStyle} value={machineType} onChange={e => setMachineType(e.target.value)} placeholder="es. escavatore idraulico" />
+        <label style={labelStyle}>Tipo di macchina {isGeneric && <span style={{ color: '#dc2626' }}>*</span>}</label>
+        <input style={inputStyle} value={machineType} onChange={e => setMachineType(e.target.value)} placeholder="es. carrello elevatore" />
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
@@ -175,17 +203,17 @@ function SaveManualForm({
       <div style={{ display: 'flex', gap: 8 }}>
         <button
           onClick={handleSave}
-          disabled={saving || !brand.trim() || !model.trim() || !machineType.trim()}
+          disabled={saving || !canSave}
           style={{
             flex: 1,
             padding: '9px',
-            background: saving ? '#94a3b8' : '#1e40af',
+            background: (saving || !canSave) ? '#94a3b8' : '#1e40af',
             color: '#fff',
             border: 'none',
             borderRadius: 6,
             fontWeight: 700,
             fontSize: 13,
-            cursor: saving ? 'not-allowed' : 'pointer',
+            cursor: (saving || !canSave) ? 'not-allowed' : 'pointer',
           }}
         >
           {saving ? 'Salvataggio...' : 'Salva'}
@@ -215,8 +243,11 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
   const [saved, setSaved] = useState(false)
 
   const isFallback = tipo === 'fallback_ai'
+  const isInailOnly = tipo === 'inail'   // solo scheda INAIL locale — non ha senso salvare
   const isDual = tipo === 'inail+produttore'
-  const canSave = !isFallback && url && url.length > 0
+
+  // Il salvataggio ha senso solo quando c'è un manuale produttore (non INAIL locale)
+  const canSave = !isFallback && !isInailOnly && url && url.length > 0
 
   const manualsLibUrl = brand && model
     ? `https://www.manualslib.com/search/?q=${encodeURIComponent(brand + ' ' + model)}`
@@ -253,67 +284,69 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
           {!isFallback && url && (
             <PdfLink url={url} label={isDual ? 'Manuale produttore' : 'Apri PDF'} color="#1e40af" />
           )}
-          {canSave && !saved && (
-            <button
-              onClick={() => setShowForm(f => !f)}
-              style={{
-                padding: '7px 12px',
-                background: showForm ? '#e2e8f0' : '#f1f5f9',
-                color: '#475569',
-                border: '1px solid #cbd5e1',
-                borderRadius: 6,
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              💾 Salva manuale
-            </button>
-          )}
-          {saved && (
-            <span style={{ fontSize: 12, color: '#16a34a', fontWeight: 700 }}>✓ Salvato</span>
-          )}
           {isFallback && manualsLibUrl && (
-            <a
-              href={manualsLibUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                padding: '7px 12px',
-                background: '#92400e',
-                color: '#fff',
-                borderRadius: 6,
-                textDecoration: 'none',
-                fontSize: 12,
-                fontWeight: 600,
-                whiteSpace: 'nowrap',
-              }}
-            >
+            <a href={manualsLibUrl} target="_blank" rel="noopener noreferrer" style={{
+              padding: '7px 12px', background: '#92400e', color: '#fff',
+              borderRadius: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+            }}>
               Cerca su ManualsLib
             </a>
           )}
           {isFallback && safeManualUrl && (
-            <a
-              href={safeManualUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                padding: '7px 12px',
-                background: '#78350f',
-                color: '#fff',
-                borderRadius: 6,
-                textDecoration: 'none',
-                fontSize: 12,
-                fontWeight: 600,
-                whiteSpace: 'nowrap',
-              }}
-            >
+            <a href={safeManualUrl} target="_blank" rel="noopener noreferrer" style={{
+              padding: '7px 12px', background: '#78350f', color: '#fff',
+              borderRadius: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+            }}>
               Cerca su SafeManuals
             </a>
           )}
         </div>
       </div>
+
+      {/* Banner invito al salvataggio — visibile quando c'è un manuale produttore */}
+      {canSave && !saved && (
+        <div style={{
+          marginTop: 10,
+          padding: '10px 12px',
+          background: '#eff6ff',
+          border: '1px solid #bfdbfe',
+          borderRadius: 6,
+          fontSize: 12,
+          color: '#1e40af',
+        }}>
+          <p style={{ margin: '0 0 6px', fontWeight: 700 }}>
+            📚 Hai trovato un manuale di qualità?
+          </p>
+          <p style={{ margin: '0 0 8px', lineHeight: 1.5, color: '#1e3a8a' }}>
+            Salvarlo nel database aiuta te e i colleghi nelle prossime ispezioni.
+            Puoi salvarlo come manuale specifico di questo modello oppure come
+            riferimento generico per tutta la categoria di macchine.
+          </p>
+          {!showForm && (
+            <button
+              onClick={() => setShowForm(true)}
+              style={{
+                padding: '7px 14px',
+                background: '#1e40af',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              💾 Salva nel database
+            </button>
+          )}
+        </div>
+      )}
+
+      {saved && (
+        <p style={{ margin: '8px 0 0', fontSize: 12, color: '#16a34a', fontWeight: 700 }}>
+          ✓ Manuale salvato nel database
+        </p>
+      )}
 
       {showForm && url && (
         <SaveManualForm
