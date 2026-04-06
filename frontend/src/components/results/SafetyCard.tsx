@@ -21,11 +21,17 @@ interface SectionProps {
 const SOURCE_BADGE_COLORS: Record<string, { bg: string; color: string }> = {
   'INAIL': { bg: '#dcfce7', color: '#166534' },
   'AI':    { bg: '#fef9c3', color: '#854d0e' },
+  'DB':    { bg: '#f3e8ff', color: '#6b21a8' },  // viola — manuali verificati da ispettori
+}
+
+function getSourceBadgeStyle(label: string) {
+  if (label in SOURCE_BADGE_COLORS) return SOURCE_BADGE_COLORS[label]
+  if (label.startsWith('Manuale DB')) return SOURCE_BADGE_COLORS['DB']
+  return { bg: '#e0f2fe', color: '#0369a1' }
 }
 
 function SourceBadge({ label, size = 10 }: { label: string; size?: number }) {
-  // "Produttore (Brand)" → usa il colore blu default
-  const style = SOURCE_BADGE_COLORS[label] ?? { bg: '#e0f2fe', color: '#0369a1' }
+  const style = getSourceBadgeStyle(label)
   // Tronca etichette lunghe (es. "Manuale categoria simile (carrello elevatore)")
   const MAX = 32
   const display = label.length > MAX ? label.slice(0, MAX) + '…' : label

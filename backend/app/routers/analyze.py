@@ -389,18 +389,35 @@ async def _pipeline(request: FullAnalysisRequest):
 
         # Classifica il PDF produttore selezionato: exact | category | unrelated
         if producer_bytes:
-            producer_match_type = pdf_service.classify_pdf_match(
-                producer_bytes, brand, model, machine_type or ""
+            # Riconosci risultati dal DB Supabase (titolo inizia con "[DB]")
+            _producer_from_db = producer_url and any(
+                c.url == producer_url and c.title.startswith("[DB]")
+                for c in ordered_candidates
             )
-            if producer_match_type == "category":
-                producer_source_label = f"Manuale categoria simile ({machine_type or 'macchina'})"
-            elif producer_match_type == "unrelated":
-                producer_bytes = None
-                producer_source_label = "AI"
-                _brochure_note = (
-                    f"PDF scartato: non pertinente per {machine_type or brand} "
-                    "(documento di categoria diversa). Procedo con analisi AI."
+            if _producer_from_db:
+                # Manuali DB verificati da ispettori: skip classify, label dedicata
+                _is_db_generic = any(
+                    c.url == producer_url and "generico" in c.title.lower()
+                    for c in ordered_candidates
                 )
+                if _is_db_generic:
+                    producer_source_label = f"Manuale DB — categoria {machine_type or 'macchina'}"
+                else:
+                    producer_source_label = f"Manuale DB verificato ({brand} {model})"
+                producer_match_type = "exact"
+            else:
+                producer_match_type = pdf_service.classify_pdf_match(
+                    producer_bytes, brand, model, machine_type or ""
+                )
+                if producer_match_type == "category":
+                    producer_source_label = f"Manuale categoria simile ({machine_type or 'macchina'})"
+                elif producer_match_type == "unrelated":
+                    producer_bytes = None
+                    producer_source_label = "AI"
+                    _brochure_note = (
+                        f"PDF scartato: non pertinente per {machine_type or brand} "
+                        "(documento di categoria diversa). Procedo con analisi AI."
+                    )
 
         # Deduplica: se il PDF produttore è lo stesso documento dell'INAIL (mirror),
         # non ha senso analizzarlo due volte — meglio fallback AI per le raccomandazioni

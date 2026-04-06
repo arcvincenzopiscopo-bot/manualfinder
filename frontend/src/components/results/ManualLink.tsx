@@ -262,7 +262,11 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
     'inail+produttore': 'INAIL + Manuale produttore',
     fallback_ai:      'Conoscenza AI (nessun manuale ufficiale trovato)',
   }
-  const label = tipo ? (labelMap[tipo] ?? tipo) : 'Fonte sconosciuta'
+  const label = tipo
+    ? (labelMap[tipo] ?? (tipo.startsWith('inail+categoria') ? 'INAIL + Manuale di categoria (DB)' : tipo))
+    : 'Fonte sconosciuta'
+
+  const isDbSource = tipo?.includes('db') || label.toLowerCase().includes('db')
 
   return (
     <div style={{

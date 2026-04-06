@@ -870,7 +870,37 @@ async def search_manual(
         return [ManualSearchResult(**r) for r in cached]
 
     all_results: List[ManualSearchResult] = []
-    
+
+    # LIVELLO 0: Manuali salvati dagli ispettori su Supabase (alta affidabilità)
+    try:
+        from app.services import saved_manuals_service
+        db_rows = saved_manuals_service.find_for_search(brand, model, machine_type)
+        for row in db_rows:
+            match_type = row.get("_match_type", "generic")
+            is_generic = row.get("manual_brand", "").upper() == "GENERICO"
+            # Score: specifico = 95 (quasi come INAIL locale), generico = 75
+            score = 95 if match_type == "specific" else 75
+            label_brand = row.get("manual_brand", "")
+            label_model = row.get("manual_model", "")
+            label_year = f" ({row['manual_year']})" if row.get("manual_year") else ""
+            if is_generic:
+                title = f"[DB] Manuale generico — {row.get('manual_machine_type', '')} {label_year}".strip()
+            else:
+                title = f"[DB] {label_brand} {label_model}{label_year}"
+            if row.get("title"):
+                title = f"[DB] {row['title']}"
+            all_results.append(ManualSearchResult(
+                url=row["url"],
+                title=title,
+                source_type="manufacturer" if not is_generic else "web",
+                language=row.get("manual_language", "unknown"),
+                is_pdf=bool(row.get("is_pdf", True)),
+                relevance_score=score,
+                snippet=row.get("notes"),
+            ))
+    except Exception:
+        pass  # Non interrompere la ricerca se Supabase non è raggiungibile
+
     # LIVELLO 1: Cerca nel database locale PDF INAIL
     if machine_type:
         local_manual = local_manuals_service.find_local_manual(machine_type)
