@@ -20,7 +20,6 @@ export function RiskBadge({ text, variant = 'risk' }: Props) {
       padding: '10px 12px',
       background: style.bg,
       borderRadius: 8,
-      marginBottom: 8,
     }}>
       <span style={{
         width: 8,

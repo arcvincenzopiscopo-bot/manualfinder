@@ -93,12 +93,14 @@ function Section({ title, items, variant, icon }: SectionProps) {
             const testo = typeof item === 'string' ? item : (item.testo ?? '')
             const fonte = typeof item === 'string' ? null : (item.fonte ?? null)
             return (
-              <div key={i} style={{ position: 'relative' }}>
-                <RiskBadge text={testo} variant={variant} />
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <RiskBadge text={testo} variant={variant} />
+                </div>
                 {fonte && (
-                  <span style={{ position: 'absolute', top: 8, right: 8 }}>
+                  <div style={{ paddingTop: 10, flexShrink: 0 }}>
                     <SourceBadge label={fonte} size={9} />
-                  </span>
+                  </div>
                 )}
               </div>
             )
