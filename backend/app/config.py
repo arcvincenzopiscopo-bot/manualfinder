@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # === Database ===
     database_url: Optional[str] = None  # postgresql://postgres.[PWD]@aws-0-eu-west-1.pooler.supabase.com:6543/postgres
 
+    # === Upload manuali ===
+    upload_dir: str = "manuali_locali"  # relativo a backend/ — cartella dove vengono salvati i PDF caricati dagli ispettori
+
     # === Server ===
     # In produzione su Render, sovrascrivere con l'URL reale del frontend via variabile ALLOWED_ORIGINS
     allowed_origins: str = "http://localhost:5173,https://manualfinder.vercel.app,https://manualfinder-frontend.onrender.com"

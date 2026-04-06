@@ -25,22 +25,28 @@ async def download_pdf(url: str) -> Tuple[Optional[bytes], str]:
 
     max_bytes = settings.max_pdf_size_mb * 1024 * 1024
 
-    # Gestisci URL locali (file system)
-    if url.startswith("/manuals/local/"):
+    # Gestisci URL locali (file system) — sia INAIL che manuali caricati dagli ispettori
+    if url.startswith("/manuals/local/") or url.startswith("/manuals/uploaded/"):
         try:
-            from app.services import local_manuals_service
-            filename = url.split("/")[-1]
-            filepath = local_manuals_service.PDF_MANUALS_DIR / filename
+            if url.startswith("/manuals/local/"):
+                from app.services import local_manuals_service
+                filename = url.split("/")[-1]
+                filepath = local_manuals_service.PDF_MANUALS_DIR / filename
+            else:
+                from app.services import upload_service
+                filename = url.split("/")[-1]
+                filepath = upload_service.UPLOAD_DIR / filename
+
             if not filepath.exists():
                 return None, f"File locale non trovato: {filename}"
-            
+
             pdf_bytes = filepath.read_bytes()
             if len(pdf_bytes) > max_bytes:
                 return None, f"PDF troppo grande (> {settings.max_pdf_size_mb}MB)"
-            
+
             if not pdf_bytes.startswith(b"%PDF"):
                 return None, "Il file locale non è un PDF valido"
-            
+
             return pdf_bytes, ""
         except Exception as e:
             return None, f"Errore lettura file locale: {str(e)}"
@@ -470,6 +476,25 @@ def are_pdfs_same_content(pdf1: bytes, pdf2: bytes, sample_chars: int = 1500) ->
         return similarity >= 0.90
     except Exception:
         return False
+
+
+def is_native_pdf(pdf_bytes: bytes) -> tuple[bool, float]:
+    """
+    Controlla se il PDF contiene testo nativo (non è solo immagini scansionate).
+    Ritorna (is_native: bool, chars_per_page: float).
+    Soglia: >= 100 caratteri per pagina in media = PDF nativo.
+    PDF con meno testo sono probabilmente scansioni e non analizzabili correttamente dall'AI.
+    """
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_chars = sum(len(page.get_text()) for page in doc)
+        pages = max(len(doc), 1)
+        doc.close()
+        cpp = total_chars / pages
+        return cpp >= 100, round(cpp, 1)
+    except Exception:
+        return False, 0.0
 
 
 def count_pdf_pages(pdf_bytes: bytes) -> int:

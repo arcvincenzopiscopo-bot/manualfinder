@@ -105,6 +105,45 @@ export interface SaveManualPayload {
   notes?: string
 }
 
+export interface UploadManualMeta {
+  brand: string
+  model: string
+  machine_type: string
+  manual_year?: string
+  manual_language?: string
+  is_generic?: boolean
+  notes?: string
+  force?: boolean
+}
+
+export interface UploadManualResult {
+  status: 'ok' | 'mismatch'
+  filename?: string
+  url?: string
+  suggestions?: { brand: string; model: string; machine_type: string; reason: string }
+}
+
+export async function uploadManual(file: File, meta: UploadManualMeta): Promise<UploadManualResult> {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('brand', meta.brand)
+  fd.append('model', meta.model)
+  fd.append('machine_type', meta.machine_type)
+  if (meta.manual_year) fd.append('manual_year', meta.manual_year)
+  fd.append('manual_language', meta.manual_language ?? 'it')
+  fd.append('is_generic', String(meta.is_generic ?? false))
+  if (meta.notes) fd.append('notes', meta.notes)
+  fd.append('force', String(meta.force ?? false))
+
+  // NO 'Content-Type' header — browser lo imposta con il boundary multipart
+  const response = await fetch(`${BASE_URL}/manuals/upload`, { method: 'POST', body: fd })
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({ detail: response.statusText }))
+    throw new Error(data.detail ?? `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function saveManual(data: SaveManualPayload): Promise<void> {
   const response = await fetch(`${BASE_URL}/manuals/save`, {
     method: 'POST',

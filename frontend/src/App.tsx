@@ -9,6 +9,7 @@ import { PipelineProgress } from './components/pipeline/PipelineProgress'
 import { SafetyCard } from './components/results/SafetyCard'
 import { ErrorBanner } from './components/ui/ErrorBanner'
 import { OfflineBadge } from './components/ui/OfflineBadge'
+import { UploadManualModal } from './components/upload/UploadManualModal'
 import type { PlateOCRResult } from './types'
 
 type AppState = 'idle' | 'preview' | 'ocr_loading' | 'confirming' | 'running' | 'done' | 'error'
@@ -50,6 +51,7 @@ export default function App() {
   const backendReady = useBackendReady()
 
   const [appState, setAppState] = useState<AppState>('idle')
+  const [showUpload, setShowUpload] = useState(false)
   const [imageBase64, setImageBase64] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [ocrResult, setOcrResult] = useState<(PlateOCRResult & { brightness_warning?: string }) | null>(null)
@@ -143,12 +145,19 @@ export default function App() {
           <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1e293b' }}>ManualFinder</h1>
           <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>Sicurezza macchinari da cantiere</p>
         </div>
-        {/* Indicatore stato */}
-        {appState !== 'idle' && appState !== 'done' && (
-          <div style={{ marginLeft: 'auto' }}>
+        {/* Indicatore stato + Upload */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          {appState !== 'idle' && appState !== 'done' && (
             <StepIndicator state={appState} />
-          </div>
-        )}
+          )}
+          <button
+            onClick={() => setShowUpload(true)}
+            title="Carica manuale PDF"
+            style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', padding: '4px 6px', lineHeight: 1 }}
+          >
+            📤
+          </button>
+        </div>
       </header>
 
       {/* Banner backend in avvio (Render cold start) */}
@@ -167,6 +176,8 @@ export default function App() {
           <span>Backend in avvio, attendi qualche secondo prima di scattare la foto…</span>
         </div>
       )}
+
+      {showUpload && <UploadManualModal onClose={() => setShowUpload(false)} />}
 
       <main>
         {/* IDLE */}

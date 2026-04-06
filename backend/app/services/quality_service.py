@@ -2,30 +2,42 @@
 Quality Logger per ManualFinder.
 
 Valuta ogni scheda di sicurezza generata con regole deterministiche (zero costo AI)
-e accumula le criticità in un log in-memory scaricabile via GET /analyze/quality-log.
+e persiste le entry su Supabase (tabella quality_log).
+Fallback in-memory se DATABASE_URL non è configurata.
 
-Obiettivo: raccogliere dati reali di produzione per migliorare prompts e logica
-di ricerca in modo sistematico, invece di ottimizzare su singoli casi sintetici.
-
-Il log si azzera al restart del server (Render ephemeral filesystem).
-Consultalo periodicamente via: GET https://manualfinder.onrender.com/analyze/quality-log
+Consultalo via: GET https://manualfinder.onrender.com/analyze/quality-log
 """
 
 from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
+import json
 import logging
 
 logger = logging.getLogger(__name__)
 
-# ── Log in-memory ────────────────────────────────────────────────────────────
+# ── Fallback in-memory (se DB non disponibile) ───────────────────────────────
 _quality_log: list[dict] = []
-_MAX_LOG_ENTRIES = 500  # evita memory leak su long-running instances
+_MAX_LOG_ENTRIES = 500
+
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
+
+def _get_conn():
+    from app.config import settings
+    import psycopg2
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL non configurata")
+    return psycopg2.connect(settings.database_url)
+
+
+def _db_available() -> bool:
+    from app.config import settings
+    return bool(settings.database_url)
 
 
 # ── Lookup tables per regole normative ───────────────────────────────────────
 
-# Macchine per cui ci aspettiamo SEMPRE di trovare un manuale produttore reale
 _SHOULD_HAVE_MANUAL = {
     "escavatore", "escavatori", "gru mobile", "gru a torre", "gru su autocarro",
     "carrello elevatore", "muletto", "sollevatore telescopico", "telehandler",
@@ -35,7 +47,6 @@ _SHOULD_HAVE_MANUAL = {
     "pressa piegatrice", "piegatrice",
 }
 
-# Macchine NON coperte dall'Accordo Stato-Regioni 2012 — abilitazione deve essere null
 _NO_PATENTINO = {
     "compressore", "motocompressore", "gruppo elettrogeno", "generatore",
     "piastra vibrante", "costipatore",
@@ -49,36 +60,25 @@ _NO_PATENTINO = {
     "laser", "macchina taglio laser",
 }
 
-# Macchine soggette a verifiche Allegato VII D.Lgs. 81/08
-# Criteri: apparecchi di sollevamento materiali portata > 200 kg, sollevamento persone,
-# recipienti in pressione > 50L, impianti di messa a terra/parafulmine
 _SHOULD_HAVE_VERIFICHE = {
-    # Sollevamento materiali > 200 kg
     "carrello elevatore", "carrello elevatore telescopico", "carrello elevatore a contrappeso",
     "muletto", "sollevatore telescopico", "telehandler",
     "gru", "gru mobile", "gru a torre", "gru su autocarro", "camion gru", "gru su camion",
     "argano", "verricello", "paranco", "paranchi",
-    # Sollevamento persone
     "piattaforma aerea", "ple", "piattaforma elevabile", "piattaforma a forbice",
     "piattaforma a braccio", "ascensore di cantiere", "montacarichi", "elevatore a bandiera",
-    # Accessoria (sollevamento con attrezzatura specifica)
     "terna", "terne", "retroescavatore",
-    # Pressione
     "pompa calcestruzzo", "autobetonpompa",
 }
 
-# Macchine per cui verifiche_periodiche deve essere null
-# (non sollevamento, non pressione, movimento terra puro)
 _NO_VERIFICHE = {
     "piastra vibrante", "costipatore",
     "rullo compattatore", "rullo compressore",
     "bulldozer", "apripista",
     "compressore", "motocompressore",
     "saldatrice", "betoniera",
-    "escavatore", "escavatore idraulico",   # puro, senza funzione di sollevamento
+    "escavatore", "escavatore idraulico",
     "dumper", "finitrice", "rullo",
-    # Pala caricatrice: soggetta SOLO se usata per sollevamento > 200 kg con attrezzatura specifica.
-    # Non inserita qui perché il quality logger non può sapere l'utilizzo — lasciamo decidere all'AI.
 }
 
 
@@ -94,18 +94,11 @@ def evaluate(
     inail_url: Optional[str] = None,
     producer_url: Optional[str] = None,
 ) -> list[dict]:
-    """
-    Valuta la qualità della scheda con regole deterministiche.
-    Ritorna una lista di issue, ognuno con: type, severity, message.
-    Severità: "high" | "medium" | "low"
-    """
     issues: list[dict] = []
     mt = (machine_type or "").lower().strip()
 
     def _issue(type_: str, severity: str, message: str):
         issues.append({"type": type_, "severity": severity, "message": message})
-
-    # ── Contenuto ────────────────────────────────────────────────────────────
 
     n_rischi = len(getattr(safety_card, "rischi_principali", None) or [])
     n_checklist = len(getattr(safety_card, "checklist", None) or [])
@@ -115,16 +108,12 @@ def evaluate(
     if n_rischi == 0:
         _issue("empty_rischi", "high",
                "Nessun rischio estratto — il documento potrebbe essere un catalogo o non pertinente")
-
     if n_checklist == 0:
         _issue("empty_checklist", "medium",
                "Nessuna voce checklist — il documento non contiene istruzioni ispettive")
-
     if n_dispositivi == 0 and fonte_tipo != "fallback_ai":
         _issue("empty_dispositivi", "low",
                "Nessun dispositivo di sicurezza estratto dal documento")
-
-    # ── Fonte ─────────────────────────────────────────────────────────────────
 
     if fonte_tipo == "fallback_ai" and mt in _SHOULD_HAVE_MANUAL:
         _issue("expected_manual_not_found", "medium",
@@ -139,7 +128,6 @@ def evaluate(
         _issue("unrelated_producer_pdf", "high",
                "Il PDF produttore è stato classificato come 'unrelated' ma è stato usato lo stesso")
 
-    # Rileva URL sospetti nel producer (cataloghi, datasheet, spec sheet)
     suspicious_url_fragments = [
         "tooling", "catalog", "catalogue", "spare", "ricambi", "datasheet",
         "spec-sheet", "spec_sheet", "brochure", "listino",
@@ -154,12 +142,9 @@ def evaluate(
                        f"URL produttore contiene '{frag}' — potrebbe essere un catalogo, non un manuale d'uso: {producer_url[:80]}")
                 break
 
-    # ── Campi normativi ───────────────────────────────────────────────────────
-
     abilitazione = getattr(safety_card, "abilitazione_operatore", None) or ""
     verifiche = getattr(safety_card, "verifiche_periodiche", None)
 
-    # Abilitazione citata per macchine NON coperte dall'Accordo S-R 2012
     if mt in _NO_PATENTINO and abilitazione:
         ab_lower = abilitazione.lower()
         if "accordo stato" in ab_lower or "accordo s-r" in ab_lower or "patentino" in ab_lower:
@@ -167,19 +152,14 @@ def evaluate(
                    f"'{machine_type}' NON è coperta dall'Accordo S-R 2012 ma l'abilitazione la cita: "
                    f"{abilitazione[:120]}")
 
-    # Verifiche_periodiche NULL per macchine soggette ad Allegato VII
     if verifiche is None and mt in _SHOULD_HAVE_VERIFICHE:
         _issue("missing_verifiche_allegato7", "high",
                f"'{machine_type}' è soggetta a verifiche Allegato VII ma il campo è NULL")
 
-    # Verifiche_periodiche NON-NULL per macchine non soggette
     if verifiche is not None and mt in _NO_VERIFICHE:
         _issue("spurious_verifiche", "low",
                f"'{machine_type}' NON è soggetta ad Allegato VII ma verifiche_periodiche è valorizzato")
 
-    # ── Sanity checks semantici ───────────────────────────────────────────────
-
-    # Il primo rischio NON deve menzionare una macchina diversa nella stessa categoria
     rischi = getattr(safety_card, "rischi_principali", None) or []
     if rischi and mt:
         first_risk_text = ""
@@ -188,8 +168,6 @@ def evaluate(
             first_risk_text = (r0.get("testo") or "").lower()
         elif isinstance(r0, str):
             first_risk_text = r0.lower()
-
-        # Coppie: se la macchina è X, il primo rischio NON dovrebbe menzionare Y
         wrong_mentions = {
             "carrello elevatore": ["gru a torre", "ribaltamento della gru"],
             "muletto": ["gru a torre", "ribaltamento della gru"],
@@ -219,10 +197,6 @@ def log_analysis(
     inail_url: Optional[str] = None,
     producer_url: Optional[str] = None,
 ) -> None:
-    """
-    Valuta e logga la qualità dell'analisi. Non-blocking, non solleva eccezioni.
-    Da chiamare al termine di ogni pipeline SSE.
-    """
     try:
         issues = evaluate(
             brand=brand, model=model, machine_type=machine_type,
@@ -251,11 +225,12 @@ def log_analysis(
             "has_high": any(i["severity"] == "high" for i in issues),
         }
 
-        _quality_log.append(entry)
-
-        # Rotazione FIFO per evitare memory leak
-        if len(_quality_log) > _MAX_LOG_ENTRIES:
-            _quality_log.pop(0)
+        if _db_available():
+            _db_insert(entry)
+        else:
+            _quality_log.append(entry)
+            if len(_quality_log) > _MAX_LOG_ENTRIES:
+                _quality_log.pop(0)
 
         if issues:
             logger.info(
@@ -269,13 +244,43 @@ def log_analysis(
         logger.warning("quality_service.log_analysis failed (non-critical): %s", e)
 
 
+def _db_insert(entry: dict) -> None:
+    import psycopg2
+    import psycopg2.extras
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO quality_log (
+                    ts, macchina, machine_type, fonte_tipo,
+                    producer_url, inail_url, producer_match, producer_pages,
+                    n_rischi, n_checklist, has_abilitazione, has_verifiche,
+                    issues, n_issues, has_high
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s
+                )
+                """,
+                (
+                    entry["ts"], entry["macchina"], entry["machine_type"], entry["fonte_tipo"],
+                    entry["producer_url"], entry["inail_url"], entry["producer_match"], entry["producer_pages"],
+                    entry["n_rischi"], entry["n_checklist"], entry["has_abilitazione"], entry["has_verifiche"],
+                    json.dumps(entry["issues"]), entry["n_issues"], entry["has_high"],
+                ),
+            )
+            conn.commit()
+
+
 def get_log(only_with_issues: bool = False, min_severity: str = "low") -> list[dict]:
-    """Restituisce il log, opzionalmente filtrato."""
+    if _db_available():
+        return _db_get_log(only_with_issues=only_with_issues, min_severity=min_severity)
+    # fallback in-memory
     severity_order = {"low": 0, "medium": 1, "high": 2}
     min_sev = severity_order.get(min_severity, 0)
-
     result = []
-    for entry in reversed(_quality_log):  # più recenti prima
+    for entry in reversed(_quality_log):
         if only_with_issues and entry["n_issues"] == 0:
             continue
         if min_sev > 0:
@@ -289,11 +294,48 @@ def get_log(only_with_issues: bool = False, min_severity: str = "low") -> list[d
     return result
 
 
+def _db_get_log(only_with_issues: bool = False, min_severity: str = "low") -> list[dict]:
+    import psycopg2.extras
+    severity_order = {"low": 0, "medium": 1, "high": 2}
+    min_sev = severity_order.get(min_severity, 0)
+
+    conditions = []
+    if only_with_issues:
+        conditions.append("n_issues > 0")
+    if min_sev == 1:
+        # medium o high: almeno un issue medium/high nel JSONB
+        conditions.append(
+            "issues @> '[{\"severity\":\"medium\"}]'::jsonb OR issues @> '[{\"severity\":\"high\"}]'::jsonb"
+        )
+    elif min_sev == 2:
+        conditions.append("has_high = true")
+
+    where = f"WHERE {' AND '.join(f'({c})' for c in conditions)}" if conditions else ""
+    sql = f"SELECT * FROM quality_log {where} ORDER BY ts DESC LIMIT 500"
+
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+
+    result = []
+    for row in rows:
+        entry = dict(row)
+        entry["id"] = str(entry["id"])
+        entry["ts"] = entry["ts"].isoformat() if hasattr(entry["ts"], "isoformat") else entry["ts"]
+        # issues è già una lista da JSONB
+        if isinstance(entry["issues"], str):
+            entry["issues"] = json.loads(entry["issues"])
+        result.append(entry)
+    return result
+
+
 def get_summary() -> dict:
-    """Statistiche aggregate del log corrente."""
+    if _db_available():
+        return _db_get_summary()
+    # fallback in-memory
     if not _quality_log:
         return {"total": 0, "with_issues": 0, "issue_types": {}}
-
     total = len(_quality_log)
     with_issues = sum(1 for e in _quality_log if e["n_issues"] > 0)
     issue_counts: dict[str, int] = {}
@@ -301,49 +343,66 @@ def get_summary() -> dict:
         for issue in entry["issues"]:
             t = issue["type"]
             issue_counts[t] = issue_counts.get(t, 0) + 1
-
-    sorted_issues = dict(sorted(issue_counts.items(), key=lambda x: -x[1]))
     return {
         "total_analyses": total,
         "with_issues": with_issues,
         "issue_rate": round(with_issues / total, 2) if total else 0,
-        "issue_type_counts": sorted_issues,
+        "issue_type_counts": dict(sorted(issue_counts.items(), key=lambda x: -x[1])),
+    }
+
+
+def _db_get_summary() -> dict:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM quality_log")
+            total = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM quality_log WHERE n_issues > 0")
+            with_issues = cur.fetchone()[0]
+            cur.execute(
+                """
+                SELECT issue->>'type' AS itype, COUNT(*) AS cnt
+                FROM quality_log, jsonb_array_elements(issues) AS issue
+                GROUP BY itype
+                ORDER BY cnt DESC
+                """
+            )
+            issue_counts = {row[0]: row[1] for row in cur.fetchall()}
+
+    return {
+        "total_analyses": total,
+        "with_issues": with_issues,
+        "issue_rate": round(with_issues / total, 2) if total else 0,
+        "issue_type_counts": issue_counts,
     }
 
 
 async def generate_improvement_report() -> dict:
     """
     Analisi critica AI del log accumulato.
-    Legge tutti gli issue del log e produce suggerimenti concreti per migliorare
-    prompt, logica di ricerca e regole di scoring.
-
     Costo: ~3-5k token Gemini Flash (~$0.0003). Da chiamare manualmente via
-    GET /analyze/quality-log?report=true — non viene chiamata ad ogni analisi.
+    GET /analyze/quality-log?report=true
     """
-    if not _quality_log:
-        return {"error": "Log vuoto — esegui alcune analisi prima di generare il report."}
-
-    entries_with_issues = [e for e in _quality_log if e["n_issues"] > 0]
+    entries_with_issues = get_log(only_with_issues=True)
     if not entries_with_issues:
-        return {"message": "Nessun issue rilevato nelle analisi accumulate. Ottimo!", "summary": get_summary()}
+        summary = get_summary()
+        if summary.get("total_analyses", 0) == 0:
+            return {"error": "Log vuoto — esegui alcune analisi prima di generare il report."}
+        return {"message": "Nessun issue rilevato nelle analisi accumulate. Ottimo!", "summary": summary}
 
-    # Prepara il digest del log — compresso per risparmiare token
+    summary = get_summary()
     log_digest = []
-    for e in entries_with_issues[-50:]:  # max 50 entries più recenti con issue
+    for e in entries_with_issues[:50]:
         log_digest.append({
             "m": e["macchina"],
             "mt": e["machine_type"],
             "ft": e["fonte_tipo"],
             "pm": e["producer_match"],
             "pp": e["producer_pages"],
-            "pu": e["producer_url"][-60:] if e["producer_url"] else "",
+            "pu": e["producer_url"][-60:] if e.get("producer_url") else "",
             "nr": e["n_rischi"],
             "nc": e["n_checklist"],
             "issues": [{"t": i["type"], "s": i["severity"], "m": i["message"][:100]} for i in e["issues"]],
         })
-
-    import json
-    summary = get_summary()
 
     prompt = f"""Sei un ingegnere software che analizza i problemi di qualità di ManualFinder, un sistema che:
 1. Cerca manuali di sicurezza per macchinari industriali online (Google/Brave/Perplexity)
