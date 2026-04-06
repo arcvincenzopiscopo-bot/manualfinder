@@ -14,6 +14,55 @@ def _get_conn():
     return psycopg2.connect(settings.database_url)
 
 
+def check_url_saved(url: str) -> bool:
+    """Ritorna True se l'URL è già presente in saved_manuals."""
+    if not settings.database_url:
+        return False
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM saved_manuals WHERE url = %s LIMIT 1", (url,))
+                return cur.fetchone() is not None
+    except Exception:
+        return False
+
+
+def save_feedback(
+    url: str,
+    feedback_type: str,  # 'not_a_manual' | 'wrong_category' | 'useful_other_category'
+    brand: Optional[str] = None,
+    model: Optional[str] = None,
+    machine_type: Optional[str] = None,
+    useful_for_type: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> None:
+    """
+    Salva il feedback dell'ispettore su un documento trovato.
+    feedback_type:
+      'not_a_manual'         — non è un manuale d'uso/manutenzione (es. brochure, catalogo)
+      'wrong_category'       — è un manuale d'uso ma per una categoria diversa dalla macchina cercata
+      'useful_other_category'— manuale utile ma per un tipo macchina diverso (specificato in useful_for_type)
+    Non solleva eccezioni.
+    """
+    if not settings.database_url:
+        return
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO manual_feedback
+                        (url, brand, model, machine_type, feedback_type, useful_for_type, notes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (url, brand, model, machine_type, feedback_type, useful_for_type, notes),
+                )
+                conn.commit()
+    except Exception:
+        pass
+
+
 def save_manual(data: dict) -> dict:
     """Inserisce un manuale salvato. Restituisce la riga inserita."""
     cols = list(data.keys())

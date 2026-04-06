@@ -124,12 +124,15 @@ def evaluate(
                f"Manuale produttore di categoria simile e corto ({producer_pages} pag.) "
                "— rischio di contenuto non specifico per il modello")
 
-    if producer_match_type == "unrelated":
+    # "unrelated" è un falso positivo se la fonte usata è fallback_ai o inail:
+    # significa che il PDF è stato correttamente scartato dalla pipeline.
+    # L'issue è reale solo se il PDF unrelated è stato effettivamente analizzato.
+    if producer_match_type == "unrelated" and fonte_tipo not in ("fallback_ai", "inail"):
         _issue("unrelated_producer_pdf", "high",
                "Il PDF produttore è stato classificato come 'unrelated' ma è stato usato lo stesso")
 
     suspicious_url_fragments = [
-        "tooling", "catalog", "catalogue", "spare", "ricambi", "datasheet",
+        "tooling", "catalog", "catalogue", "catalogo", "spare", "ricambi", "datasheet",
         "spec-sheet", "spec_sheet", "brochure", "listino",
         "environmental", "declaration", "/epd/", "sustainability", "emissions",
         "press-release", "/news/", "flyer", "promo",

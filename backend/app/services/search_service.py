@@ -91,6 +91,17 @@ INAIL_MACHINE_TYPES = {
     "autocarro con gru": "camion gru",
     "sollevatore": "sollevatore telescopico",
     "telehandler": "sollevatore telescopico",
+    # Minipalas / skid steer
+    "minipala": "minipala",
+    "minipala gommata": "minipala",
+    "minipala cingolata": "minipala",
+    "skid steer": "minipala",
+    # Accessori — non macchine INAIL, ma accettiamo ricerche specifiche
+    "benna": "benna",
+    "benna a polipo": "benna",
+    "benna carico-pietrisco": "benna",
+    "testa saldante": "saldatrice",
+    "attrezzatura speciale": None,   # nessuna scheda INAIL specifica
 }
 
 
@@ -2237,11 +2248,21 @@ async def _search_manualsplus(brand: str, model: str) -> List[ManualSearchResult
 
 # Parole che indicano un PDF NON pertinente — ricambi, cataloghi prezzo, schemi elettrici, brochure
 _PDF_EXCLUDE_TERMS = frozenset([
-    "spare", "parts", "ricambi", "catalog", "listino", "price", "pricelist",
+    "spare", "parts", "ricambi", "catalog", "catalogo", "listino", "price", "pricelist",
     "schema", "wiring", "electrical", "circuit", "exploded",
     # Documenti ambientali / commerciali — non sono manuali d'uso
-    "brochure", "environmental", "epd", "declaration", "sustainability",
-    "product-declaration", "enviro", "emissions", "carbon",
+    "brochure", "depliant", "flyer", "leaflet", "environmental", "epd", "declaration",
+    "sustainability", "product-declaration", "enviro", "emissions", "carbon",
+    # Linee di prodotto / portfolio (non manuali specifici)
+    "product-line", "product_line", "productline", "lineup", "line-up",
+    "tv-product", "range-overview", "portfolio",
+])
+
+# Domini che producono quasi esclusivamente cataloghi / listini (mai manuali d'uso)
+_EXCLUDE_DOMAINS = frozenset([
+    "consumindu.com",   # listini e schemi ricambi — mai manuali d'uso
+    "machinerytrader.com",
+    "mascus.com",
 ])
 
 # Parole che indicano un PDF pertinente — manuale d'uso

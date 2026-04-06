@@ -38,6 +38,75 @@ async def get_local_manual_file(filename: str):
 
 # ── Manuali salvati su Supabase ───────────────────────────────────────────────
 
+@router.get("/check-url")
+async def check_url_saved(url: str = Query(..., description="URL del PDF da verificare")):
+    """Verifica se un URL è già presente nel database dei manuali salvati."""
+    already_saved = saved_manuals_service.check_url_saved(url)
+    return {"url": url, "already_saved": already_saved}
+
+
+@router.post("/feedback")
+async def submit_feedback(
+    url: str = Form(...),
+    feedback_type: str = Form(...),   # 'not_a_manual' | 'wrong_category' | 'useful_other_category'
+    brand: Optional[str] = Form(None),
+    model: Optional[str] = Form(None),
+    machine_type: Optional[str] = Form(None),
+    useful_for_type: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+):
+    """
+    Raccoglie il feedback dell'ispettore su un documento trovato.
+    Tipi:
+      not_a_manual         — non è un manuale d'uso (brochure, catalogo, scheda tecnica, ecc.)
+      wrong_category       — è un manuale ma per un tipo di macchina diverso da quello cercato
+      useful_other_category— manuale utile per un altro tipo macchina (specificare in useful_for_type)
+    """
+    saved_manuals_service.save_feedback(
+        url=url,
+        feedback_type=feedback_type,
+        brand=brand,
+        model=model,
+        machine_type=machine_type,
+        useful_for_type=useful_for_type,
+        notes=notes,
+    )
+    return {"status": "ok"}
+
+
+@router.get("/feedback")
+async def get_feedback(
+    feedback_type: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """
+    [Admin] Restituisce i feedback raccolti dagli ispettori.
+    Utile per identificare URL da aggiungere a _PDF_EXCLUDE_TERMS o BROCHURE_SIGNALS.
+    """
+    if not saved_manuals_service.settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    try:
+        import psycopg2.extras
+        conditions = []
+        params: list = []
+        if feedback_type:
+            conditions.append("feedback_type = %s")
+            params.append(feedback_type)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM manual_feedback {where} ORDER BY ts DESC LIMIT %s"
+        params.append(limit)
+        with saved_manuals_service._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, params)
+                rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            r["id"] = str(r["id"])
+            r["ts"] = str(r["ts"])
+        return {"count": len(rows), "entries": rows}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/save")
 async def save_manual(body: SaveManualRequest):
     """Salva un link manuale confermato dall'ispettore su Supabase."""

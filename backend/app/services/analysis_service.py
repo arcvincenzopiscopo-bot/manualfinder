@@ -138,13 +138,13 @@ def _build_producer_prompt(brand: str, model: str) -> str:
 
 {{
   "raccomandazioni_produttore": [
-    "prescrizione o istruzione operativa SPECIFICA del costruttore {brand} per il modello {model} — NON generiche [sezione o pag. manuale dove trovata]"
+    "prescrizione OPERATIVA DI SICUREZZA del costruttore {brand} per il modello {model} — SOLO quelle che proteggono l'incolumità di operatori e persone vicine (es. 'Non salire sul tetto cabina senza imbracatura', 'Abbassare il carico prima di scendere dal mezzo'). ESCLUDI istruzioni di manutenzione motore, gestione filtri, sostituzioni componenti, avvisi guasto. [sezione o pag. manuale]"
   ],
   "verifiche_sicurezza": [
-    "controllo prescritto dal costruttore prima/durante/dopo l'uso — specifica QUANDO eseguirlo e CON QUALE FREQUENZA [rif. sezione manuale]"
+    "controllo prescritto dal costruttore prima/durante/dopo l'uso — SOLO verifiche che impattano sulla sicurezza delle persone (es. freni, luci, sistemi ROPS/FOPS, stabilizzatori). ESCLUDI controlli olio, filtri, livelli fluidi, DPF, preriscaldamento motore. Specifica QUANDO e CON QUALE FREQUENZA [rif. sezione manuale]"
   ],
   "rischi_specifici_modello": [
-    "rischio specifico di questo modello {model} non coperto dalla normativa generale — con spiegazione tecnica"
+    "rischio di INFORTUNIO specifico di questo modello {model} non coperto dalla normativa generale — con spiegazione tecnica. ESCLUDI rischi di guasto meccanico o danneggiamento della macchina senza conseguenze per persone."
   ],
   "dispositivi_sicurezza": [
     {{
@@ -158,7 +158,7 @@ def _build_producer_prompt(brand: str, model: str) -> str:
     "limite con VALORE NUMERICO e unità di misura come indicato nel manuale (es. 'Portata massima: 3.500 kg [Sez. 2.4]', 'Pendenza massima operativa: 30% [pag. 18]', 'Pressione idraulica max: 350 bar [Sez. 5.1]')"
   ],
   "procedure_emergenza": [
-    "Procedura specifica per {brand} {model}: Passo 1 — [azione]. Passo 2 — [azione]. Passo 3 — [azione]. [Sez. manuale]"
+    "Procedura di emergenza PER SALVAGUARDARE PERSONE specifica per {brand} {model}: Passo 1 — [azione]. Passo 2 — [azione]. Passo 3 — [azione]. [Sez. manuale]. INCLUDI SOLO: incendio, ribaltamento, cedimento freni/idraulico, investimento persone, folgorazione, seppellimento. ESCLUDI: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio immediato per persone, istruzioni per chiamare l'officina."
   ],
   "pittogrammi_sicurezza": [
     "pittogramma o avvertenza obbligatoria che deve essere presente e leggibile sulla macchina — specifica posizione (es. 'Pittogramma PERICOLO SCHIACCIAMENTO — pannello laterale sinistro cabina [pag. 12 manuale]')"
@@ -170,10 +170,10 @@ def _build_producer_prompt(brand: str, model: str) -> str:
 }}
 
 VINCOLI:
-- raccomandazioni_produttore: 3-8 elementi SPECIFICI per {brand} {model}, NON generici per la categoria. Per ogni voce indica la sezione o pagina del manuale tra parentesi quadre.
+- raccomandazioni_produttore: 2-6 elementi SPECIFICI per {brand} {model} che riguardano esclusivamente la SICUREZZA DELLE PERSONE. NON includere: manutenzione motore/filtri/fluidi, gestione DPF, preriscaldamento, istruzioni per officina, avvisi di degradazione prestazioni. Ogni voce: sezione o pagina del manuale tra parentesi quadre.
 - dispositivi_sicurezza: 3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI su {brand} {model} dal costruttore (interblocchi, sensori, ripari fissi/mobili, pulsanti emergenza, limitatori, valvole). Sii specifico sulla posizione fisica.
 - limiti_operativi: includi SOLO valori ESPLICITAMENTE riportati nel manuale. NON generare valori ipotetici anche se plausibili per la categoria. Se non presenti, lascia la lista vuota [].
-- procedure_emergenza: passi numerati specifici per {brand} {model}. Se il manuale descrive più procedure di emergenza (incendio, ribaltamento, cedimento idraulico), includile tutte.
+- procedure_emergenza: 2-5 procedure SOLO per emergenze che mettono a rischio PERSONE (incendio, ribaltamento, cedimento freni, investimento, folgorazione). NON includere: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio per persone, call to service. Se il manuale descrive solo procedure di manutenzione, lascia la lista vuota [].
 - pittogrammi_sicurezza: segnala SOLO i pittogrammi esplicitamente citati nel manuale con la loro posizione sulla macchina.
 - checklist: 5-8 voci azionabili in sopralluogo SPECIFICHE per {brand} {model}. Ogni voce: verbo imperativo + cosa guardare/toccare + dove + criterio di conformità + riferimento sezione/pagina manuale.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo manuale. Per elementi non presenti, lascia la lista vuota — NON integrare con conoscenze generali sul tipo di macchina.
@@ -187,13 +187,13 @@ def _build_analysis_prompt(brand: str, model: str) -> str:
 
 {{
   "rischi_principali": [
-    "[ALTA/MEDIA/BASSA] descrizione rischio specifico e concreto per {brand} {model} [riferimento normativo o sezione documento se applicabile]"
+    "[ALTA/MEDIA/BASSA] rischio di INFORTUNIO O DANNO ALLA SALUTE specifico per {brand} {model} [riferimento normativo o sezione documento]. INCLUDI SOLO rischi che minacciano l'incolumità di persone (schiacciamento, ribaltamento, caduta, elettrocuzione, esplosione, esposizione agenti nocivi, investimento). ESCLUDI rischi di guasto meccanico, intasamento filtri, usura componenti, sovraccarico motore o danni alla sola macchina senza conseguenze per persone."
   ],
   "dispositivi_protezione": [
     "DPI (cosa indossa l'operatore) OPPURE protezione collettiva — specifica e concreta per questo macchinario"
   ],
   "raccomandazioni_produttore": [
-    "prescrizione o istruzione diretta del costruttore {brand} per {model} [sezione documento]"
+    "prescrizione OPERATIVA DI SICUREZZA del costruttore {brand} per {model} che protegge l'incolumità delle persone [sezione documento]. ESCLUDI istruzioni di manutenzione, gestione guasti, sostituzione componenti, contatto officina."
   ],
   "rischi_residui": [
     "rischio che persiste anche con tutte le protezioni attive — spiega PERCHÉ non eliminabile"
@@ -215,7 +215,7 @@ def _build_analysis_prompt(brand: str, model: str) -> str:
     "limite con VALORE NUMERICO e unità di misura esplicitamente riportato nel documento (es. 'Portata massima: 3.500 kg')"
   ],
   "procedure_emergenza": [
-    "Procedura emergenza specifica: Passo 1 — [azione]. Passo 2 — [azione]. [rif. sezione documento]"
+    "Procedura di emergenza PER SALVAGUARDARE PERSONE: Passo 1 — [azione]. Passo 2 — [azione]. [rif. sezione documento]. INCLUDI SOLO: incendio, ribaltamento, cedimento freni o idraulico, investimento persone, folgorazione, seppellimento, sversamento sostanze pericolose. ESCLUDI: procedure di manutenzione, gestione avarie meccaniche, rigenerazione filtri, istruzioni per officina."
   ],
   "pittogrammi_sicurezza": [
     "pittogramma o avvertenza che deve essere presente e leggibile sulla macchina — con posizione [rif. documento]"
@@ -227,7 +227,9 @@ def _build_analysis_prompt(brand: str, model: str) -> str:
 }}
 
 VINCOLI:
-- rischi_principali: 3-8 rischi, ORDINATI da ALTA a BASSA gravità. Includi tag [ALTA/MEDIA/BASSA] e riferimento normativo/documentale.
+- rischi_principali: 3-8 rischi SOLO per l'incolumità delle persone, ORDINATI da ALTA a BASSA gravità. Includi tag [ALTA/MEDIA/BASSA] e riferimento normativo/documentale. NON includere rischi di guasto meccanico, intasamento filtri, degradazione prestazioni o danni alla sola macchina.
+- raccomandazioni_produttore: SOLO raccomandazioni che proteggono persone. NON manutenzione, fluidi, filtri DPF, preriscaldamento, avvisi motore.
+- procedure_emergenza: SOLO per emergenze che minacciano persone (incendio, ribaltamento, cedimento freni, investimento, folgorazione). NON rigenerazione DPF, avarie meccaniche, call to service. Lista vuota [] se il documento non ne contiene.
 - dispositivi_sicurezza: 3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI sulla macchina dal costruttore (interblocchi, sensori, ripari, pulsanti emergenza, limitatori, valvole di sicurezza). Sii specifico sulla posizione fisica.
 - checklist: 5-10 voci azionabili IMMEDIATAMENTE in sopralluogo. Ogni voce deve rispondere a: COSA verificare, DOVE trovarlo, COME stabilire la conformità. Includi riferimento sezione o articolo normativo tra parentesi quadre.
 - limiti_operativi: includi SOLO valori ESPLICITAMENTE presenti nel documento — NON generare valori ipotetici.
@@ -251,13 +253,13 @@ Genera una scheda di sicurezza INDICATIVA:
 
 {{
   "rischi_principali": [
-    "[ALTA/MEDIA/BASSA] rischio specifico per {brand} {model} ordinato per gravità [riferimento normativo D.Lgs. 81/08 dove applicabile]"
+    "[ALTA/MEDIA/BASSA] rischio di INFORTUNIO O DANNO ALLA SALUTE specifico per {brand} {model} [rif. normativo D.Lgs. 81/08]. SOLO rischi per persone: schiacciamento, ribaltamento, caduta, elettrocuzione, esplosione, rumore/vibrazioni, sostanze nocive, investimento. ESCLUDI guasti meccanici, intasamento filtri, danni al solo motore o ai componenti senza conseguenze per persone."
   ],
   "dispositivi_protezione": [
     "DPI o protezione collettiva richiesta per questa categoria di macchina"
   ],
   "raccomandazioni_produttore": [
-    "raccomandazione basata sulla conoscenza di {brand} {model} o di modelli simili"
+    "raccomandazione operativa di SICUREZZA PER LE PERSONE basata sulla conoscenza di {brand} {model} o modelli simili. ESCLUDI istruzioni di manutenzione, gestione filtri/fluidi, avarie meccaniche."
   ],
   "rischi_residui": [
     "rischio residuo tipico di questa categoria con spiegazione del perché non eliminabile"
@@ -277,7 +279,7 @@ Genera una scheda di sicurezza INDICATIVA:
   "verifiche_periodiche": "Obblighi di verifica periodica. Se applicabile: 1) categoria di appartenenza secondo Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma; 2) cadenza; 3) soggetto abilitato; 4) riferimento normativo VIGENTE aggiornato. Null se non previsti.",
   "limiti_operativi": [],
   "procedure_emergenza": [
-    "Procedura di emergenza tipica per questa categoria: Passo 1 — [azione]. Passo 2 — [azione]."
+    "Procedura di emergenza PER SALVAGUARDARE PERSONE tipica per {brand} {model}: Passo 1 — [azione]. Passo 2 — [azione]. SOLO: incendio, ribaltamento, cedimento freni, investimento, folgorazione. ESCLUDI avarie meccaniche senza rischio per persone."
   ],
   "pittogrammi_sicurezza": [
     "pittogramma di avvertenza tipicamente presente su questa categoria di macchina"
@@ -290,7 +292,9 @@ Genera una scheda di sicurezza INDICATIVA:
 }}
 
 VINCOLI:
-- rischi_principali: 3-8 rischi ORDINATI da ALTA a BASSA gravità con tag [ALTA/MEDIA/BASSA]
+- rischi_principali: 3-8 rischi ORDINATI da ALTA a BASSA gravità con tag [ALTA/MEDIA/BASSA]. SOLO rischi per l'incolumità delle persone — NON guasti meccanici, filtri, avarie senza conseguenze per persone.
+- raccomandazioni_produttore: SOLO raccomandazioni che proteggono persone (operatore, bystander). NON manutenzione, fluidi, DPF, call to service.
+- procedure_emergenza: SOLO per emergenze che minacciano persone. Lista vuota [] se non applicabile.
 - dispositivi_sicurezza: 2-5 dispositivi tipici per questa categoria — specifica posizione fisica sulla macchina
 - checklist: 5-8 voci azionabili in sopralluogo con verbo imperativo + COSA + DOVE + COME
 - documenti_da_richiedere: 3-5 documenti essenziali con riferimento normativo
@@ -329,10 +333,10 @@ Analisi parziali:
 Restituisci UN SOLO JSON con la struttura completa:
 {{
   "rischi_principali": [
-    "descrizione rischio [ALTA/MEDIA/BASSA] — con riferimento normativo se presente"
+    "descrizione rischio di INFORTUNIO O DANNO ALLA SALUTE [ALTA/MEDIA/BASSA] — con riferimento normativo. SOLO rischi per persone, NON guasti meccanici o danni alla macchina."
   ],
   "dispositivi_protezione": ["DPI o protezione collettiva richiesta"],
-  "raccomandazioni_produttore": ["prescrizione specifica del costruttore"],
+  "raccomandazioni_produttore": ["prescrizione OPERATIVA DI SICUREZZA PER PERSONE del costruttore — ESCLUDI manutenzione, fluidi, DPF, officina."],
   "rischi_residui": ["rischio residuo con spiegazione del perché non eliminabile"],
   "dispositivi_sicurezza": [
     {{
@@ -346,7 +350,7 @@ Restituisci UN SOLO JSON con la struttura completa:
   "documenti_da_richiedere": ["documento con riferimento normativo"],
   "verifiche_periodiche": "Se applicabile: 1) categoria Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo; 2) cadenza; 3) soggetto abilitato; 4) normativa VIGENTE aggiornata. Null se non previsto",
   "limiti_operativi": ["limite con valore numerico e unità di misura"],
-  "procedure_emergenza": ["Passo 1: ... — Passo 2: ..."],
+  "procedure_emergenza": ["Procedura PER SALVAGUARDARE PERSONE: Passo 1 — ... Passo 2 — ... SOLO: incendio, ribaltamento, cedimento freni, investimento, folgorazione. ESCLUDI avarie meccaniche senza rischio per persone."],
   "pittogrammi_sicurezza": ["avvertenza/pittogramma obbligatorio sulla macchina"],
   "checklist": [
     "Verifica [elemento fisico] — [dove trovarlo] — [criterio di conformità] [rif. normativo o sezione manuale]"
@@ -355,7 +359,9 @@ Restituisci UN SOLO JSON con la struttura completa:
 }}
 
 ISTRUZIONI DI CONSOLIDAMENTO:
-- rischi_principali: ordina da ALTA a BASSA gravità; deduplica per contenuto semantico
+- rischi_principali: ordina da ALTA a BASSA gravità; deduplica per contenuto semantico. SCARTA qualsiasi rischio di guasto meccanico, intasamento filtri, degradazione prestazioni o danni alla sola macchina senza conseguenze per persone.
+- raccomandazioni_produttore: SCARTA istruzioni di manutenzione, gestione fluidi, DPF, preriscaldamento, istruzioni per officina. Mantieni SOLO raccomandazioni che proteggono l'incolumità di operatori e persone vicine.
+- procedure_emergenza: SCARTA qualsiasi procedura di manutenzione o gestione avaria meccanica. Mantieni SOLO procedure per incendio, ribaltamento, cedimento freni/idraulico, investimento persone, folgorazione, seppellimento. Se nessuna è pertinente, lascia la lista vuota [].
 - dispositivi_sicurezza: deduplica per nome (case-insensitive); mantieni la descrizione più completa tra i duplicati
 - checklist: unisci tutte le voci, rimuovi i duplicati semantici, mantieni 5-10 voci ordinate per priorità ispettiva
 - limiti_operativi: includi SOLO valori esplicitamente presenti nel manuale — non generare valori ipotetici
@@ -534,7 +540,72 @@ async def generate_safety_card(
         machine_label = machine_type or f"{brand} {model}"
         await _enrich_legal_fields(card, machine_label, provider)
 
+    # Override deterministico post-AI: per macchine la cui classificazione normativa
+    # è nota e non ambigua, forza i valori corretti indipendentemente da quanto
+    # estratto dal PDF o generato dall'AI (che spesso sbaglia su queste categorie).
+    _apply_normative_overrides(card, machine_type)
+
     return card
+
+
+# Macchine per cui abilitazione_operatore deve essere sempre null
+# (non coperte dall'Accordo Stato-Regioni 2012 né da altra norma settoriale)
+_NO_PATENTINO_TYPES: frozenset[str] = frozenset({
+    "compressore", "motocompressore", "compressore d'aria", "compressore aria",
+    "gruppo elettrogeno", "generatore", "generatore elettrico",
+    "piastra vibrante", "costipatore",
+    "rullo compattatore", "rullo compressore", "rullo", "compattatore",
+    "bulldozer", "apripista",
+    "betoniera",
+    "saldatrice", "saldatrice mig", "saldatrice tig", "saldatrice ad arco",
+    "pressa", "pressa idraulica", "pressa piegatrice", "piegatrice",
+    "punzonatrice", "cesoie", "tranciatrice",
+    "tornio", "fresatrice", "rettificatrice",
+    "laser", "macchina taglio laser", "taglio laser",
+    "troncatrice", "troncatrice per alluminio",
+    "benna a polipo", "benna carico-pietrisco", "benna", "polipo",
+    "pinza demolitrice", "martello demolitore",
+    "vibratore per calcestruzzo",
+})
+
+# Macchine per cui verifiche_periodiche deve essere sempre null
+# (non rientrano nell'Allegato VII D.Lgs. 81/08 come apparecchi di sollevamento
+#  né come recipienti in pressione)
+_NO_VERIFICHE_TYPES: frozenset[str] = frozenset({
+    "compressore", "motocompressore", "compressore d'aria", "compressore aria",
+    "gruppo elettrogeno", "generatore", "generatore elettrico",
+    "piastra vibrante", "costipatore",
+    "rullo compattatore", "rullo compressore", "rullo", "compattatore",
+    "bulldozer", "apripista",
+    "betoniera",
+    "saldatrice", "saldatrice mig", "saldatrice tig", "saldatrice ad arco",
+    "pressa", "pressa idraulica", "pressa piegatrice", "piegatrice",
+    "punzonatrice", "cesoie", "tranciatrice",
+    "tornio", "fresatrice", "rettificatrice",
+    "laser", "macchina taglio laser", "taglio laser",
+    "troncatrice", "troncatrice per alluminio",
+    "dumper", "finitrice",
+    "benna a polipo", "benna carico-pietrisco", "benna", "polipo",
+    "pinza demolitrice", "martello demolitore",
+    "vibratore per calcestruzzo",
+    "escavatore", "escavatore idraulico",  # puro, senza funzione di sollevamento
+})
+
+
+def _apply_normative_overrides(card, machine_type: Optional[str]) -> None:
+    """
+    Forza a None i campi normativi per categorie dove la regola è certa e l'AI sbaglia spesso.
+    Chiamata dopo _enrich_legal_fields() — sovrascrive sia output AI che contenuto estratto dal PDF.
+    """
+    if not machine_type:
+        return
+    mt = machine_type.lower().strip()
+
+    if mt in _NO_PATENTINO_TYPES:
+        card.abilitazione_operatore = None
+
+    if mt in _NO_VERIFICHE_TYPES:
+        card.verifiche_periodiche = None
 
 
 async def _analyze_dual_source(

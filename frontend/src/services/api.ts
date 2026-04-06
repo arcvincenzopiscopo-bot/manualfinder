@@ -156,6 +156,40 @@ export async function saveManual(data: SaveManualPayload): Promise<void> {
   }
 }
 
+export async function checkUrlSaved(url: string): Promise<boolean> {
+  try {
+    const params = new URLSearchParams({ url })
+    const response = await fetch(`${BASE_URL}/manuals/check-url?${params}`)
+    if (!response.ok) return false
+    const data = await response.json()
+    return data.already_saved === true
+  } catch {
+    return false
+  }
+}
+
+export type FeedbackType = 'not_a_manual' | 'wrong_category' | 'useful_other_category'
+
+export async function submitManualFeedback(payload: {
+  url: string
+  feedback_type: FeedbackType
+  brand?: string
+  model?: string
+  machine_type?: string
+  useful_for_type?: string
+  notes?: string
+}): Promise<void> {
+  const fd = new FormData()
+  fd.append('url', payload.url)
+  fd.append('feedback_type', payload.feedback_type)
+  if (payload.brand) fd.append('brand', payload.brand)
+  if (payload.model) fd.append('model', payload.model)
+  if (payload.machine_type) fd.append('machine_type', payload.machine_type)
+  if (payload.useful_for_type) fd.append('useful_for_type', payload.useful_for_type)
+  if (payload.notes) fd.append('notes', payload.notes)
+  await fetch(`${BASE_URL}/manuals/feedback`, { method: 'POST', body: fd })
+}
+
 export async function checkHealth(): Promise<boolean> {
   try {
     const response = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(5000) })

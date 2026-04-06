@@ -203,6 +203,14 @@ _BRAND_TYPE_MAP: dict[str, str] = {
     "case":         "escavatore",
     "new holland":  "escavatore",
     "bobcat":       "minipala",
+    "gehl":         "minipala gommata",
+    "mustang":      "minipala",
+    "takeuchi":     "minipala",
+    "yanmar":       "minipala",
+    "kubota":       "minipala",
+    "terex":        "minipala",
+    "thomas":       "minipala",
+    "new holland construction": "minipala",
     "wacker neuson":"rullo compattatore",
     "bomag":        "rullo compattatore",
     "hamm":         "rullo compattatore",
@@ -261,6 +269,13 @@ _BRAND_TYPE_MAP: dict[str, str] = {
     "pramac":       "generatore",
     "cummins":      "generatore",
     "perkins":      "generatore",
+    # VAIA CAR: brand italiano di attrezzature/macchine speciali
+    "vaia car":     "attrezzatura speciale",   # default — raffinato da prefisso modello
+    "vaia":         "attrezzatura speciale",
+    # Accessori idraulici per escavatori
+    "idrobenne":    "benna idraulica",
+    "mantovanibenne": "benna idraulica",
+    "casagrande":   "trivella da fondazione",
 }
 
 # Prefissi modello che specificano meglio il tipo per brand multi-prodotto
@@ -314,6 +329,13 @@ _MODEL_PREFIX_OVERRIDES: list[tuple[str, str, str]] = [
     ("rozzi", "rb",       "benna a mordacchia"),
     ("rozzi", "rc",       "cesoia demolitrice"),
     ("rozzi", "rm",       "martello demolitore"),
+    # VAIA CAR: bco = benna carico-scarico, kube = testa saldante, si = saldatrice inverter
+    ("vaia car", "bco",   "benna carico-pietrisco"),
+    ("vaia car", "kube",  "testa saldante"),
+    ("vaia car", "si",    "saldatrice inverter"),
+    ("vaia", "bco",       "benna carico-pietrisco"),
+    ("vaia", "kube",      "testa saldante"),
+    ("vaia", "si",        "saldatrice inverter"),
     # Konecranes: SMV = reach stacker (carrello elevatore pesante da porto/cantiere)
     ("konecranes", "smv", "reach stacker"),
     ("konecranes", "eco", "carrello elevatore"),
@@ -383,10 +405,15 @@ async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: O
         f"Rispondi con UNA SOLA RIGA di testo, senza spiegazioni.\n"
         f"Qual è il tipo esatto di macchinario industriale '{brand} {model}'?\n"
         f"{hint_line}"
-        f"REGOLE:\n"
+        f"REGOLE CRITICHE:\n"
         f"- Usa SOLO la tua conoscenza certa del brand e del modello specifico\n"
-        f"- NON indovinare: se non sei sicuro al 100%, scrivi null\n"
-        f"- NON confondere accessori/attrezzature (benne, martelli, forche) con macchine autonome\n"
+        f"- NON indovinare: se non conosci questo brand/modello con certezza, scrivi null\n"
+        f"- Se il brand è sconosciuto o poco noto nel settore macchine da cantiere/industriali, scrivi null\n"
+        f"- NON confondere accessori/attrezzature (benne, martelli, forche, teste saldanti, pinze) con macchine autonome\n"
+        f"  Un accessorio per escavatore NON è una macchina. Una testa saldante NON è una saldatrice.\n"
+        f"- Se il modello suggerisce un accessorio (BCO=benna, KUBE=testa, RR=polipo) scrivi il tipo di accessorio\n"
+        f"- NON classificare macchine tessili, alimentari, farmaceutiche come macchine da cantiere\n"
+        f"  Se il brand fa macchine per altri settori industriali, scrivi il settore corretto o null\n"
         f"- Scrivi in italiano, termine INAIL se esiste\n"
         f"Esempi validi: 'escavatore idraulico', 'pala caricatrice', 'carrello elevatore', "
         f"'sollevatore telescopico', 'piattaforma a forbice', 'piattaforma aerea a braccio', "
@@ -394,8 +421,8 @@ async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: O
         f"'pompa calcestruzzo', 'finitrice', 'dumper', 'betoniera', 'terna', 'bulldozer', "
         f"'sega circolare', 'sega a nastro', 'pialla', 'fresatrice CNC', 'tornio', "
         f"'pressa piegatrice', 'punzonatrice', 'laser taglio', 'martello demolitore idraulico', "
-        f"'benna a polipo', 'attrezzatura idraulica per escavatore'.\n"
-        f"Se non sei sicuro: null"
+        f"'benna a polipo', 'benna carico-pietrisco', 'testa saldante', 'attrezzatura idraulica per escavatore'.\n"
+        f"Se non sei sicuro o il brand è sconosciuto: null"
     )
     try:
         if provider == "anthropic":

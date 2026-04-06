@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { saveManual } from '../../services/api'
+import { useState, useEffect } from 'react'
+import { saveManual, checkUrlSaved, submitManualFeedback, type FeedbackType } from '../../services/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -40,6 +40,25 @@ function PdfLink({ url, label, color }: { url: string; label: string; color: str
       {label}
     </a>
   )
+}
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '8px 10px',
+  border: '1px solid #cbd5e1',
+  borderRadius: 6,
+  fontSize: 13,
+  boxSizing: 'border-box',
+  background: '#fff',
+  color: '#1e293b',
+}
+const labelStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: 11,
+  fontWeight: 600,
+  color: '#64748b',
+  marginBottom: 4,
+  textTransform: 'uppercase',
 }
 
 function SaveManualForm({
@@ -102,57 +121,19 @@ function SaveManualForm({
     }
   }
 
-  const inputStyle: React.CSSProperties = {
-    width: '100%',
-    padding: '8px 10px',
-    border: '1px solid #cbd5e1',
-    borderRadius: 6,
-    fontSize: 13,
-    boxSizing: 'border-box',
-    background: '#fff',
-    color: '#1e293b',
-  }
-  const labelStyle: React.CSSProperties = {
-    display: 'block',
-    fontSize: 11,
-    fontWeight: 600,
-    color: '#64748b',
-    marginBottom: 4,
-    textTransform: 'uppercase',
-  }
   const canSave = machineType.trim().length > 0 && (isGeneric || (brand.trim().length > 0 && model.trim().length > 0))
 
   return (
-    <div style={{
-      marginTop: 12,
-      padding: '12px',
-      background: '#f8fafc',
-      border: '1px solid #e2e8f0',
-      borderRadius: 8,
-    }}>
+    <div style={{ marginTop: 12, padding: '12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8 }}>
       <p style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
         💾 Salva manuale nel database
       </p>
-
-      {/* Toggle generico / specifico */}
-      <label style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        marginBottom: 12,
-        cursor: 'pointer',
-        fontSize: 13,
-        color: '#475569',
-      }}>
-        <input
-          type="checkbox"
-          checked={isGeneric}
-          onChange={e => setIsGeneric(e.target.checked)}
-          style={{ width: 16, height: 16, accentColor: '#1e40af' }}
-        />
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, cursor: 'pointer', fontSize: 13, color: '#475569' }}>
+        <input type="checkbox" checked={isGeneric} onChange={e => setIsGeneric(e.target.checked)}
+          style={{ width: 16, height: 16, accentColor: '#1e40af' }} />
         <span>
           <strong>Manuale generico di categoria</strong>
-          <span style={{ color: '#94a3b8', marginLeft: 4 }}>(es. manuale INAIL di terzi, guida di settore)</span>
+          <span style={{ color: '#94a3b8', marginLeft: 4 }}>(es. guida di settore, non specifico per modello)</span>
         </span>
       </label>
 
@@ -196,23 +177,17 @@ function SaveManualForm({
         <input style={inputStyle} value={notes} onChange={e => setNotes(e.target.value)} placeholder="es. valido anche per modello XYZ" />
       </div>
 
-      {error && (
-        <p style={{ margin: '0 0 8px', fontSize: 12, color: '#dc2626' }}>⚠ {error}</p>
-      )}
+      {error && <p style={{ margin: '0 0 8px', fontSize: 12, color: '#dc2626' }}>⚠ {error}</p>}
 
       <div style={{ display: 'flex', gap: 8 }}>
         <button
           onClick={handleSave}
           disabled={saving || !canSave}
           style={{
-            flex: 1,
-            padding: '9px',
+            flex: 1, padding: '9px',
             background: (saving || !canSave) ? '#94a3b8' : '#1e40af',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            fontWeight: 700,
-            fontSize: 13,
+            color: '#fff', border: 'none', borderRadius: 6,
+            fontWeight: 700, fontSize: 13,
             cursor: (saving || !canSave) ? 'not-allowed' : 'pointer',
           }}
         >
@@ -221,14 +196,116 @@ function SaveManualForm({
         <button
           onClick={onCancel}
           style={{
-            padding: '9px 14px',
-            background: '#fff',
-            color: '#64748b',
-            border: '1px solid #cbd5e1',
-            borderRadius: 6,
-            fontWeight: 600,
-            fontSize: 13,
-            cursor: 'pointer',
+            padding: '9px 14px', background: '#fff', color: '#64748b',
+            border: '1px solid #cbd5e1', borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+          }}
+        >
+          Annulla
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** Form segnalazione documento non pertinente */
+function FeedbackForm({
+  url,
+  brand,
+  model,
+  machineType,
+  onDone,
+  onCancel,
+}: {
+  url: string
+  brand?: string
+  model?: string
+  machineType?: string
+  onDone: () => void
+  onCancel: () => void
+}) {
+  const [feedbackType, setFeedbackType] = useState<FeedbackType | ''>('')
+  const [usefulForType, setUsefulForType] = useState('')
+  const [notes, setNotes] = useState('')
+  const [sending, setSending] = useState(false)
+
+  const handleSend = async () => {
+    if (!feedbackType) return
+    setSending(true)
+    try {
+      await submitManualFeedback({
+        url,
+        feedback_type: feedbackType,
+        brand,
+        model,
+        machine_type: machineType,
+        useful_for_type: usefulForType.trim() || undefined,
+        notes: notes.trim() || undefined,
+      })
+      onDone()
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12, padding: '12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8 }}>
+      <p style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: '#9a3412' }}>
+        🚩 Segnala documento
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+        {[
+          { value: 'not_a_manual' as FeedbackType, label: 'Non è un manuale d\'uso', sub: 'È una brochure, catalogo, scheda tecnica o documento commerciale' },
+          { value: 'wrong_category' as FeedbackType, label: 'Manuale ma categoria sbagliata', sub: `È un manuale d'uso ma per un tipo di macchina diverso da "${machineType || 'quella cercata'}"` },
+          { value: 'useful_other_category' as FeedbackType, label: 'Utile per un\'altra categoria', sub: 'Potrebbe tornare utile per ricerche su un altro tipo di macchina' },
+        ].map(opt => (
+          <label key={opt.value} style={{ display: 'flex', gap: 10, cursor: 'pointer', padding: '8px 10px', borderRadius: 6, background: feedbackType === opt.value ? '#fff3e0' : 'transparent', border: feedbackType === opt.value ? '1px solid #fb923c' : '1px solid transparent' }}>
+            <input type="radio" name="feedbackType" value={opt.value}
+              checked={feedbackType === opt.value}
+              onChange={() => setFeedbackType(opt.value)}
+              style={{ marginTop: 2, accentColor: '#ea580c' }}
+            />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#9a3412' }}>{opt.label}</div>
+              <div style={{ fontSize: 11, color: '#92400e', lineHeight: 1.4 }}>{opt.sub}</div>
+            </div>
+          </label>
+        ))}
+      </div>
+
+      {feedbackType === 'useful_other_category' && (
+        <div style={{ marginBottom: 8 }}>
+          <label style={labelStyle}>Per quale tipo di macchina potrebbe essere utile?</label>
+          <input style={inputStyle} value={usefulForType} onChange={e => setUsefulForType(e.target.value)}
+            placeholder="es. escavatore, carrello elevatore, gru..." />
+        </div>
+      )}
+
+      <div style={{ marginBottom: 10 }}>
+        <label style={labelStyle}>Note aggiuntive (opzionale)</label>
+        <input style={inputStyle} value={notes} onChange={e => setNotes(e.target.value)}
+          placeholder="Descrivi brevemente il problema" />
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          onClick={handleSend}
+          disabled={!feedbackType || sending}
+          style={{
+            flex: 1, padding: '9px',
+            background: (!feedbackType || sending) ? '#94a3b8' : '#ea580c',
+            color: '#fff', border: 'none', borderRadius: 6,
+            fontWeight: 700, fontSize: 13,
+            cursor: (!feedbackType || sending) ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {sending ? 'Invio...' : 'Invia segnalazione'}
+        </button>
+        <button
+          onClick={onCancel}
+          style={{
+            padding: '9px 14px', background: '#fff', color: '#64748b',
+            border: '1px solid #cbd5e1', borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: 'pointer',
           }}
         >
           Annulla
@@ -239,15 +316,28 @@ function SaveManualForm({
 }
 
 export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: Props) {
-  const [showForm, setShowForm] = useState(false)
+  const [showForm, setShowForm] = useState<'save' | 'feedback' | null>(null)
   const [saved, setSaved] = useState(false)
+  const [reported, setReported] = useState(false)
+  const [urlAlreadySaved, setUrlAlreadySaved] = useState(false)
 
   const isFallback = tipo === 'fallback_ai'
-  const isInailOnly = tipo === 'inail'   // solo scheda INAIL locale — non ha senso salvare
+  const isInailOnly = tipo === 'inail'
   const isDual = tipo === 'inail+produttore'
+  const isDbSource = tipo?.includes('db') || false
 
-  // Il salvataggio ha senso solo quando c'è un manuale produttore (non INAIL locale)
-  const canSave = !isFallback && !isInailOnly && url && url.length > 0
+  // Controlla se l'URL è già nel DB (solo se c'è un manuale produttore)
+  useEffect(() => {
+    if (!url || isFallback || isInailOnly) return
+    checkUrlSaved(url).then(already => {
+      if (already) setUrlAlreadySaved(true)
+    })
+  }, [url, isFallback, isInailOnly])
+
+  // Il salvataggio ha senso solo quando c'è un manuale produttore (non INAIL locale, non fallback, non già salvato)
+  const canSave = !isFallback && !isInailOnly && !isDbSource && url && url.length > 0 && !urlAlreadySaved && !saved
+  // Il feedback è possibile ogni volta che c'è un manuale produttore (anche già salvato)
+  const canReport = !isFallback && !isInailOnly && url && url.length > 0 && !reported
 
   const manualsLibUrl = brand && model
     ? `https://www.manualslib.com/search/?q=${encodeURIComponent(brand + ' ' + model)}`
@@ -257,16 +347,14 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
     : null
 
   const labelMap: Record<string, string> = {
-    pdf:              'Manuale PDF',
-    inail:            'Scheda INAIL',
+    pdf:                'Manuale PDF',
+    inail:              'Scheda INAIL',
     'inail+produttore': 'INAIL + Manuale produttore',
-    fallback_ai:      'Conoscenza AI (nessun manuale ufficiale trovato)',
+    fallback_ai:        'Conoscenza AI (nessun manuale ufficiale trovato)',
   }
   const label = tipo
     ? (labelMap[tipo] ?? (tipo.startsWith('inail+categoria') ? 'INAIL + Manuale di categoria (DB)' : tipo))
     : 'Fonte sconosciuta'
-
-  const isDbSource = tipo?.includes('db') || label.toLowerCase().includes('db')
 
   return (
     <div style={{
@@ -307,52 +395,69 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
         </div>
       </div>
 
-      {/* Banner invito al salvataggio — visibile quando c'è un manuale produttore */}
-      {canSave && !saved && (
+      {/* ── Pannello azioni: salva / segnala ─────────────────────────────── */}
+      {!showForm && !saved && !reported && (canSave || canReport) && (
         <div style={{
           marginTop: 10,
           padding: '10px 12px',
           background: '#eff6ff',
           border: '1px solid #bfdbfe',
           borderRadius: 6,
-          fontSize: 12,
-          color: '#1e40af',
         }}>
-          <p style={{ margin: '0 0 6px', fontWeight: 700 }}>
-            📚 Hai trovato un manuale di qualità?
+          <p style={{ margin: '0 0 8px', fontSize: 12, fontWeight: 700, color: '#1e40af' }}>
+            Hai verificato questo documento?
           </p>
-          <p style={{ margin: '0 0 8px', lineHeight: 1.5, color: '#1e3a8a' }}>
-            Salvarlo nel database aiuta te e i colleghi nelle prossime ispezioni.
-            Puoi salvarlo come manuale specifico di questo modello oppure come
-            riferimento generico per tutta la categoria di macchine.
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {canSave && (
+              <button
+                onClick={() => setShowForm('save')}
+                style={{
+                  padding: '7px 14px', background: '#1e40af', color: '#fff',
+                  border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                💾 È un buon manuale — salvalo
+              </button>
+            )}
+            {canReport && (
+              <button
+                onClick={() => setShowForm('feedback')}
+                style={{
+                  padding: '7px 14px', background: '#fff', color: '#ea580c',
+                  border: '1px solid #fb923c', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                🚩 Segnala problema
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Badge URL già nel DB */}
+      {urlAlreadySaved && !saved && canReport && !showForm && (
+        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <p style={{ margin: 0, fontSize: 12, color: '#16a34a', fontWeight: 700 }}>
+            ✓ Manuale già presente nel database
           </p>
-          {!showForm && (
+          {!reported && (
             <button
-              onClick={() => setShowForm(true)}
+              onClick={() => setShowForm('feedback')}
               style={{
-                padding: '7px 14px',
-                background: '#1e40af',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 6,
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: 'pointer',
+                padding: '5px 10px', background: 'none', color: '#ea580c',
+                border: '1px solid #fb923c', borderRadius: 6, fontSize: 11, cursor: 'pointer',
               }}
             >
-              💾 Salva nel database
+              🚩 Segnala problema
             </button>
           )}
         </div>
       )}
 
-      {saved && (
-        <p style={{ margin: '8px 0 0', fontSize: 12, color: '#16a34a', fontWeight: 700 }}>
-          ✓ Manuale salvato nel database
-        </p>
-      )}
+      {saved && <p style={{ margin: '8px 0 0', fontSize: 12, color: '#16a34a', fontWeight: 700 }}>✓ Manuale salvato nel database</p>}
+      {reported && <p style={{ margin: '8px 0 0', fontSize: 12, color: '#ea580c', fontWeight: 700 }}>✓ Segnalazione inviata — grazie</p>}
 
-      {showForm && url && (
+      {showForm === 'save' && url && (
         <SaveManualForm
           defaultUrl={url}
           defaultBrand={brand ?? ''}
@@ -361,8 +466,19 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
           searchBrand={brand}
           searchModel={model}
           searchMachineType={machineType}
-          onSaved={() => { setSaved(true); setShowForm(false) }}
-          onCancel={() => setShowForm(false)}
+          onSaved={() => { setSaved(true); setShowForm(null) }}
+          onCancel={() => setShowForm(null)}
+        />
+      )}
+
+      {showForm === 'feedback' && url && (
+        <FeedbackForm
+          url={url}
+          brand={brand}
+          model={model}
+          machineType={machineType}
+          onDone={() => { setReported(true); setShowForm(null) }}
+          onCancel={() => setShowForm(null)}
         />
       )}
     </div>

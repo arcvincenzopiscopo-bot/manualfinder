@@ -89,23 +89,33 @@ async def _pipeline(request: FullAnalysisRequest):
     await asyncio.sleep(0)
 
     try:
-        # Esegui ricerca manuale e Safety Gate in parallelo
-        search_results, safety_alerts = await asyncio.gather(
-            search_service.search_manual(
-                brand=brand,
-                model=model,
-                machine_type=machine_type,
-                lang=request.preferred_language,
-                machine_year=machine_year,
-                serial_number=serial_number,
+        # Esegui ricerca manuale e Safety Gate in parallelo con timeout globale
+        # (evita hang su certi brand/modelli che causano scraper lenti)
+        search_results, safety_alerts = await asyncio.wait_for(
+            asyncio.gather(
+                search_service.search_manual(
+                    brand=brand,
+                    model=model,
+                    machine_type=machine_type,
+                    lang=request.preferred_language,
+                    machine_year=machine_year,
+                    serial_number=serial_number,
+                ),
+                safety_gate_service.check_safety_alerts(brand, model),
+                return_exceptions=True,
             ),
-            safety_gate_service.check_safety_alerts(brand, model),
-            return_exceptions=True,
+            timeout=90,  # max 90s per ricerca completa
         )
         if isinstance(search_results, Exception):
             search_results = []
         if isinstance(safety_alerts, Exception):
             safety_alerts = []
+    except asyncio.TimeoutError:
+        # Ricerca scaduta (90s) — procedi con fallback AI
+        import logging as _log
+        _log.getLogger(__name__).warning("search_manual timeout per %s %s", brand, model)
+        search_results = []
+        safety_alerts = []
     except Exception:
         search_results = []
         safety_alerts = []
@@ -283,8 +293,16 @@ async def _pipeline(request: FullAnalysisRequest):
                 "parts_catalog", "parts-catalog", "spare_parts",
                 "catalogo_ricambi", "catalogo_attrezzature", "catalogo_utensili",
                 "price_list", "listino_prezzi",
+                "depliant", "flyer", "leaflet",
+                "product-line", "product_line", "productline", "lineup", "line-up",
+                "tv-product", "range-overview", "portfolio",
             ]
             if any(p in path.replace(" ", "_").replace("%20", "_") for p in CATALOG_URL_SIGNALS):
+                return False
+
+            # Domini che producono solo cataloghi/listini
+            from app.services.search_service import _EXCLUDE_DOMAINS
+            if any(d in domain for d in _EXCLUDE_DOMAINS):
                 return False
 
             return True
@@ -395,15 +413,27 @@ async def _pipeline(request: FullAnalysisRequest):
                 for c in ordered_candidates
             )
             if _producer_from_db:
-                # Manuali DB verificati da ispettori: skip classify, label dedicata
-                _is_db_generic = any(
-                    c.url == producer_url and "generico" in c.title.lower()
-                    for c in ordered_candidates
+                # Manuali DB verificati da ispettori: skip classify, label dedicata.
+                # Distingue tra:
+                #   - Manuale specifico: brand+model combaciano con quelli cercati
+                #   - Manuale di categoria: brand/model GENERICO o diversi da quelli cercati
+                _db_candidate = next(
+                    (c for c in ordered_candidates if c.url == producer_url and c.title.startswith("[DB]")),
+                    None,
                 )
+                _is_db_generic = _db_candidate and "generico" in _db_candidate.title.lower()
+                _db_title_lower = (_db_candidate.title.lower() if _db_candidate else "")
+                _brand_in_title = brand.lower() in _db_title_lower
+                _model_in_title = model.lower() in _db_title_lower
+                _is_db_exact_match = _brand_in_title and _model_in_title
+
                 if _is_db_generic:
                     producer_source_label = f"Manuale DB — categoria {machine_type or 'macchina'}"
+                elif _is_db_exact_match:
+                    producer_source_label = f"Manuale DB {brand} {model}"
                 else:
-                    producer_source_label = f"Manuale DB verificato ({brand} {model})"
+                    # Manuale DB ma per un modello diverso — avvisa che è di categoria simile
+                    producer_source_label = f"Manuale DB cat. simile ({machine_type or 'macchina'})"
                 producer_match_type = "exact"
             else:
                 producer_match_type = pdf_service.classify_pdf_match(

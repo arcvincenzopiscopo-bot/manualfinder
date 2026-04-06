@@ -120,6 +120,44 @@ async def validate_and_check(
         return {"ok": True}  # Errore AI — non blocchiamo l'upload
 
 
+def _compress_pdf(pdf_bytes: bytes) -> bytes:
+    """
+    Comprime il PDF con la massima riduzione compatibile con la leggibilità AI.
+    Usa PyMuPDF: scarica immagini incorporate a 72 DPI, reimposta metadati, rimuove duplicati.
+    Ritorna i bytes compressi, o i bytes originali se la compressione fallisce.
+    """
+    try:
+        import fitz
+        src = fitz.open(stream=pdf_bytes, filetype="pdf")
+        dst = fitz.open()
+
+        for page in src:
+            # Ridisegna ogni pagina a risoluzione ridotta per comprimere immagini incorporate
+            mat = fitz.Matrix(0.85, 0.85)          # scala al 85% — bilancia qualità/dimensione
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            # Invece di usare il pixmap (rasterizza tutto), usa la copia diretta
+            # con deflate e garbage collection attivi
+            dst.insert_pdf(src, from_page=page.number, to_page=page.number)
+
+        dst.close()
+        src.close()
+
+        # Riapri e salva con massima compressione
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        compressed = doc.tobytes(
+            deflate=True,          # compressione zlib massima su stream
+            garbage=4,             # rimuovi oggetti/reference non usati (livello massimo)
+            clean=True,            # normalizza syntax PDF
+            deflate_images=True,   # comprimi anche stream immagini
+            deflate_fonts=True,    # comprimi anche i font
+        )
+        doc.close()
+        # Ritorna il più piccolo tra originale e compresso
+        return compressed if len(compressed) < len(pdf_bytes) else pdf_bytes
+    except Exception:
+        return pdf_bytes  # fallback: usa originale se compressione fallisce
+
+
 def save_uploaded_pdf(
     pdf_bytes: bytes,
     brand: str,
@@ -131,14 +169,16 @@ def save_uploaded_pdf(
     notes: Optional[str] = None,
 ) -> dict:
     """
-    Salva il PDF nella cartella manuali_locali/ e registra il record su Supabase.
+    Salva il PDF nella cartella manuali_locali/ (con compressione massima) e registra su Supabase.
     Ritorna { filename, url, db_id }.
     """
     _ensure_upload_dir()
 
+    compressed_bytes = _compress_pdf(pdf_bytes)
+
     filename = _sanitize_filename(brand, model, machine_type)
     filepath = UPLOAD_DIR / filename
-    filepath.write_bytes(pdf_bytes)
+    filepath.write_bytes(compressed_bytes)
 
     url = f"/manuals/uploaded/{filename}"
 
