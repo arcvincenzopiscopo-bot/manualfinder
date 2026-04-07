@@ -397,7 +397,7 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
 
       {/* ── Pannello azioni: salva / segnala ─────────────────────────────── */}
       {!showForm && !saved && !reported && (canSave || canReport) && (
-        <div style={{
+        <div className="manual-link-actions" style={{
           marginTop: 10,
           padding: '10px 12px',
           background: '#eff6ff',
