@@ -2,6 +2,7 @@
 OCR targa identificativa tramite Claude Vision (Livello 1) o Gemini Vision (Livello 2).
 Estrae: brand, modello, numero di serie, anno di fabbricazione.
 """
+import asyncio
 import json
 import re
 from typing import Optional
@@ -121,6 +122,49 @@ async def extract_plate_info(image_base64: str) -> PlateOCRResult:
             result.machine_type = enriched
 
     return result
+
+
+async def extract_plate_info_multishot(image_base64: str) -> PlateOCRResult:
+    """
+    Esegue 3 OCR in parallelo con preprocessing diversi e fa majority voting su brand+model.
+    Usato quando il primo tentativo restituisce confidence='low'.
+    """
+    from app.services.image_service import preprocess_plate_image, preprocess_plate_image_variant
+    variants = [
+        preprocess_plate_image(image_base64),           # variant 0: standard
+        preprocess_plate_image_variant(image_base64, 1),  # variant 1: alto contrasto B&W
+        preprocess_plate_image_variant(image_base64, 2),  # variant 2: denoised morbido
+    ]
+    results: list[PlateOCRResult] = await asyncio.gather(
+        *[extract_plate_info(v) for v in variants],
+        return_exceptions=True,
+    )
+    valid = [r for r in results if isinstance(r, PlateOCRResult)]
+    if not valid:
+        return await extract_plate_info(image_base64)
+
+    # Majority voting su brand (case-insensitive)
+    brand_counts: dict[str, int] = {}
+    for r in valid:
+        if r.brand:
+            k = r.brand.lower().strip()
+            brand_counts[k] = brand_counts.get(k, 0) + 1
+    best_brand = max(brand_counts, key=brand_counts.get) if brand_counts else None
+
+    # Tra i risultati con il brand vincente, scegli il più completo
+    winners = (
+        [r for r in valid if r.brand and r.brand.lower().strip() == best_brand]
+        if best_brand else valid
+    )
+    best = max(winners, key=lambda r: sum([
+        bool(r.brand), bool(r.model), bool(r.serial_number), bool(r.year),
+        r.confidence == "high", r.confidence == "medium",
+        len(r.raw_text or ""),
+    ]))
+    # Promuovi la confidence se almeno 2/3 concordano sul brand
+    if best_brand and brand_counts.get(best_brand, 0) >= 2 and best.confidence == "low":
+        best = best.model_copy(update={"confidence": "medium"})
+    return best
 
 
 # ── Lookup deterministico brand → tipo macchina ──────────────────────────────

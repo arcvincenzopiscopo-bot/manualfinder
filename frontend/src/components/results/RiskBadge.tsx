@@ -1,6 +1,9 @@
+import React from 'react'
+
 interface Props {
   text: string
   variant?: 'risk' | 'protection' | 'recommendation' | 'residual'
+  renderContent?: React.ReactNode  // Contenuto ricco (es. con badge pagina evidenziati)
 }
 
 const VARIANT_STYLE: Record<NonNullable<Props['variant']>, { bg: string; color: string; dot: string }> = {
@@ -10,7 +13,7 @@ const VARIANT_STYLE: Record<NonNullable<Props['variant']>, { bg: string; color: 
   residual:       { bg: '#fffbeb', color: '#92400e', dot: '#d97706' },
 }
 
-export function RiskBadge({ text, variant = 'risk' }: Props) {
+export function RiskBadge({ text, variant = 'risk', renderContent }: Props) {
   const style = VARIANT_STYLE[variant]
   return (
     <div style={{
@@ -29,7 +32,7 @@ export function RiskBadge({ text, variant = 'risk' }: Props) {
         marginTop: 5,
         flexShrink: 0,
       }} />
-      <span style={{ fontSize: 14, color: style.color, lineHeight: 1.5 }}>{text}</span>
+      <span style={{ fontSize: 14, color: style.color, lineHeight: 1.5 }}>{renderContent ?? text}</span>
     </div>
   )
 }

@@ -81,16 +81,21 @@ def _translation_note(lang: str) -> str:
     )
 
 
-def _build_inail_prompt() -> str:
+def _build_inail_prompt(machine_rules: Optional[dict] = None) -> str:
     """
     Prompt per analisi scheda INAIL: estrae rischi normativi, DPI, dispositivi di sicurezza,
     abilitazioni operatore, documenti da richiedere, verifiche periodiche, checklist sopralluogo.
+    Se machine_rules è fornito, aggiunge contesto specifico per tipo macchina da Supabase.
     """
-    return """Analizza questa scheda INAIL o documento normativo ed estrai le informazioni di sicurezza nel seguente formato JSON:
+    base = """Analizza questa scheda INAIL o documento normativo ed estrai le informazioni di sicurezza nel seguente formato JSON:
 
 {
   "rischi_principali": [
-    "[ALTA/MEDIA/BASSA] descrizione rischio specifico per questa categoria di macchina [Art. XX D.Lgs. 81/08 o norma applicabile]"
+    {
+      "testo": "[ALTA/MEDIA/BASSA] descrizione rischio specifico per questa categoria di macchina [Art. XX D.Lgs. 81/08 o norma applicabile]",
+      "probabilita": "P1 | P2 | P3",
+      "gravita": "S1 | S2 | S3"
+    }
   ],
   "dispositivi_protezione": [
     "DPI individuale (es. 'Elmetto EN 397', 'Imbracatura anticaduta EN 361 cat. C') OPPURE protezione collettiva (es. 'Parapetto perimetrale h≥1m') richiesta dalla normativa"
@@ -118,7 +123,7 @@ def _build_inail_prompt() -> str:
 }
 
 VINCOLI:
-- rischi_principali: 3-8 rischi, ORDINATI dalla gravità più ALTA alla più BASSA. Per ogni rischio includi il tag [ALTA/MEDIA/BASSA] e il riferimento normativo dove applicabile.
+- rischi_principali: 3-8 rischi come oggetti JSON con campi "testo", "probabilita", "gravita". ORDINATI da gravità S3→S1, a parità P3→P1. Il campo "testo" deve contenere [ALTA/MEDIA/BASSA] e riferimento normativo. Classificazione ISO 12100: probabilita = P1 (raro), P2 (possibile), P3 (probabile); gravita = S1 (lieve reversibile), S2 (grave/invalidante), S3 (morte/invalidante permanente).
 - dispositivi_protezione: distingui tra DPI (cosa INDOSSA l'operatore) e protezioni collettive (dispositivi sulla macchina o nell'area). 3-8 elementi SPECIFICI per questa categoria.
 - dispositivi_sicurezza: 2-5 dispositivi di sicurezza richiesti dalla normativa per questa categoria di macchina.
 - checklist: 4-6 voci azionabili IMMEDIATAMENTE in sopralluogo. Ogni voce DEVE rispondere a tre domande: COSA verificare, DOVE trovarlo, COME stabilire la conformità. Includi il riferimento normativo tra parentesi quadre.
@@ -126,15 +131,36 @@ VINCOLI:
 - abilitazione_operatore: se prevista da normativa vigente (Accordo Stato-Regioni nella versione più aggiornata in vigore, o norma settoriale specifica), descrivila in dettaglio (tipo corso, durata minima, ente formatore). Cita sempre la versione normativa attualmente in vigore, non necessariamente quella del 22/02/2012 se aggiornata.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo documento. Non integrare con conoscenze generali.
 - Usa terminologia precisa del D.Lgs. 81/2008.
+- CITAZIONI OBBLIGATORIE: per ogni voce estratta dal documento includi OBBLIGATORIAMENTE il riferimento alla sezione o pagina in formato [pag. X] o [Sez. X.X] DENTRO il campo "testo". Se non trovi il riferimento esatto, ometti la voce piuttosto che inventare un numero.
 - Rispondi SOLO con il JSON valido."""
+    return _append_machine_rules(base, machine_rules)
 
 
-def _build_producer_prompt(brand: str, model: str) -> str:
+def _append_machine_rules(prompt: str, machine_rules: Optional[dict]) -> str:
+    """Appende le regole specifiche per tipo macchina al prompt, se disponibili."""
+    if not machine_rules:
+        return prompt
+    sections = []
+    if machine_rules.get("extra_context"):
+        sections.append(f"CONTESTO SPECIFICO TIPO MACCHINA:\n{machine_rules['extra_context']}")
+    if machine_rules.get("specific_risks"):
+        sections.append(f"RISCHI SPECIFICI DA EVIDENZIARE SEMPRE PER QUESTA CATEGORIA:\n{machine_rules['specific_risks']}")
+    if machine_rules.get("normative_refs"):
+        sections.append(f"NORMATIVE OBBLIGATORIE DA CITARE PER QUESTA CATEGORIA:\n{machine_rules['normative_refs']}")
+    if machine_rules.get("inspection_focus"):
+        sections.append(f"FOCUS ISPETTIVO PRIORITARIO PER QUESTA CATEGORIA:\n{machine_rules['inspection_focus']}")
+    if sections:
+        return prompt + "\n\n" + "\n\n".join(sections)
+    return prompt
+
+
+def _build_producer_prompt(brand: str, model: str, machine_rules: Optional[dict] = None) -> str:
     """
     Prompt per analisi manuale produttore: estrae raccomandazioni operative specifiche,
     limiti operativi con valori numerici, procedure di emergenza, pittogrammi, checklist preuso.
+    Se machine_rules è fornito, aggiunge contesto specifico per tipo macchina da Supabase.
     """
-    return f"""Analizza il manuale del macchinario {brand} {model} ed estrai le informazioni di sicurezza specifiche del costruttore nel seguente formato JSON:
+    base = f"""Analizza il manuale del macchinario {brand} {model} ed estrai le informazioni di sicurezza specifiche del costruttore nel seguente formato JSON:
 
 {{
   "raccomandazioni_produttore": [
@@ -177,8 +203,10 @@ VINCOLI:
 - pittogrammi_sicurezza: segnala SOLO i pittogrammi esplicitamente citati nel manuale con la loro posizione sulla macchina.
 - checklist: 5-8 voci azionabili in sopralluogo SPECIFICHE per {brand} {model}. Ogni voce: verbo imperativo + cosa guardare/toccare + dove + criterio di conformità + riferimento sezione/pagina manuale.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo manuale. Per elementi non presenti, lascia la lista vuota — NON integrare con conoscenze generali sul tipo di macchina.
+- CITAZIONI OBBLIGATORIE: ogni voce deve contenere il riferimento alla pagina o sezione del manuale in formato [pag. X] o [Sez. X.X] DENTRO il campo "testo". Se non trovi il riferimento esatto, ometti la voce piuttosto che inventare un numero di pagina.
 - Se il manuale è in altra lingua: TRADUCI tutto in italiano. Non lasciare termini stranieri.
 - Rispondi SOLO con il JSON valido."""
+    return _append_machine_rules(base, machine_rules)
 
 
 def _build_analysis_prompt(brand: str, model: str) -> str:
@@ -187,7 +215,11 @@ def _build_analysis_prompt(brand: str, model: str) -> str:
 
 {{
   "rischi_principali": [
-    "[ALTA/MEDIA/BASSA] rischio di INFORTUNIO O DANNO ALLA SALUTE specifico per {brand} {model} [riferimento normativo o sezione documento]. INCLUDI SOLO rischi che minacciano l'incolumità di persone (schiacciamento, ribaltamento, caduta, elettrocuzione, esplosione, esposizione agenti nocivi, investimento). ESCLUDI rischi di guasto meccanico, intasamento filtri, usura componenti, sovraccarico motore o danni alla sola macchina senza conseguenze per persone."
+    {{
+      "testo": "[ALTA/MEDIA/BASSA] rischio di INFORTUNIO O DANNO ALLA SALUTE specifico per {brand} {model} [riferimento normativo o sezione documento]. INCLUDI SOLO rischi che minacciano l'incolumità di persone.",
+      "probabilita": "P1 | P2 | P3",
+      "gravita": "S1 | S2 | S3"
+    }}
   ],
   "dispositivi_protezione": [
     "DPI (cosa indossa l'operatore) OPPURE protezione collettiva — specifica e concreta per questo macchinario"
@@ -451,6 +483,14 @@ async def generate_safety_card(
     """
     provider = settings.get_analysis_provider()
 
+    # Carica regole prompt per tipo macchina da Supabase (cache 15 min)
+    machine_rules: Optional[dict] = None
+    try:
+        from app.services.prompt_rules_service import get_rules_for_machine_type
+        machine_rules = get_rules_for_machine_type(machine_type or "")
+    except Exception:
+        pass
+
     # Compatibilità legacy: se arriva pdf_bytes dalla vecchia firma
     if pdf_bytes and not inail_bytes and not producer_bytes:
         inail_bytes = pdf_bytes
@@ -500,6 +540,7 @@ async def generate_safety_card(
             brand, model, inail_bytes, inail_url, producer_bytes, producer_url, producer_page_count, provider,
             allegato_v_context=allegato_v_context,
             producer_source_label=effective_producer_label,
+            machine_rules=machine_rules,
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
@@ -544,6 +585,18 @@ async def generate_safety_card(
     # è nota e non ambigua, forza i valori corretti indipendentemente da quanto
     # estratto dal PDF o generato dall'AI (che spesso sbaglia su queste categorie).
     _apply_normative_overrides(card, machine_type)
+
+    # Normative applicabili: mapping deterministico per tipo macchina + norme dalla targa OCR
+    try:
+        from app.data.machine_normative import get_normative
+        card.normative_applicabili = get_normative(machine_type or "")
+        if norme:
+            # Anteponi le norme dalla targa OCR (rilevate direttamente dalla macchina)
+            seen: set[str] = set(card.normative_applicabili)
+            extra = [n for n in norme if n not in seen]
+            card.normative_applicabili = extra + card.normative_applicabili
+    except Exception:
+        pass  # Non bloccare la generazione della scheda
 
     return card
 
@@ -616,6 +669,7 @@ async def _analyze_dual_source(
     provider: str,
     allegato_v_context: Optional[str] = None,
     producer_source_label: Optional[str] = None,
+    machine_rules: Optional[dict] = None,
 ) -> SafetyCard:
     """
     Analisi combinata: INAIL → rischi/DPI/residui; produttore → raccomandazioni specifiche.
@@ -623,8 +677,8 @@ async def _analyze_dual_source(
     """
     import asyncio
 
-    inail_prompt = _build_inail_prompt()
-    producer_prompt = _build_producer_prompt(brand, model)
+    inail_prompt = _build_inail_prompt(machine_rules=machine_rules)
+    producer_prompt = _build_producer_prompt(brand, model, machine_rules=machine_rules)
     if allegato_v_context:
         inail_prompt += f"\n\nCONTESTO ALLEGATO V (macchina ante-1996):\n{allegato_v_context}\n{ALLEGATO_V_EXTRA_FIELDS}"
 
@@ -650,8 +704,16 @@ async def _analyze_dual_source(
     producer_label = producer_source_label or f"Produttore ({brand})"
 
     def _tag_items(items: list, fonte: str) -> list:
-        """Converte una lista di stringhe in lista di {testo, fonte}."""
-        return [{"testo": str(item), "fonte": fonte} for item in items if item]
+        """Converte una lista di stringhe/dicts in {testo, fonte, ...}; preserva campi extra (probabilita, gravita)."""
+        result = []
+        for item in items:
+            if not item:
+                continue
+            if isinstance(item, dict):
+                result.append(item if "fonte" in item else {**item, "fonte": fonte})
+            else:
+                result.append({"testo": str(item), "fonte": fonte})
+        return result
 
     def _tag_devices(devices: list, fonte: str) -> list:
         """Aggiunge il campo fonte a ogni dispositivo di sicurezza."""

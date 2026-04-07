@@ -303,6 +303,105 @@ async def upload_manual(
     return {"status": "ok", "filename": result["filename"], "url": result["url"]}
 
 
+# ── Regole prompt per tipo macchina (admin) ──────────────────────────────────
+
+@router.get("/prompt-rules")
+async def get_prompt_rules(limit: int = Query(100, ge=1, le=500)):
+    """[Admin] Lista regole prompt per tipo macchina da Supabase."""
+    if not saved_manuals_service.settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    try:
+        import psycopg2.extras
+        with saved_manuals_service._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM machine_prompt_rules ORDER BY machine_type LIMIT %s",
+                    (limit,),
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            r["id"] = str(r["id"])
+            if r.get("updated_at"):
+                r["updated_at"] = str(r["updated_at"])
+        return {"count": len(rows), "rules": rows}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/prompt-rules")
+async def upsert_prompt_rule(body: dict):
+    """
+    [Admin] Crea o aggiorna una regola prompt per tipo macchina.
+    Campi: machine_type (obbligatorio), extra_context, specific_risks,
+           normative_refs, inspection_focus, is_active.
+    """
+    if not saved_manuals_service.settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    machine_type = body.get("machine_type", "").strip().lower()
+    if not machine_type:
+        raise HTTPException(status_code=400, detail="machine_type obbligatorio")
+    try:
+        with saved_manuals_service._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO machine_prompt_rules
+                        (machine_type, extra_context, specific_risks, normative_refs,
+                         inspection_focus, is_active, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, now())
+                    ON CONFLICT (machine_type) DO UPDATE SET
+                        extra_context    = EXCLUDED.extra_context,
+                        specific_risks   = EXCLUDED.specific_risks,
+                        normative_refs   = EXCLUDED.normative_refs,
+                        inspection_focus = EXCLUDED.inspection_focus,
+                        is_active        = EXCLUDED.is_active,
+                        updated_at       = now()
+                    """,
+                    (
+                        machine_type,
+                        body.get("extra_context"),
+                        body.get("specific_risks"),
+                        body.get("normative_refs"),
+                        body.get("inspection_focus"),
+                        body.get("is_active", True),
+                    ),
+                )
+            conn.commit()
+        # Invalida cache per applicare immediatamente
+        try:
+            from app.services.prompt_rules_service import invalidate_cache
+            invalidate_cache()
+        except Exception:
+            pass
+        return {"status": "ok", "machine_type": machine_type}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/prompt-rules/{machine_type}")
+async def delete_prompt_rule(machine_type: str):
+    """[Admin] Disattiva una regola prompt (is_active = false)."""
+    if not saved_manuals_service.settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    try:
+        with saved_manuals_service._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE machine_prompt_rules SET is_active = false, updated_at = now() WHERE machine_type = %s",
+                    (machine_type.strip().lower(),),
+                )
+                updated = cur.rowcount
+            conn.commit()
+        try:
+            from app.services.prompt_rules_service import invalidate_cache
+            invalidate_cache()
+        except Exception:
+            pass
+        return {"status": "ok", "disabled": updated > 0}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/uploaded/{filename}")
 async def get_uploaded_manual(filename: str):
     """Serve un PDF caricato dagli ispettori dalla cartella manuali_locali/."""

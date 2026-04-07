@@ -16,6 +16,40 @@ SAFETY_KEYWORDS = [
 ]
 
 
+async def head_check_url(url: str, timeout: int = 8) -> tuple[bool, str]:
+    """
+    Verifica HEAD prima di scaricare: Content-Type, Content-Length.
+    Ritorna (ok, motivo_rifiuto). Se HEAD non supportato (405/501) → (True, "") → procedi.
+    Salta il check per URL locali (file system).
+    """
+    if url.startswith("/manuals/"):
+        return True, ""
+    import httpx
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; ManualFinder/1.0)"},
+        ) as c:
+            r = await c.head(url)
+        if r.status_code in (405, 501, 400, 403):
+            return True, ""  # HEAD non supportato o bloccato: procedi comunque
+        if r.status_code >= 400:
+            return False, f"HTTP {r.status_code}"
+        ct = r.headers.get("content-type", "").lower()
+        # Rifiuta solo se CHIARAMENTE non-PDF (text/html e URL non finisce con .pdf)
+        if "text/html" in ct and not url.lower().endswith(".pdf"):
+            return False, f"Content-Type: {ct}"
+        cl = r.headers.get("content-length")
+        if cl:
+            max_bytes = settings.max_pdf_size_mb * 1024 * 1024
+            if int(cl) > max_bytes:
+                return False, f"Troppo grande: {int(cl) // 1024 // 1024}MB"
+        return True, ""
+    except Exception:
+        return True, ""  # Fallback: non bloccare la pipeline
+
+
 async def download_pdf(url: str) -> Tuple[Optional[bytes], str]:
     """
     Scarica un PDF dall'URL fornito o legge un file locale.

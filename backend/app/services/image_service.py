@@ -50,6 +50,33 @@ def check_image_brightness(image_base64: str) -> dict:
     }
 
 
+def preprocess_plate_image_variant(image_base64: str, variant: int) -> str:
+    """
+    Preprocessing alternativo per multi-shot OCR.
+    variant=1: alto contrasto B&W — per targhe ossidate o con testo inciso/in rilievo
+    variant=2: denoised morbido — per riflessioni, sovraesposizione, granularità
+    """
+    raw = base64.b64decode(image_base64)
+    img = Image.open(io.BytesIO(raw)).convert("RGB")
+    img = _resize_for_api(img, MAX_DIMENSION)
+
+    if variant == 1:
+        img = img.convert("L").convert("RGB")  # Grayscale
+        img = _auto_levels(img)
+        img = ImageEnhance.Contrast(img).enhance(3.0)
+        img = ImageEnhance.Sharpness(img).enhance(3.0)
+        img = img.filter(ImageFilter.UnsharpMask(radius=1, percent=200, threshold=1))
+    elif variant == 2:
+        img = img.filter(ImageFilter.GaussianBlur(radius=1))  # Riduce rumore/riflessi
+        img = _auto_levels(img)
+        img = ImageEnhance.Contrast(img).enhance(1.4)
+        img = ImageEnhance.Sharpness(img).enhance(1.5)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=92, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 def _resize_for_api(img: Image.Image, max_dimension: int) -> Image.Image:
     w, h = img.size
     if max(w, h) > max_dimension:

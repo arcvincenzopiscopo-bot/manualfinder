@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import type { SafetyCard as SafetyCardType, SafetyItem, DispositivoSicurezza, PlateOCRResult } from '../../types'
+import React from 'react'
 import { RiskBadge } from './RiskBadge'
 import { ManualLink } from './ManualLink'
 import { ExportButton } from './ExportButton'
@@ -22,6 +23,28 @@ const SOURCE_BADGE_COLORS: Record<string, { bg: string; color: string }> = {
   'INAIL': { bg: '#dcfce7', color: '#166534' },
   'AI':    { bg: '#fef9c3', color: '#854d0e' },
   'DB':    { bg: '#f3e8ff', color: '#6b21a8' },  // viola — manuali verificati da ispettori
+}
+
+// Evidenzia riferimenti pagina/sezione manuale: [pag. 23], [Sez. 2.4], [p. 12], [cap. 3]
+function highlightPageRefs(text: string): React.ReactNode {
+  const parts = text.split(/(\[(?:pag|Sez|p|cap|sezione|section)\.\s*[\w.]+\])/gi)
+  return parts.map((part, i) =>
+    /^\[(?:pag|Sez|p|cap|sezione|section)\./i.test(part)
+      ? <span key={i} style={{
+          display: 'inline-block',
+          padding: '0 5px',
+          margin: '0 2px',
+          borderRadius: 4,
+          background: '#f1f5f9',
+          color: '#475569',
+          fontSize: '0.82em',
+          fontWeight: 600,
+          border: '1px solid #cbd5e1',
+          fontFamily: 'monospace',
+          whiteSpace: 'nowrap',
+        }}>{part}</span>
+      : part
+  )
 }
 
 function getSourceBadgeStyle(label: string) {
@@ -108,16 +131,30 @@ function Section({ title, items, variant, icon }: SectionProps) {
             // Compatibilità: accetta sia {testo, fonte} che stringa plain
             const testo = typeof item === 'string' ? item : (item.testo ?? '')
             const fonte = typeof item === 'string' ? null : (item.fonte ?? null)
+            const probabilita = typeof item !== 'string' ? item.probabilita : undefined
+            const gravita = typeof item !== 'string' ? item.gravita : undefined
             return (
               <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <RiskBadge text={testo} variant={variant} />
+                  <RiskBadge text={testo} variant={variant} renderContent={highlightPageRefs(testo)} />
                 </div>
-                {fonte && (
-                  <div style={{ paddingTop: 10, flexShrink: 0 }}>
-                    <SourceBadge label={fonte} size={9} />
-                  </div>
-                )}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, paddingTop: 10, flexShrink: 0 }}>
+                  {fonte && <SourceBadge label={fonte} size={9} />}
+                  {probabilita && gravita && (
+                    <span title={`ISO 12100 — Probabilità: ${probabilita}, Gravità: ${gravita}`} style={{
+                      padding: '1px 5px',
+                      borderRadius: 4,
+                      background: gravita === 'S3' ? '#fef2f2' : gravita === 'S2' ? '#fff7ed' : '#f0fdf4',
+                      color: gravita === 'S3' ? '#991b1b' : gravita === 'S2' ? '#9a3412' : '#166534',
+                      fontSize: 9,
+                      fontWeight: 700,
+                      fontFamily: 'monospace',
+                      cursor: 'help',
+                    }}>
+                      {probabilita}×{gravita}
+                    </span>
+                  )}
+                </div>
               </div>
             )
           })}
@@ -366,6 +403,59 @@ function PittogrammiSection({ items }: { items: string[] }) {
               lineHeight: 1.5,
             }}>
               ⚠ {item}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NormativeSection({ items }: { items: string[] }) {
+  const [open, setOpen] = useState(false)  // collapsed di default: non ingombra il flusso ispettivo
+  if (!items.length) return null
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '12px 14px',
+          background: '#f0f9ff',
+          border: '1px solid #bae6fd',
+          borderRadius: open ? '8px 8px 0 0' : 8,
+          cursor: 'pointer',
+          fontWeight: 700,
+          fontSize: 15,
+          color: '#0c4a6e',
+          gap: 8,
+        }}
+      >
+        <span>📐 Normative applicabili</span>
+        <span style={{ fontSize: 12, color: '#94a3b8', flexShrink: 0 }}>
+          {items.length} {open ? '▲' : '▼'}
+        </span>
+      </button>
+      {open && (
+        <div style={{
+          border: '1px solid #bae6fd',
+          borderTop: 'none',
+          borderRadius: '0 0 8px 8px',
+          background: '#fff',
+          padding: '8px 14px',
+        }}>
+          {items.map((norm, i) => (
+            <div key={i} style={{
+              fontSize: 12,
+              color: '#0369a1',
+              padding: '5px 0',
+              borderBottom: i < items.length - 1 ? '1px solid #f0f9ff' : 'none',
+              lineHeight: 1.5,
+            }}>
+              📌 {norm}
             </div>
           ))}
         </div>
@@ -640,6 +730,9 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
       {card.verifiche_periodiche && (
         <VerifichePeriodicheBanner testo={card.verifiche_periodiche} />
       )}
+
+      {/* Normative applicabili per il tipo macchina (collapsed di default) */}
+      <NormativeSection items={card.normative_applicabili ?? []} />
 
       {/* Sezioni sicurezza */}
       <Section

@@ -81,6 +81,7 @@ class SafetyCard(BaseModel):
     limiti_operativi: List[dict] = []                # [{testo, fonte}] — portate, pressioni, pendenze
     pittogrammi_sicurezza: List[str] = []            # Pittogrammi obbligatori da verificare sulla macchina
     confidence_ai: Optional[str] = None             # "high"|"medium"|"low" — solo in fallback mode
+    normative_applicabili: List[str] = []           # Normative vigenti per il tipo macchina (ISO, EN, D.Lgs.)
     # Avvisi Safety Gate EU — alert per richiami o difetti noti
     safety_alerts: List[dict] = []
     # Allegato V / ante-CE — campi aggiuntivi per macchine pre-1996

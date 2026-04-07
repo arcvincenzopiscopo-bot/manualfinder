@@ -27,6 +27,9 @@ async def analyze_ocr(request: Request, body: PlateAnalysisRequest):
     processed = image_service.preprocess_plate_image(body.image_base64)
     brightness = image_service.check_image_brightness(body.image_base64)
     result = await vision_service.extract_plate_info(processed)
+    # Multi-shot OCR: se confidence bassa, ritenta con 2 preprocessing alternativi
+    if result.confidence == "low":
+        result = await vision_service.extract_plate_info_multishot(body.image_base64)
 
     return {
         "brand": result.brand,
@@ -369,6 +372,12 @@ async def _pipeline(request: FullAnalysisRequest):
         _analysis_provider = settings.get_analysis_provider()
 
         async def _download_and_score(candidate):
+            # Pre-screening HEAD: evita di scaricare pagine HTML o file troppo grandi
+            import logging as _log
+            ok, reason = await pdf_service.head_check_url(candidate.url)
+            if not ok:
+                _log.getLogger(__name__).info("HEAD skip: %s — %s", candidate.url[:80], reason)
+                return None
             pdf_data, err = await pdf_service.download_pdf(candidate.url)
             if pdf_data:
                 pages = pdf_service.count_pdf_pages(pdf_data)
@@ -385,7 +394,6 @@ async def _pipeline(request: FullAnalysisRequest):
                     if not is_manual:
                         score = 0  # Forza rifiuto — l'AI ha confermato non-manuale
                 return (score, pdf_data, candidate.url, candidate.relevance_score, pages)
-            import logging as _log
             _log.getLogger(__name__).info("PDF download failed: %s — %s", candidate.url[:80], err)
             return None
 

@@ -25,6 +25,9 @@ export interface ManualSearchResult {
 export interface SafetyItem {
   testo: string
   fonte: string  // "INAIL" | "Produttore (Brand)" | "AI"
+  // Classificazione rischio ISO 12100 (presente solo su rischi_principali)
+  probabilita?: 'P1' | 'P2' | 'P3'  // P1=raro, P2=possibile, P3=probabile
+  gravita?: 'S1' | 'S2' | 'S3'      // S1=lieve, S2=grave, S3=mortale/invalidante
 }
 
 // Dispositivo di sicurezza installato sulla macchina dal costruttore
@@ -86,6 +89,7 @@ export interface SafetyCard {
   limiti_operativi: SafetyItem[]               // Portate, pressioni, pendenze con valori numerici
   pittogrammi_sicurezza: string[]              // Pittogrammi obbligatori da verificare sulla macchina
   confidence_ai: 'high' | 'medium' | 'low' | null  // Solo in modalità fallback AI
+  normative_applicabili: string[]                   // Normative vigenti per il tipo macchina
   safety_alerts: Array<{
     title: string
     risk_level: 'serious' | 'medium' | 'low' | 'unknown'
