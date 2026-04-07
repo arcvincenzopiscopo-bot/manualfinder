@@ -2,10 +2,12 @@
 Router per servire i manuali locali INAIL, gestire i manuali salvati su Supabase
 e gestire l'upload di nuovi manuali PDF da parte degli ispettori.
 """
+import asyncio
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from typing import List, Optional
 from app.services import local_manuals_service, saved_manuals_service, upload_service
+from app.services import feedback_analyzer_service
 from app.models.requests import SaveManualRequest
 
 router = APIRouter()
@@ -71,6 +73,18 @@ async def submit_feedback(
         useful_for_type=useful_for_type,
         notes=notes,
     )
+
+    # Auto-trigger analisi ogni 5 nuovi feedback non ancora processati
+    try:
+        unanalyzed = saved_manuals_service.count_unanalyzed_feedback()
+        if unanalyzed >= 5:
+            from app.config import settings as _settings
+            asyncio.create_task(
+                feedback_analyzer_service.run_analysis(_settings.get_analysis_provider())
+            )
+    except Exception:
+        pass
+
     return {"status": "ok"}
 
 
@@ -103,6 +117,51 @@ async def get_feedback(
             r["id"] = str(r["id"])
             r["ts"] = str(r["ts"])
         return {"count": len(rows), "entries": rows}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/feedback/analyze")
+async def analyze_feedback():
+    """
+    [Admin] Trigger manuale: analizza tutti i feedback in sospeso e crea/aggiorna
+    le regole di filtraggio URL in url_filter_rules.
+    """
+    from app.config import settings as _settings
+    provider = _settings.get_analysis_provider()
+    try:
+        result = await feedback_analyzer_service.run_analysis(provider)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/feedback/rules")
+async def get_filter_rules(limit: int = Query(100, ge=1, le=500)):
+    """
+    [Admin] Lista regole di filtraggio URL attive estratte dai feedback ispettori.
+    """
+    if not saved_manuals_service.settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    try:
+        import psycopg2.extras
+        with saved_manuals_service._get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, rule_type, rule_value, context_machine_type,
+                           reason, feedback_count, source_urls, is_active, created_at
+                    FROM url_filter_rules
+                    ORDER BY feedback_count DESC, created_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            r["id"] = str(r["id"])
+            r["created_at"] = str(r["created_at"])
+        return {"count": len(rows), "rules": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

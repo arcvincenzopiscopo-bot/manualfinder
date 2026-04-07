@@ -14,6 +14,44 @@ def _get_conn():
     return psycopg2.connect(settings.database_url)
 
 
+import time as _time
+
+# ── Cache URL bloccati (segnalati come non pertinenti) ────────────────────────
+_blocked_urls_cache: set[str] = set()
+_blocked_urls_ts: float = 0.0
+_BLOCKED_CACHE_TTL = 900  # 15 minuti
+
+
+def get_blocked_urls() -> set[str]:
+    """
+    Restituisce il set degli URL segnalati dagli ispettori come non manuali d'uso
+    o non pertinenti per qualsiasi categoria (feedback_type IN 'not_a_manual', 'wrong_category').
+    Cache in-memory aggiornata ogni 15 minuti.
+    Fallisce silenziosamente — ritorna set vuoto se il DB non è raggiungibile.
+    """
+    global _blocked_urls_cache, _blocked_urls_ts
+    now = _time.monotonic()
+    if now - _blocked_urls_ts < _BLOCKED_CACHE_TTL:
+        return _blocked_urls_cache
+    if not settings.database_url:
+        return set()
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT url FROM manual_feedback
+                    WHERE feedback_type IN ('not_a_manual', 'wrong_category')
+                    """,
+                )
+                urls = {row[0] for row in cur.fetchall()}
+        _blocked_urls_cache = urls
+        _blocked_urls_ts = now
+        return urls
+    except Exception:
+        return _blocked_urls_cache  # Ritorna la cache precedente in caso di errore
+
+
 def check_url_saved(url: str) -> bool:
     """Ritorna True se l'URL è già presente in saved_manuals."""
     if not settings.database_url:
@@ -61,6 +99,31 @@ def save_feedback(
                 conn.commit()
     except Exception:
         pass
+
+
+def count_unanalyzed_feedback() -> int:
+    """
+    Conta i feedback non ancora convertiti in regole in url_filter_rules.
+    Usato per decidere se triggerare l'analisi automatica.
+    """
+    if not settings.database_url:
+        return 0
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM manual_feedback
+                    WHERE feedback_type IN ('not_a_manual', 'wrong_category', 'useful_other_category')
+                      AND url NOT IN (
+                          SELECT unnest(source_urls) FROM url_filter_rules
+                      )
+                    """
+                )
+                row = cur.fetchone()
+                return row[0] if row else 0
+    except Exception:
+        return 0
 
 
 def save_manual(data: dict) -> dict:
@@ -157,11 +220,8 @@ def find_for_search(
                         """
                         SELECT *, 'generic' AS _match_type
                         FROM saved_manuals
-                        WHERE (
-                            manual_brand ILIKE 'GENERICO'
-                            OR manual_machine_type ILIKE %s
-                        )
-                        AND id::text NOT IN %s
+                        WHERE manual_machine_type ILIKE %s
+                          AND id::text NOT IN %s
                         ORDER BY
                             CASE WHEN manual_brand ILIKE 'GENERICO' THEN 0 ELSE 1 END,
                             created_at DESC

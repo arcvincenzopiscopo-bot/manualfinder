@@ -305,6 +305,17 @@ async def _pipeline(request: FullAnalysisRequest):
             if any(d in domain for d in _EXCLUDE_DOMAINS):
                 return False
 
+            # Regole dinamiche apprese dai feedback ispettori (cache 15 min)
+            try:
+                from app.services.feedback_analyzer_service import get_dynamic_rules
+                _dyn_domains, _dyn_fragments, _ = get_dynamic_rules()
+                if any(d in domain for d in _dyn_domains):
+                    return False
+                if any(f in path for f in _dyn_fragments):
+                    return False
+            except Exception:
+                pass
+
             return True
 
         producer_candidates = [c for c in producer_candidates if _is_industrial_url(c.url)]
