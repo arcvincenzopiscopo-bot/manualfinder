@@ -265,6 +265,18 @@ def score_pdf_safety_relevance(
         "caratteristiche tecniche principali",  # tipico delle brochure, non dei manuali
     ]
 
+    # Keyword strutturali — indicano presenza di indice/capitoli nelle prime pagine
+    # Un documento con questi elementi è quasi certamente un manuale, non una brochure
+    MANUAL_TOC_KW = [
+        "indice", "sommario", "table of contents", "contents", "inhaltsverzeichnis", "sommaire",
+        "capitolo 1", "capitolo 2", "chapter 1", "chapter 2", "kapitel 1", "chapitre 1",
+        "sezione 1", "sezione 2", "section 1", "section 2", "abschnitt 1",
+        "1.1 ", "1.2 ", "2.1 ", "2.2 ",   # numerazione sotto-sezioni
+        "parte i", "parte ii", "part i", "part ii", "teil i",
+        "introduzione", "introduction", "einleitung", "introduction",
+        "avvertenze generali", "general warnings", "allgemeine warnhinweise",
+    ]
+
     try:
         import fitz
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -285,6 +297,17 @@ def score_pdf_safety_relevance(
 
         raw = (manual_hits * 10) + (high_hits * 6) + (normal_hits * 2) \
               - (negative_hits * 4) - (brochure_hits * 8) - (wrong_domain_hits * 15)
+
+        # ── Controllo struttura: TOC/capitoli nelle prime 3 pagine ───────────
+        # Un manuale reale ha indice e capitoli — una brochure non ce li ha mai
+        first_pages_text = full_text[:4000]
+        toc_hits = sum(1 for kw in MANUAL_TOC_KW if kw in first_pages_text)
+        if toc_hits >= 3:
+            raw += 15   # struttura manuale ben definita
+        elif toc_hits >= 1:
+            raw += 5    # qualche elemento strutturale
+        elif total_pages < 15 and manual_hits < 3 and high_hits < 2:
+            raw -= 20   # corto, senza struttura e senza keyword chiave → brochure
 
         # Penalità pagine: meno pagine = più probabile che sia brochure/datasheet
         if total_pages < 5:
@@ -421,8 +444,18 @@ def classify_pdf_match(
         brand_norm = brand.lower().strip()
         model_norm = model.lower().strip()
 
-        brand_found = len(brand_norm) >= 3 and brand_norm in text
-        model_found = len(model_norm) >= 3 and model_norm in text
+        # Campione testo prime 3 pagine (cover + introduzione): segnale più affidabile
+        head_text = text[:4000]
+
+        # "exact": il brand appare nella cover/prime pagine (forte segnale)
+        #   O appare >= 2 volte nel documento intero (non solo menzione di passaggio)
+        # Per modello: >= 2 occorrenze nel testo intero (evita match casuali su stringhe corte)
+        brand_in_head = len(brand_norm) >= 3 and brand_norm in head_text
+        brand_count = text.count(brand_norm) if len(brand_norm) >= 3 else 0
+        model_count = text.count(model_norm) if len(model_norm) >= 3 else 0
+
+        brand_found = brand_in_head or brand_count >= 2
+        model_found = model_count >= 2
 
         if brand_found or model_found:
             return "exact"
@@ -433,15 +466,12 @@ def classify_pdf_match(
             return "category"
 
         # Cerca categoria in tutte le lingue supportate.
-        # Soglia occorrenze dipende dalla dimensione del documento:
-        # - PDF lungo (>20 pag): servono >=3 occorrenze per evitare falsi positivi su
-        #   documenti generici multi-categoria (es. "Macchine in edilizia")
-        # - PDF corto (<=20 pag): basta 1 occorrenza — è un documento focalizzato
+        # Soglia uniforme >= 3 occorrenze: evita falsi positivi su documenti generici
+        # multi-categoria (es. "Macchine in edilizia" che cita ogni tipo di macchina 1-2 volte).
         cat_keywords = _get_category_keywords(machine_type)
         if cat_keywords:
             total_count = sum(text.count(kw) for kw in cat_keywords)
-            min_occ = 1 if total_pages <= 20 else 3
-            if total_count >= min_occ:
+            if total_count >= 3:
                 return "category"
 
         return "unrelated"
@@ -637,6 +667,82 @@ def chunk_text(text: str, max_chars: int = 80000) -> list[str]:
         start = cut + 1
 
     return [c for c in chunks if c.strip()]
+
+
+async def ai_quick_validate(
+    pdf_bytes: bytes,
+    brand: str,
+    model: str,
+    machine_type: str,
+    provider: str,
+) -> bool:
+    """
+    Validazione AI rapida: il PDF è un manuale d'uso/operatore?
+    Usato solo per i casi ambigui (score 5-35 da score_pdf_safety_relevance).
+    Usa modello economico (Haiku/Flash-Lite), costo ~$0.00002 per chiamata.
+    Fallisce silenziosamente → True (non blocca la pipeline).
+    """
+    import asyncio as _asyncio
+    try:
+        # Estrai testo prime 3 pagine (cover + indice + prime istruzioni)
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        pages = min(3, len(doc))
+        first_text = "".join(doc[i].get_text() for i in range(pages)).strip()
+        doc.close()
+
+        if not first_text or len(first_text) < 80:
+            return True  # PDF scansionato o vuoto: non scartare
+
+        prompt = (
+            f"Stai cercando un MANUALE D'USO E MANUTENZIONE per: {brand} {model}"
+            f" ({machine_type or 'macchinario industriale'}).\n\n"
+            f"TESTO PRIME PAGINE PDF:\n{first_text[:1800]}\n\n"
+            "Questo documento è un MANUALE D'USO/OPERATORE (libretto istruzioni per l'operatore)?\n"
+            "Rispondi SOLO con una parola: MANUALE oppure NON_MANUALE\n"
+            "MANUALE: libretto uso, manuale operatore, istruzioni d'uso, operator manual, bedienungsanleitung\n"
+            "NON_MANUALE: catalogo ricambi, brochure commerciale, datasheet, scheda prodotto, "
+            "manuale officina/riparazione, service manual, listino prezzi"
+        )
+
+        answer = ""
+        if provider == "anthropic":
+            import anthropic
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            resp = await _asyncio.wait_for(
+                client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=5,
+                    messages=[{"role": "user", "content": prompt}],
+                ),
+                timeout=8,
+            )
+            answer = resp.content[0].text.strip().upper()
+
+        elif provider == "gemini":
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=settings.gemini_api_key)
+            resp = await _asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=5, temperature=0.0,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    ),
+                ),
+                timeout=8,
+            )
+            answer = resp.text.strip().upper()
+
+        else:
+            return True
+
+        return "NON_MANUALE" not in answer
+
+    except Exception:
+        return True  # Fallback silenzioso — non blocca la pipeline
 
 
 def pdf_to_base64(pdf_bytes: bytes) -> str:

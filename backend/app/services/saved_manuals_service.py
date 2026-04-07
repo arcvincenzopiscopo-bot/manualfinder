@@ -16,18 +16,24 @@ def _get_conn():
 
 import time as _time
 
-# ── Cache URL bloccati (segnalati come non pertinenti) ────────────────────────
+# ── Cache URL bloccati ────────────────────────────────────────────────────────
+# Blocco assoluto: non sono manuali d'uso (brochure, cataloghi, ecc.)
 _blocked_urls_cache: set[str] = set()
 _blocked_urls_ts: float = 0.0
+
+# Blocco contestuale: sono manuali ma per categoria diversa — (url, machine_type)
+_context_blocked_cache: set[tuple[str, str]] = set()
+_context_blocked_ts: float = 0.0
+
 _BLOCKED_CACHE_TTL = 900  # 15 minuti
 
 
 def get_blocked_urls() -> set[str]:
     """
-    Restituisce il set degli URL segnalati dagli ispettori come non manuali d'uso
-    o non pertinenti per qualsiasi categoria (feedback_type IN 'not_a_manual', 'wrong_category').
-    Cache in-memory aggiornata ogni 15 minuti.
-    Fallisce silenziosamente — ritorna set vuoto se il DB non è raggiungibile.
+    Restituisce il set degli URL segnalati dagli ispettori come NON manuali d'uso
+    (feedback_type = 'not_a_manual'). Blocco assoluto: questi URL vengono scartati
+    da qualsiasi ricerca indipendentemente dal tipo macchina.
+    Cache in-memory TTL 15 min. Fallisce silenziosamente.
     """
     global _blocked_urls_cache, _blocked_urls_ts
     now = _time.monotonic()
@@ -39,17 +45,45 @@ def get_blocked_urls() -> set[str]:
         with _get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    SELECT DISTINCT url FROM manual_feedback
-                    WHERE feedback_type IN ('not_a_manual', 'wrong_category')
-                    """,
+                    "SELECT DISTINCT url FROM manual_feedback WHERE feedback_type = 'not_a_manual'"
                 )
                 urls = {row[0] for row in cur.fetchall()}
         _blocked_urls_cache = urls
         _blocked_urls_ts = now
         return urls
     except Exception:
-        return _blocked_urls_cache  # Ritorna la cache precedente in caso di errore
+        return _blocked_urls_cache
+
+
+def get_context_blocked_urls() -> set[tuple[str, str]]:
+    """
+    Restituisce il set di (url, machine_type) segnalati come 'wrong_category':
+    sono manuali validi ma per una categoria diversa da quella cercata.
+    Vanno bloccati solo per quel tipo macchina specifico — possono essere utili altrove.
+    Cache in-memory TTL 15 min. Fallisce silenziosamente.
+    """
+    global _context_blocked_cache, _context_blocked_ts
+    now = _time.monotonic()
+    if now - _context_blocked_ts < _BLOCKED_CACHE_TTL:
+        return _context_blocked_cache
+    if not settings.database_url:
+        return set()
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT url, machine_type FROM manual_feedback
+                    WHERE feedback_type = 'wrong_category'
+                      AND machine_type IS NOT NULL AND machine_type != ''
+                    """
+                )
+                pairs = {(row[0], row[1].lower().strip()) for row in cur.fetchall()}
+        _context_blocked_cache = pairs
+        _context_blocked_ts = now
+        return pairs
+    except Exception:
+        return _context_blocked_cache
 
 
 def check_url_saved(url: str) -> bool:
@@ -230,6 +264,22 @@ def find_for_search(
                         (f"%{machine_type}%", exclude),
                     )
                     results.extend(dict(r) for r in cur.fetchall())
+
+        # Rimuove URL segnalati dagli ispettori come non idonei
+        # not_a_manual → blocco assoluto da qualsiasi ricerca
+        blocked_abs = get_blocked_urls()
+        if blocked_abs:
+            results = [r for r in results if r.get("url") not in blocked_abs]
+
+        # wrong_category → blocco contestuale: solo per il machine_type in cui è stato segnalato
+        if machine_type and results:
+            mt_lower = machine_type.lower().strip()
+            ctx_blocked = get_context_blocked_urls()
+            if ctx_blocked:
+                results = [
+                    r for r in results
+                    if (r.get("url"), mt_lower) not in ctx_blocked
+                ]
 
         return results
     except Exception:

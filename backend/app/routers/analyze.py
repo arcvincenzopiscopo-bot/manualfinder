@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from app.models.requests import PlateAnalysisRequest, FullAnalysisRequest
 from app.models.responses import SSEEvent
 from app.services import image_service, vision_service, search_service, pdf_service, analysis_service, safety_gate_service, quality_service
+from app.config import settings
 
 router = APIRouter()
 
@@ -316,6 +317,24 @@ async def _pipeline(request: FullAnalysisRequest):
             except Exception:
                 pass
 
+            # URL segnalati dagli ispettori — blocco differenziato per tipo di segnalazione
+            try:
+                from app.services.saved_manuals_service import (
+                    get_blocked_urls, get_context_blocked_urls
+                )
+                # not_a_manual: non è un manuale → scarta sempre
+                if url in get_blocked_urls():
+                    return False
+                # wrong_category: manuale valido ma per altra categoria → scarta solo
+                # se la ricerca attuale è per lo stesso tipo macchina in cui è stato segnalato
+                if machine_type:
+                    mt_lower = machine_type.lower().strip()
+                    ctx_blocked = get_context_blocked_urls()
+                    if (url, mt_lower) in ctx_blocked:
+                        return False
+            except Exception:
+                pass
+
             return True
 
         producer_candidates = [c for c in producer_candidates if _is_industrial_url(c.url)]
@@ -347,6 +366,8 @@ async def _pipeline(request: FullAnalysisRequest):
         tier2 = [c for c in producer_candidates if c.relevance_score < 55]
         ordered_candidates = (tier1 + tier2)[:5]
 
+        _analysis_provider = settings.get_analysis_provider()
+
         async def _download_and_score(candidate):
             pdf_data, err = await pdf_service.download_pdf(candidate.url)
             if pdf_data:
@@ -355,6 +376,14 @@ async def _pipeline(request: FullAnalysisRequest):
                     pdf_data, brand=brand, model=model,
                     machine_type=machine_type or "",
                 )
+                # Validazione AI per casi ambigui: score basso su PDF di dimensione media
+                # (troppo corto per sicuri, ma non chiaramente una brochure)
+                if 5 <= score <= 30 and pages < 25 and _analysis_provider in ("anthropic", "gemini"):
+                    is_manual = await pdf_service.ai_quick_validate(
+                        pdf_data, brand, model, machine_type or "", _analysis_provider
+                    )
+                    if not is_manual:
+                        score = 0  # Forza rifiuto — l'AI ha confermato non-manuale
                 return (score, pdf_data, candidate.url, candidate.relevance_score, pages)
             import logging as _log
             _log.getLogger(__name__).info("PDF download failed: %s — %s", candidate.url[:80], err)

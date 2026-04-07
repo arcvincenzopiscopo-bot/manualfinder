@@ -211,6 +211,77 @@ def _already_analyzed_urls() -> set[str]:
         return set()
 
 
+async def _analyze_quality_log_patterns() -> tuple[int, int]:
+    """
+    Estrae pattern da quality_log (unrelated_producer_pdf / suspicious_producer_url)
+    e crea regole block_domain per domini che compaiono >= 2 volte con tali issue.
+    Chiamata automaticamente all'inizio di run_analysis().
+    """
+    if not settings.database_url:
+        return 0, 0
+    try:
+        import psycopg2.extras
+        from collections import defaultdict
+        with _get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT producer_url, machine_type
+                    FROM quality_log
+                    WHERE producer_url IS NOT NULL AND producer_url != ''
+                      AND (
+                          issues @> '[{"type": "unrelated_producer_pdf"}]'::jsonb
+                          OR issues @> '[{"type": "suspicious_producer_url"}]'::jsonb
+                      )
+                    ORDER BY ts DESC
+                    LIMIT 300
+                    """
+                )
+                rows = cur.fetchall()
+    except Exception:
+        return 0, 0
+
+    domain_hits: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        try:
+            netloc = urlparse(row["producer_url"]).netloc.lower()
+            if netloc:
+                domain_hits[netloc].append(row["producer_url"])
+        except Exception:
+            pass
+
+    created = 0
+    updated = 0
+    try:
+        with _get_conn() as conn:
+            for netloc, urls in domain_hits.items():
+                if len(urls) >= 2:
+                    reason = (
+                        f"Dominio con {len(urls)} URL problematici in quality_log "
+                        "(unrelated_producer_pdf / suspicious_producer_url)"
+                    )
+                    action = _upsert_rule(
+                        conn,
+                        rule_type="block_domain",
+                        rule_value=netloc,
+                        context_machine_type=None,
+                        reason=reason,
+                        source_urls=list({u for u in urls}),
+                        feedback_count=len(urls),
+                    )
+                    if action == "created":
+                        created += 1
+                    else:
+                        updated += 1
+    except Exception:
+        pass
+
+    if created + updated > 0:
+        invalidate_dynamic_rules_cache()
+
+    return created, updated
+
+
 async def run_analysis(provider: str) -> dict:
     """
     Analizza i feedback non processati e crea/aggiorna regole in url_filter_rules.
@@ -218,6 +289,9 @@ async def run_analysis(provider: str) -> dict:
     """
     if not settings.database_url:
         return {"rules_created": 0, "rules_updated": 0, "skipped": 0, "feedback_processed": 0, "new_rules": []}
+
+    # ── Step 0: pattern da quality_log ──────────────────────────────────────
+    ql_created, ql_updated = await _analyze_quality_log_patterns()
 
     # ── Step 1: carica feedback non ancora processati ────────────────────────
     already_done = _already_analyzed_urls()
@@ -374,13 +448,17 @@ async def run_analysis(provider: str) -> dict:
             processed_urls.add(url)
 
     # Invalida cache dopo aggiornamenti
-    if rules_created + rules_updated > 0:
+    total_created = rules_created + ql_created
+    total_updated = rules_updated + ql_updated
+    if total_created + total_updated > 0:
         invalidate_dynamic_rules_cache()
 
     return {
-        "rules_created": rules_created,
-        "rules_updated": rules_updated,
+        "rules_created": total_created,
+        "rules_updated": total_updated,
         "skipped": skipped,
         "feedback_processed": len(processed_urls),
+        "quality_log_rules_created": ql_created,
+        "quality_log_rules_updated": ql_updated,
         "new_rules": new_rules,
     }
