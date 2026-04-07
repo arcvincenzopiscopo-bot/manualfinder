@@ -49,6 +49,21 @@ class _InMemoryTTLCache:
             del self._store[k]
         return len(expired)
 
+    def evict_containing_url(self, url: str) -> int:
+        """Rimuove tutte le entry cache che contengono l'URL specificato tra i risultati."""
+        url_lower = url.lower().strip()
+        to_remove = []
+        for k, (ts, value) in self._store.items():
+            if isinstance(value, list):
+                if any(
+                    isinstance(r, dict) and r.get("url", "").lower().strip() == url_lower
+                    for r in value
+                ):
+                    to_remove.append(k)
+        for k in to_remove:
+            del self._store[k]
+        return len(to_remove)
+
     def size(self) -> int:
         return len(self._store)
 
@@ -93,6 +108,10 @@ class _RedisTTLCache:
             await self._redis.setex(k, self._ttl, json.dumps(value, ensure_ascii=False))
         except Exception:
             self._fallback.set(*key_parts, value)
+
+    def evict_containing_url(self, url: str) -> int:
+        """Delega al fallback in-memory (Redis non supporta scan per valore)."""
+        return self._fallback.evict_containing_url(url)
 
     # Alias sincroni per retrocompatibilità (usano il fallback in-memory)
     def get(self, *key_parts) -> Optional[Any]:

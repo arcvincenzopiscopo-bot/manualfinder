@@ -86,6 +86,25 @@ def get_context_blocked_urls() -> set[tuple[str, str]]:
         return _context_blocked_cache
 
 
+def delete_manual_by_url(url: str) -> bool:
+    """
+    Rimuove un manuale da saved_manuals dato l'URL.
+    Chiamato quando un ispettore segnala un URL precedentemente salvato come 'not_a_manual'.
+    Ritorna True se almeno una riga è stata eliminata.
+    """
+    if not settings.database_url or not url:
+        return False
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM saved_manuals WHERE url = %s", (url,))
+                deleted = cur.rowcount
+            conn.commit()
+        return deleted > 0
+    except Exception:
+        return False
+
+
 def check_url_saved(url: str) -> bool:
     """Ritorna True se l'URL è già presente in saved_manuals."""
     if not settings.database_url:

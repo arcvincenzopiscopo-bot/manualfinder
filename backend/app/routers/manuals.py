@@ -74,6 +74,18 @@ async def submit_feedback(
         notes=notes,
     )
 
+    # Se l'URL è segnalato come non-manuale: rimuovilo da saved_manuals e invalida la cache
+    if feedback_type == "not_a_manual" and url:
+        try:
+            saved_manuals_service.delete_manual_by_url(url)
+        except Exception:
+            pass
+        try:
+            from app.services.cache_service import search_cache
+            search_cache.evict_containing_url(url)
+        except Exception:
+            pass
+
     # Auto-trigger analisi ogni 5 nuovi feedback non ancora processati
     try:
         unanalyzed = saved_manuals_service.count_unanalyzed_feedback()

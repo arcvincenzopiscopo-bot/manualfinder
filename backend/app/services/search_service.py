@@ -877,7 +877,20 @@ async def search_manual(
     cache_key = (brand, model, machine_type or "", machine_year or "", serial_number or "")
     cached = search_cache.get(*cache_key)
     if cached is not None:
-        # Ricostruisci oggetti Pydantic dalla cache (serializzati come dict)
+        # Applica il filtro blocco anche sui risultati cachati: un URL segnalato
+        # dopo il caching deve sparire immediatamente, senza aspettare 7 giorni.
+        try:
+            from app.services.saved_manuals_service import get_blocked_urls, get_context_blocked_urls
+            blocked = get_blocked_urls()
+            ctx_blocked = get_context_blocked_urls()
+            mt_lower = (machine_type or "").lower().strip()
+            cached = [
+                r for r in cached
+                if r.get("url") not in blocked
+                and (not mt_lower or (r.get("url"), mt_lower) not in ctx_blocked)
+            ]
+        except Exception:
+            pass
         return [ManualSearchResult(**r) for r in cached]
 
     all_results: List[ManualSearchResult] = []
