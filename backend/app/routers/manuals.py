@@ -378,6 +378,31 @@ async def upsert_prompt_rule(body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/prompt-rules/{machine_type}/improve")
+async def improve_prompt_rule(machine_type: str):
+    """
+    [Admin] Migliora la regola prompt per un tipo macchina basandosi su quality_log
+    e feedback ispettori. Trigger manuale — utile per aggiornare immediatamente
+    dopo un ciclo di analisi o per tipi con problemi noti.
+    """
+    from app.config import settings as _s
+    from app.services import prompt_optimizer_service
+    provider = _s.get_analysis_provider()
+    if provider == "none":
+        raise HTTPException(status_code=503, detail="Provider AI non configurato")
+    result = await prompt_optimizer_service.improve_single(machine_type, provider)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Nessun dato sufficiente per migliorare '{machine_type}' (servono ≥1 analisi in quality_log)"
+        )
+    return {
+        "machine_type": machine_type,
+        "changes_summary": result.get("quality_notes", "Regola aggiornata"),
+        "updated_rule": {k: result.get(k) for k in ("extra_context", "specific_risks", "normative_refs", "inspection_focus")},
+    }
+
+
 @router.delete("/prompt-rules/{machine_type}")
 async def delete_prompt_rule(machine_type: str):
     """[Admin] Disattiva una regola prompt (is_active = false)."""

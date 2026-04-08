@@ -818,28 +818,26 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
       {/* Azioni */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
         <ExportButton card={card} />
-        {isFallback && (
-          <a
-            href={buildEmailDraft(card, ocr)}
-            style={{
-              display: 'block',
-              width: '100%',
-              padding: '14px',
-              background: '#fffbeb',
-              color: '#92400e',
-              border: '2px solid #fde68a',
-              borderRadius: 8,
-              fontSize: 15,
-              fontWeight: 700,
-              cursor: 'pointer',
-              textAlign: 'center',
-              textDecoration: 'none',
-              boxSizing: 'border-box',
-            }}
-          >
-            ✉ Richiedi manuale al produttore
-          </a>
-        )}
+        <a
+          href={buildEmailDraft(card, ocr)}
+          style={{
+            display: 'block',
+            width: '100%',
+            padding: '14px',
+            background: '#fffbeb',
+            color: '#92400e',
+            border: '2px solid #fde68a',
+            borderRadius: 8,
+            fontSize: 15,
+            fontWeight: 700,
+            cursor: 'pointer',
+            textAlign: 'center',
+            textDecoration: 'none',
+            boxSizing: 'border-box',
+          }}
+        >
+          ✉ Richiedi documentazione al produttore
+        </a>
         <button
           onClick={onNewSearch}
           style={{

@@ -154,13 +154,25 @@ def _append_machine_rules(prompt: str, machine_rules: Optional[dict]) -> str:
     return prompt
 
 
-def _build_producer_prompt(brand: str, model: str, machine_rules: Optional[dict] = None) -> str:
+def _build_producer_prompt(brand: str, model: str, machine_rules: Optional[dict] = None,
+                           is_category_match: bool = False) -> str:
     """
     Prompt per analisi manuale produttore: estrae raccomandazioni operative specifiche,
     limiti operativi con valori numerici, procedure di emergenza, pittogrammi, checklist preuso.
     Se machine_rules è fornito, aggiunge contesto specifico per tipo macchina da Supabase.
+    Se is_category_match=True il manuale è di un modello simile, non esatto: omette dispositivi
+    e limiti specifici del modello del manuale per non attribuirli alla macchina cercata.
     """
-    base = f"""Analizza il manuale del macchinario {brand} {model} ed estrai le informazioni di sicurezza specifiche del costruttore nel seguente formato JSON:
+    category_warning = (
+        f"\n⚠ ATTENZIONE: Questo manuale NON appartiene a {brand} {model} ma a una macchina "
+        f"della stessa categoria.\n"
+        f"Estrai SOLO informazioni valide per TUTTA la categoria, non specifiche del modello del manuale.\n"
+        f"Ometti completamente: dispositivi_sicurezza (specifici del modello del manuale), "
+        f"limiti_operativi con valori numerici (si riferiscono al modello del manuale, non a {brand} {model}), "
+        f"pittogrammi_sicurezza (posizioni fisiche specifiche di quel modello).\n\n"
+        if is_category_match else ""
+    )
+    base = f"""{category_warning}Analizza il manuale del macchinario {brand} {model} ed estrai le informazioni di sicurezza specifiche del costruttore nel seguente formato JSON:
 
 {{
   "raccomandazioni_produttore": [
@@ -197,10 +209,10 @@ def _build_producer_prompt(brand: str, model: str, machine_rules: Optional[dict]
 
 VINCOLI:
 - raccomandazioni_produttore: 2-6 elementi SPECIFICI per {brand} {model} che riguardano esclusivamente la SICUREZZA DELLE PERSONE. NON includere: manutenzione motore/filtri/fluidi, gestione DPF, preriscaldamento, istruzioni per officina, avvisi di degradazione prestazioni. Ogni voce: sezione o pagina del manuale tra parentesi quadre.
-- dispositivi_sicurezza: 3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI su {brand} {model} dal costruttore (interblocchi, sensori, ripari fissi/mobili, pulsanti emergenza, limitatori, valvole). Sii specifico sulla posizione fisica.
-- limiti_operativi: includi SOLO valori ESPLICITAMENTE riportati nel manuale. NON generare valori ipotetici anche se plausibili per la categoria. Se non presenti, lascia la lista vuota [].
+- dispositivi_sicurezza: {"lascia la lista vuota [] — questo manuale appartiene a un modello diverso" if is_category_match else f"3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI su {brand} {model} dal costruttore (interblocchi, sensori, ripari fissi/mobili, pulsanti emergenza, limitatori, valvole). Sii specifico sulla posizione fisica."}.
+- limiti_operativi: {"lascia la lista vuota [] — i valori numerici si riferiscono al modello del manuale, non a " + brand + " " + model if is_category_match else "includi SOLO valori ESPLICITAMENTE riportati nel manuale. NON generare valori ipotetici anche se plausibili per la categoria. Se non presenti, lascia la lista vuota []."}.
 - procedure_emergenza: 2-5 procedure SOLO per emergenze che mettono a rischio PERSONE (incendio, ribaltamento, cedimento freni, investimento, folgorazione). NON includere: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio per persone, call to service. Se il manuale descrive solo procedure di manutenzione, lascia la lista vuota [].
-- pittogrammi_sicurezza: segnala SOLO i pittogrammi esplicitamente citati nel manuale con la loro posizione sulla macchina.
+- pittogrammi_sicurezza: {"lascia la lista vuota [] — le posizioni fisiche sono specifiche del modello del manuale" if is_category_match else "segnala SOLO i pittogrammi esplicitamente citati nel manuale con la loro posizione sulla macchina."}.
 - checklist: 5-8 voci azionabili in sopralluogo SPECIFICHE per {brand} {model}. Ogni voce: verbo imperativo + cosa guardare/toccare + dove + criterio di conformità + riferimento sezione/pagina manuale.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo manuale. Per elementi non presenti, lascia la lista vuota — NON integrare con conoscenze generali sul tipo di macchina.
 - CITAZIONI OBBLIGATORIE: ogni voce deve contenere il riferimento alla pagina o sezione del manuale in formato [pag. X] o [Sez. X.X] DENTRO il campo "testo". Se non trovi il riferimento esatto, ometti la voce piuttosto che inventare un numero di pagina.
@@ -209,9 +221,17 @@ VINCOLI:
     return _append_machine_rules(base, machine_rules)
 
 
-def _build_analysis_prompt(brand: str, model: str) -> str:
+def _build_analysis_prompt(brand: str, model: str, is_category_match: bool = False) -> str:
     """Prompt generico per analisi singola fonte — combina aspetti normativi e raccomandazioni costruttore."""
-    return f"""Analizza questo documento relativo al macchinario {brand} {model} ed estrai le informazioni di sicurezza nel seguente formato JSON:
+    category_warning = (
+        f"\n⚠ ATTENZIONE: Questo documento NON appartiene a {brand} {model} ma a una macchina "
+        f"della stessa categoria.\n"
+        f"Estrai SOLO informazioni valide per TUTTA la categoria.\n"
+        f"Ometti completamente: dispositivi_sicurezza e limiti_operativi con valori numerici "
+        f"(specifici del modello del documento, non di {brand} {model}).\n\n"
+        if is_category_match else ""
+    )
+    return f"""{category_warning}Analizza questo documento relativo al macchinario {brand} {model} ed estrai le informazioni di sicurezza nel seguente formato JSON:
 
 {{
   "rischi_principali": [
@@ -262,9 +282,9 @@ VINCOLI:
 - rischi_principali: 3-8 rischi SOLO per l'incolumità delle persone, ORDINATI da ALTA a BASSA gravità. Includi tag [ALTA/MEDIA/BASSA] e riferimento normativo/documentale. NON includere rischi di guasto meccanico, intasamento filtri, degradazione prestazioni o danni alla sola macchina.
 - raccomandazioni_produttore: SOLO raccomandazioni che proteggono persone. NON manutenzione, fluidi, filtri DPF, preriscaldamento, avvisi motore.
 - procedure_emergenza: SOLO per emergenze che minacciano persone (incendio, ribaltamento, cedimento freni, investimento, folgorazione). NON rigenerazione DPF, avarie meccaniche, call to service. Lista vuota [] se il documento non ne contiene.
-- dispositivi_sicurezza: 3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI sulla macchina dal costruttore (interblocchi, sensori, ripari, pulsanti emergenza, limitatori, valvole di sicurezza). Sii specifico sulla posizione fisica.
+- dispositivi_sicurezza: {"lascia la lista vuota [] — questo documento appartiene a un modello diverso" if is_category_match else "3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI sulla macchina dal costruttore (interblocchi, sensori, ripari, pulsanti emergenza, limitatori, valvole di sicurezza). Sii specifico sulla posizione fisica."}.
 - checklist: 5-10 voci azionabili IMMEDIATAMENTE in sopralluogo. Ogni voce deve rispondere a: COSA verificare, DOVE trovarlo, COME stabilire la conformità. Includi riferimento sezione o articolo normativo tra parentesi quadre.
-- limiti_operativi: includi SOLO valori ESPLICITAMENTE presenti nel documento — NON generare valori ipotetici.
+- limiti_operativi: {"lascia la lista vuota [] — i valori numerici si riferiscono al modello del documento, non a " + brand + " " + model if is_category_match else "includi SOLO valori ESPLICITAMENTE presenti nel documento — NON generare valori ipotetici."}.
 - documenti_da_richiedere: 3-5 documenti essenziali per l'accesso ispettivo con riferimento normativo che ne impone la tenuta.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto nel documento fornito.
 - Se il documento è in altra lingua: TRADUCI tutto in italiano. NON lasciare termini stranieri.
@@ -285,7 +305,7 @@ Genera una scheda di sicurezza INDICATIVA:
 
 {{
   "rischi_principali": [
-    "[ALTA/MEDIA/BASSA] rischio di INFORTUNIO O DANNO ALLA SALUTE specifico per {brand} {model} [rif. normativo D.Lgs. 81/08]. SOLO rischi per persone: schiacciamento, ribaltamento, caduta, elettrocuzione, esplosione, rumore/vibrazioni, sostanze nocive, investimento. ESCLUDI guasti meccanici, intasamento filtri, danni al solo motore o ai componenti senza conseguenze per persone."
+    "[ALTA/MEDIA/BASSA] rischio di INFORTUNIO O DANNO ALLA SALUTE specifico per {brand} {model}. SOLO rischi per persone: schiacciamento, ribaltamento, caduta, elettrocuzione, esplosione, rumore/vibrazioni, sostanze nocive, investimento. ESCLUDI guasti meccanici, intasamento filtri, danni al solo motore o ai componenti senza conseguenze per persone. NON citare articoli specifici del D.Lgs. 81/2008: in modalità AI senza documento le citazioni normative non possono essere verificate."
   ],
   "dispositivi_protezione": [
     "DPI o protezione collettiva richiesta per questa categoria di macchina"
@@ -317,18 +337,18 @@ Genera una scheda di sicurezza INDICATIVA:
     "pittogramma di avvertenza tipicamente presente su questa categoria di macchina"
   ],
   "checklist": [
-    "Verifica [elemento concreto fisico] — [dove trovarlo] — [come valutare la conformità] [Art. X D.Lgs. 81/08]"
+    "Verifica [elemento concreto fisico] — [dove trovarlo] — [come valutare la conformità]"
   ],
   "confidence_ai": "high | medium | low",
   "note": "ATTENZIONE: Scheda generata da AI senza consultazione della documentazione ufficiale del costruttore. Non utilizzare come unica fonte di riferimento per prescrizioni ispettive."
 }}
 
 VINCOLI:
-- rischi_principali: 3-8 rischi ORDINATI da ALTA a BASSA gravità con tag [ALTA/MEDIA/BASSA]. SOLO rischi per l'incolumità delle persone — NON guasti meccanici, filtri, avarie senza conseguenze per persone.
+- rischi_principali: 3-8 rischi ORDINATI da ALTA a BASSA gravità con tag [ALTA/MEDIA/BASSA]. SOLO rischi per l'incolumità delle persone — NON guasti meccanici, filtri, avarie senza conseguenze per persone. NON citare articoli specifici del D.Lgs. 81/2008 (es. Art. 69, Art. 71): in modalità AI senza documento le citazioni non sono verificabili e rischiano di essere errate.
 - raccomandazioni_produttore: SOLO raccomandazioni che proteggono persone (operatore, bystander). NON manutenzione, fluidi, DPF, call to service.
 - procedure_emergenza: SOLO per emergenze che minacciano persone. Lista vuota [] se non applicabile.
 - dispositivi_sicurezza: 2-5 dispositivi tipici per questa categoria — specifica posizione fisica sulla macchina
-- checklist: 5-8 voci azionabili in sopralluogo con verbo imperativo + COSA + DOVE + COME
+- checklist: 5-8 voci azionabili in sopralluogo con verbo imperativo + COSA + DOVE + COME. NON aggiungere riferimenti a articoli specifici del D.Lgs. 81/2008.
 - documenti_da_richiedere: 3-5 documenti essenziali con riferimento normativo
 - limiti_operativi: lascia SEMPRE [] — NON inventare valori numerici senza documentazione ufficiale
 - confidence_ai: scegli onestamente (high/medium/low) in base alla strategia usata
@@ -483,11 +503,14 @@ async def generate_safety_card(
     """
     provider = settings.get_analysis_provider()
 
-    # Carica regole prompt per tipo macchina da Supabase (cache 15 min)
+    # Carica regole prompt per tipo macchina da Supabase (cache 15 min).
+    # Se non trovate, genera automaticamente via AI (Haiku/Flash) e salva per usi futuri.
     machine_rules: Optional[dict] = None
     try:
-        from app.services.prompt_rules_service import get_rules_for_machine_type
+        from app.services.prompt_rules_service import get_rules_for_machine_type, generate_and_save_rule
         machine_rules = get_rules_for_machine_type(machine_type or "")
+        if machine_rules is None and machine_type and machine_type.strip() and provider != "none":
+            machine_rules = await generate_and_save_rule(machine_type, provider)
     except Exception:
         pass
 
@@ -556,6 +579,7 @@ async def generate_safety_card(
         card = await _analyze_pdf_direct(
             brand, model, producer_bytes, producer_url, provider,
             allegato_v_context=allegato_v_context,
+            is_category_match="categoria" in (producer_source_label or "").lower(),
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
@@ -677,8 +701,10 @@ async def _analyze_dual_source(
     """
     import asyncio
 
+    is_category_match = "categoria" in (producer_source_label or "").lower()
     inail_prompt = _build_inail_prompt(machine_rules=machine_rules)
-    producer_prompt = _build_producer_prompt(brand, model, machine_rules=machine_rules)
+    producer_prompt = _build_producer_prompt(brand, model, machine_rules=machine_rules,
+                                             is_category_match=is_category_match)
     if allegato_v_context:
         inail_prompt += f"\n\nCONTESTO ALLEGATO V (macchina ante-1996):\n{allegato_v_context}\n{ALLEGATO_V_EXTRA_FIELDS}"
 
@@ -828,10 +854,11 @@ async def _analyze_pdf_direct(
     brand: str, model: str, pdf_bytes: bytes, pdf_url: Optional[str], provider: str,
     allegato_v_context: Optional[str] = None,
     fonte_tipo: str = "pdf",
+    is_category_match: bool = False,
 ) -> SafetyCard:
     """Analisi diretta del PDF (≤100 pagine) — inviato come documento nativo."""
     pdf_b64 = pdf_service.pdf_to_base64(pdf_bytes)
-    prompt = _build_analysis_prompt(brand, model)
+    prompt = _build_analysis_prompt(brand, model, is_category_match=is_category_match)
     if allegato_v_context:
         prompt += f"\n\nCONTESTO ALLEGATO V (macchina ante-1996):\n{allegato_v_context}\n{ALLEGATO_V_EXTRA_FIELDS}"
 

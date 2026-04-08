@@ -98,7 +98,66 @@ Rispondi SOLO con il JSON valido, senza markdown, senza testo aggiuntivo."""
 GEMINI_MODEL = "gemini-2.5-flash"
 
 
-_GENERIC_TYPES = {None, "", "macchinario", "macchina", "attrezzatura", "equipment", "machine"}
+_GENERIC_TYPES = {
+    None, "", "macchinario", "macchina", "attrezzatura", "equipment", "machine",
+    "accessorio", "attrezzo", "attachment", "tool",
+}
+
+# Segnali nel machine_type che indicano un accessorio/attrezzatura, non una macchina completa
+_ACCESSORY_SIGNALS = {
+    "testa idraulica", "testa girevole", "rotatore idraulico", "rotatore",
+    "benna a polipo", "benna frantoio", "benna carico", "benna",
+    "polipo", "pinza demolizione", "pinza", "cesoia demolitrice",
+    "martello demolitore idraulico da escavatore",
+    "bilancino di sollevamento", "bilancino",
+    "paranco manuale", "paranco",
+    "gancio di sollevamento",
+    "attrezzo intercambiabile", "testina di scavo", "scarificatore",
+    "compattatore vibrante da escavatore",
+    "forche da magazzino",
+    "testa saldante",
+}
+
+# Normalizzazione EN→IT per tipi macchina restituiti in inglese dall'AI
+_EN_TO_IT_MACHINE_TYPE: dict[str, str] = {
+    "reach stacker": "carrello portacontainer",
+    "stacker": "carrello portacontainer",
+    "scissor lift": "piattaforma a forbice",
+    "boom lift": "piattaforma aerea a braccio",
+    "aerial work platform": "piattaforma aerea",
+    "awp": "piattaforma aerea",
+    "forklift": "carrello elevatore",
+    "telehandler": "sollevatore telescopico",
+    "telescopic handler": "sollevatore telescopico",
+    "excavator": "escavatore",
+    "wheel loader": "pala caricatrice",
+    "loader": "pala caricatrice",
+    "bulldozer": "bulldozer",
+    "dumper": "dumper",
+    "compactor": "rullo compattatore",
+    "crane": "gru mobile",
+    "tower crane": "gru a torre",
+    "concrete pump": "pompa calcestruzzo",
+    "paver": "finitrice stradale",
+    "grader": "livellatrice",
+    "trencher": "scavatrice a catena",
+    "skid steer": "minipala",
+    "backhoe": "terna",
+    "backhoe loader": "terna",
+    "generator": "generatore",
+    "compressor": "compressore",
+    "concrete mixer": "betoniera",
+    "mixer": "betoniera",
+    "welder": "saldatrice",
+}
+
+
+def _normalize_machine_type(machine_type: str) -> str:
+    """Normalizza tipi macchina inglesi → italiano INAIL."""
+    if not machine_type:
+        return machine_type
+    mt = machine_type.lower().strip()
+    return _EN_TO_IT_MACHINE_TYPE.get(mt, machine_type)
 
 async def extract_plate_info(image_base64: str) -> PlateOCRResult:
     provider = settings.get_vision_provider()
@@ -120,6 +179,18 @@ async def extract_plate_info(image_base64: str) -> PlateOCRResult:
         enriched = await _infer_machine_type(result.brand, result.model, provider, ocr_hint=ocr_hint or None)
         if enriched:
             result.machine_type = enriched
+
+    # Post-inferenza: rileva accessori/attrezzature per evitare analisi come macchina completa
+    if result.machine_type:
+        mt_lower = result.machine_type.lower()
+        for sig in _ACCESSORY_SIGNALS:
+            if sig in mt_lower:
+                if not result.notes:
+                    result.notes = (
+                        f"Attrezzatura/accessorio rilevato ({result.machine_type}): "
+                        "l'analisi potrebbe non trovare scheda INAIL specifica."
+                    )
+                break
 
     return result
 
@@ -380,13 +451,13 @@ _MODEL_PREFIX_OVERRIDES: list[tuple[str, str, str]] = [
     ("vaia", "bco",       "benna carico-pietrisco"),
     ("vaia", "kube",      "testa saldante"),
     ("vaia", "si",        "saldatrice inverter"),
-    # Konecranes: SMV = reach stacker (carrello elevatore pesante da porto/cantiere)
-    ("konecranes", "smv", "reach stacker"),
+    # Konecranes: SMV = carrello portacontainer (reach stacker)
+    ("konecranes", "smv", "carrello portacontainer"),
     ("konecranes", "eco", "carrello elevatore"),
     ("konecranes", "smc", "carrello elevatore"),
-    # Kalmar: reach stacker / straddle carrier
-    ("kalmar", "drf",     "reach stacker"),
-    ("kalmar", "dck",     "reach stacker"),
+    # Kalmar: carrello portacontainer (reach stacker) / straddle carrier
+    ("kalmar", "drf",     "carrello portacontainer"),
+    ("kalmar", "dck",     "carrello portacontainer"),
     ("kalmar", "dcf",     "carrello elevatore"),
     # Doosan (carrelli): serie B/G/D = carrelli elevatori, non escavatori
     ("doosan", "b",       "carrello elevatore"),
@@ -453,8 +524,14 @@ async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: O
         f"- Usa SOLO la tua conoscenza certa del brand e del modello specifico\n"
         f"- NON indovinare: se non conosci questo brand/modello con certezza, scrivi null\n"
         f"- Se il brand è sconosciuto o poco noto nel settore macchine da cantiere/industriali, scrivi null\n"
-        f"- NON confondere accessori/attrezzature (benne, martelli, forche, teste saldanti, pinze) con macchine autonome\n"
-        f"  Un accessorio per escavatore NON è una macchina. Una testa saldante NON è una saldatrice.\n"
+        f"- NON confondere accessori/attrezzature con macchine autonome. Esempi di ACCESSORI (NON macchine):\n"
+        f"  benne, martelli idraulici, pinze, polpi, forche, teste girevoli, rotatori idraulici,\n"
+        f"  attrezzi intercambiabili, testine di scavo, scarificatori, compattatori vibranti da escavatore,\n"
+        f"  forche da magazzino, bilancini di sollevamento, ganci, benne a polipo, pale benna,\n"
+        f"  teste idrauliche, girapali, gru a bandiera fisse, paranco manuale\n"
+        f"  Se il modello o il nome suggerisce un attrezzo/accessorio: scrivi il tipo di accessorio\n"
+        f"  (es. 'testa idraulica girevole' → 'testa idraulica girevole'; 'rotatore' → 'rotatore idraulico')\n"
+        f"  NON classificarlo come la macchina su cui viene montato (es. NON 'piattaforma aerea').\n"
         f"- Se il modello suggerisce un accessorio (BCO=benna, KUBE=testa, RR=polipo) scrivi il tipo di accessorio\n"
         f"- NON classificare macchine tessili, alimentari, farmaceutiche come macchine da cantiere\n"
         f"  Se il brand fa macchine per altri settori industriali, scrivi il settore corretto o null\n"
@@ -498,8 +575,8 @@ async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: O
 
         if answer in ("null", "non so", "sconosciuto", "unknown", ""):
             return None
-        # Rimuovi eventuali virgolette o punteggiatura residua
-        return answer.strip('"\'.,').strip()
+        # Rimuovi eventuali virgolette o punteggiatura residua, poi normalizza EN→IT
+        return _normalize_machine_type(answer.strip('"\'.,').strip())
     except Exception:
         return None
 

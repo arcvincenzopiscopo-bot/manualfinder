@@ -453,6 +453,17 @@ async def run_analysis(provider: str) -> dict:
     if total_created + total_updated > 0:
         invalidate_dynamic_rules_cache()
 
+    # Auto-ottimizzazione prompt: migliora i rule per i tipi macchina con qualità bassa
+    prompts_improved = 0
+    try:
+        from app.services import prompt_optimizer_service
+        opt_result = await prompt_optimizer_service.run_optimizer(provider, min_analyses=5)
+        prompts_improved = opt_result.get("types_improved", 0)
+        if prompts_improved > 0:
+            logger.info("prompt_optimizer: migliorati %d prompt rule", prompts_improved)
+    except Exception as e:
+        logger.warning("prompt_optimizer non eseguito (non critico): %s", e)
+
     return {
         "rules_created": total_created,
         "rules_updated": total_updated,
@@ -460,5 +471,6 @@ async def run_analysis(provider: str) -> dict:
         "feedback_processed": len(processed_urls),
         "quality_log_rules_created": ql_created,
         "quality_log_rules_updated": ql_updated,
+        "prompts_improved": prompts_improved,
         "new_rules": new_rules,
     }

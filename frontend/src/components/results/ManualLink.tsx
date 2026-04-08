@@ -339,13 +339,6 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
   // Il feedback è possibile ogni volta che c'è un manuale produttore (anche già salvato)
   const canReport = !isFallback && !isInailOnly && url && url.length > 0 && !reported
 
-  const manualsLibUrl = brand && model
-    ? `https://www.manualslib.com/search/?q=${encodeURIComponent(brand + ' ' + model)}`
-    : null
-  const safeManualUrl = brand && model
-    ? `https://www.safemanuals.com/?s=${encodeURIComponent(brand + ' ' + model)}`
-    : null
-
   const labelMap: Record<string, string> = {
     pdf:                'Manuale PDF',
     inail:              'Scheda INAIL',
@@ -375,22 +368,6 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
           )}
           {!isFallback && url && (
             <PdfLink url={url} label={isDual ? 'Manuale produttore' : 'Apri PDF'} color="#1e40af" />
-          )}
-          {isFallback && manualsLibUrl && (
-            <a href={manualsLibUrl} target="_blank" rel="noopener noreferrer" style={{
-              padding: '7px 12px', background: '#92400e', color: '#fff',
-              borderRadius: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
-            }}>
-              Cerca su ManualsLib
-            </a>
-          )}
-          {isFallback && safeManualUrl && (
-            <a href={safeManualUrl} target="_blank" rel="noopener noreferrer" style={{
-              padding: '7px 12px', background: '#78350f', color: '#fff',
-              borderRadius: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
-            }}>
-              Cerca su SafeManuals
-            </a>
           )}
         </div>
       </div>
