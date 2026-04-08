@@ -223,9 +223,10 @@ async def extract_plate_info_multishot(image_base64: str) -> PlateOCRResult:
     """
     from app.services.image_service import preprocess_plate_image, preprocess_plate_image_variant
     variants = [
-        preprocess_plate_image(image_base64),           # variant 0: standard
-        preprocess_plate_image_variant(image_base64, 1),  # variant 1: alto contrasto B&W
-        preprocess_plate_image_variant(image_base64, 2),  # variant 2: denoised morbido
+        preprocess_plate_image(image_base64),              # 0: standard
+        preprocess_plate_image_variant(image_base64, 1),   # 1: alto contrasto B&W
+        preprocess_plate_image_variant(image_base64, 2),   # 2: denoised morbido
+        preprocess_plate_image_variant(image_base64, 3),   # 3: contrasto locale adattivo (CLAHE-like)
     ]
     results: list[PlateOCRResult] = await asyncio.gather(
         *[extract_plate_info(v) for v in variants],
@@ -253,9 +254,33 @@ async def extract_plate_info_multishot(image_base64: str) -> PlateOCRResult:
         r.confidence == "high", r.confidence == "medium",
         len(r.raw_text or ""),
     ]))
-    # Promuovi la confidence se almeno 2/3 concordano sul brand
+    # Promuovi la confidence se almeno 2/4 concordano sul brand
     if best_brand and brand_counts.get(best_brand, 0) >= 2 and best.confidence == "low":
         best = best.model_copy(update={"confidence": "medium"})
+
+    # Majority voting su model, year, serial_number:
+    # se 2+ varianti concordano su un valore, sovrascrive quello del best_result
+    def _majority_field(field: str):
+        counts: dict[str, int] = {}
+        for r in valid:
+            v = (getattr(r, field, None) or "").strip()
+            if v:
+                counts[v.lower()] = counts.get(v.lower(), 0) + 1
+        if not counts:
+            return None
+        top_key, top_count = max(counts.items(), key=lambda x: x[1])
+        if top_count >= 2:
+            for r in valid:
+                v = (getattr(r, field, None) or "").strip()
+                if v and v.lower() == top_key:
+                    return v
+        return None
+
+    for field in ("model", "year", "serial_number"):
+        majority_val = _majority_field(field)
+        if majority_val:
+            best = best.model_copy(update={field: majority_val})
+
     return best
 
 

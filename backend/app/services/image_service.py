@@ -55,6 +55,7 @@ def preprocess_plate_image_variant(image_base64: str, variant: int) -> str:
     Preprocessing alternativo per multi-shot OCR.
     variant=1: alto contrasto B&W — per targhe ossidate o con testo inciso/in rilievo
     variant=2: denoised morbido — per riflessioni, sovraesposizione, granularità
+    variant=3: contrasto locale adattivo (CLAHE-like) — per illuminazione non uniforme
     """
     raw = base64.b64decode(image_base64)
     img = Image.open(io.BytesIO(raw)).convert("RGB")
@@ -71,6 +72,11 @@ def preprocess_plate_image_variant(image_base64: str, variant: int) -> str:
         img = _auto_levels(img)
         img = ImageEnhance.Contrast(img).enhance(1.4)
         img = ImageEnhance.Sharpness(img).enhance(1.5)
+    elif variant == 3:
+        # Contrasto adattivo locale: gestisce illuminazione non uniforme (flash laterale, ombra parziale)
+        img = _tiled_local_contrast(img)
+        img = ImageEnhance.Sharpness(img).enhance(2.0)
+        img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=92, optimize=True)
@@ -160,3 +166,33 @@ def _auto_levels(img: Image.Image) -> Image.Image:
         if hi > lo:
             arr[:, :, c] = np.clip((channel - lo) / (hi - lo) * 255, 0, 255)
     return Image.fromarray(arr.astype(np.uint8))
+
+
+def _tiled_local_contrast(img: Image.Image, grid: int = 4) -> Image.Image:
+    """
+    Stretching istogramma locale su griglia NxN di tile (equivalente semplificato di CLAHE).
+    Opera sul canale Y (luminanza) in YCbCr, preservando i colori originali.
+    Efficace su targhe con illuminazione non uniforme: ogni zona viene equalizzata
+    indipendentemente, evitando che le aree chiare brucino quelle scure.
+    Usa solo numpy — nessuna dipendenza aggiuntiva.
+    """
+    ycbcr = img.convert("YCbCr")
+    y, cb, cr = ycbcr.split()
+    arr = np.array(y, dtype=np.float32)
+    h, w = arr.shape
+    out = np.zeros_like(arr)
+    th, tw = h // grid, w // grid
+    for row in range(grid):
+        for col in range(grid):
+            r0 = row * th
+            r1 = r0 + th if row < grid - 1 else h
+            c0 = col * tw
+            c1 = c0 + tw if col < grid - 1 else w
+            tile = arr[r0:r1, c0:c1]
+            lo, hi = np.percentile(tile, 5), np.percentile(tile, 95)
+            if hi > lo:
+                out[r0:r1, c0:c1] = np.clip((tile - lo) / (hi - lo) * 255, 0, 255)
+            else:
+                out[r0:r1, c0:c1] = tile
+    y_new = Image.fromarray(out.astype(np.uint8))
+    return Image.merge("YCbCr", (y_new, cb, cr)).convert("RGB")

@@ -42,11 +42,22 @@ async def analyze_ocr(request: Request, body: PlateAnalysisRequest):
     Esegue preprocessing + OCR sulla targa e restituisce i dati estratti.
     Il frontend mostra un form modificabile prima di procedere.
     """
-    processed = image_service.preprocess_plate_image(body.image_base64)
     brightness = image_service.check_image_brightness(body.image_base64)
+    # Scegli il preprocessing ottimale in base alla luminosità rilevata
+    if brightness["is_too_dark"]:
+        processed = image_service.preprocess_plate_image_variant(body.image_base64, 1)  # alto contrasto
+    elif brightness["is_too_bright"]:
+        processed = image_service.preprocess_plate_image_variant(body.image_base64, 2)  # denoised
+    else:
+        processed = image_service.preprocess_plate_image(body.image_base64)             # standard
     result = await vision_service.extract_plate_info(processed)
-    # Multi-shot OCR: se confidence bassa, ritenta con 2 preprocessing alternativi
-    if result.confidence == "low":
+    # Multi-shot OCR: confidence bassa, brand non estratto, o testo quasi assente
+    _should_multishot = (
+        result.confidence == "low"
+        or result.brand is None
+        or len((result.raw_text or "").strip()) < 30
+    )
+    if _should_multishot:
         result = await vision_service.extract_plate_info_multishot(body.image_base64)
 
     return {
