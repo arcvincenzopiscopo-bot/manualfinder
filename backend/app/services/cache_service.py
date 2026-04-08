@@ -121,6 +121,110 @@ class _RedisTTLCache:
         self._fallback.set(*key_parts_and_value)
 
 
+class _PostgresTTLCache:
+    """
+    Cache persistente su Postgres (Supabase).
+    Sopravvive ai riavvii del server — essenziale su container (Railway, Render).
+    Tabella: search_cache_v1 (cache_key TEXT PK, data TEXT, ts FLOAT).
+    Crea la tabella automaticamente se non esiste.
+    Fallback in-memory se Postgres non disponibile.
+    """
+
+    _CREATE_TABLE = """
+        CREATE TABLE IF NOT EXISTS search_cache_v1 (
+            cache_key TEXT PRIMARY KEY,
+            data      TEXT NOT NULL,
+            ts        DOUBLE PRECISION NOT NULL
+        )
+    """
+
+    def __init__(self, database_url: str, ttl: int = _TTL_SECONDS):
+        self._db_url = database_url
+        self._ttl = ttl
+        self._fallback = _InMemoryTTLCache(ttl)
+        self._ready = False
+        try:
+            import psycopg2
+            conn = psycopg2.connect(database_url)
+            with conn.cursor() as cur:
+                cur.execute(self._CREATE_TABLE)
+            conn.commit()
+            conn.close()
+            self._ready = True
+            logger.info("SearchCache: Postgres cache attiva")
+        except Exception as e:
+            logger.warning("SearchCache: Postgres non disponibile (%s), uso in-memory", e)
+
+    def _make_key(self, *parts) -> str:
+        raw = "|".join(str(p).lower().strip() for p in parts)
+        return "mf:" + hashlib.sha256(raw.encode()).hexdigest()[:20]
+
+    def get(self, *key_parts) -> Optional[Any]:
+        if not self._ready:
+            return self._fallback.get(*key_parts)
+        try:
+            import psycopg2
+            k = self._make_key(*key_parts)
+            conn = psycopg2.connect(self._db_url)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT data, ts FROM search_cache_v1 WHERE cache_key = %s", (k,)
+                )
+                row = cur.fetchone()
+            conn.close()
+            if row is None:
+                return None
+            data_str, ts = row
+            if time.time() - ts > self._ttl:
+                self._delete(k)
+                return None
+            return json.loads(data_str)
+        except Exception:
+            return self._fallback.get(*key_parts)
+
+    def set(self, *key_parts_and_value) -> None:
+        *key_parts, value = key_parts_and_value
+        self._fallback.set(*key_parts, value)  # sempre aggiorna in-memory
+        if not self._ready:
+            return
+        try:
+            import psycopg2
+            k = self._make_key(*key_parts)
+            data_str = json.dumps(value, ensure_ascii=False)
+            conn = psycopg2.connect(self._db_url)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO search_cache_v1 (cache_key, data, ts)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (cache_key) DO UPDATE
+                        SET data = EXCLUDED.data, ts = EXCLUDED.ts
+                    """,
+                    (k, data_str, time.time()),
+                )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass  # fallback in-memory già aggiornato sopra
+
+    def _delete(self, k: str) -> None:
+        try:
+            import psycopg2
+            conn = psycopg2.connect(self._db_url)
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM search_cache_v1 WHERE cache_key = %s", (k,))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    def evict_containing_url(self, url: str) -> int:
+        return self._fallback.evict_containing_url(url)
+
+    def size(self) -> int:
+        return self._fallback.size()
+
+
 def _build_cache():
     """Costruisce la cache giusta in base alla configurazione."""
     try:
@@ -128,6 +232,9 @@ def _build_cache():
         redis_url = getattr(settings, "redis_url", None)
         if redis_url:
             return _RedisTTLCache(redis_url)
+        database_url = getattr(settings, "database_url", None)
+        if database_url:
+            return _PostgresTTLCache(database_url)
     except Exception:
         pass
     return _InMemoryTTLCache()

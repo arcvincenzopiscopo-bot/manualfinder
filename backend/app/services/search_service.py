@@ -751,6 +751,7 @@ def _score_result(
     url: str, title: str, is_pdf: bool,
     is_inail: bool = False,
     brand: str = "", model: str = "",
+    snippet: str = "",
 ) -> int:
     """
     Assegna uno score di rilevanza al risultato di ricerca (0–100).
@@ -758,12 +759,14 @@ def _score_result(
     Criteri (in ordine di peso):
     1. Autorità fonte: INAIL/istituzionale > produttore ufficiale > portale noleggio > aggregatore > web
     2. Tipo documento: PDF > pagina HTML
-    3. Corrispondenza brand/modello nel titolo — segnale diretto di pertinenza
-    4. Contenuto titolo: penalizza cataloghi ricambi e manuali officina
+    3. Corrispondenza brand/modello (word-boundary) nel titolo, snippet e URL
+    4. Contenuto titolo/snippet: boost manuale d'uso, penalizza cataloghi ricambi
+    5. Percorsi URL tipici dei manuali
     """
     score = 0
     url_lower = url.lower()
     title_lower = title.lower()
+    snippet_lower = (snippet or "").lower()
 
     # ── 1. Autorità della fonte ──────────────────────────────────────────
     if is_inail or any(d in url_lower for d in _INSTITUTIONAL_DOMAINS):
@@ -781,46 +784,74 @@ def _score_result(
     if is_pdf or url_lower.endswith(".pdf"):
         score += 22  # PDF scaricabile: analizzabile direttamente dall'AI
 
-    # ── 3. Corrispondenza brand/modello nel titolo ───────────────────────
+    # ── 3. Corrispondenza brand/modello — word-boundary aware ───────────────
     if brand or model:
         brand_l = brand.lower().strip()
         model_l = model.lower().strip()
-        brand_in_title = bool(brand_l) and brand_l in title_lower
-        model_in_title = bool(model_l) and len(model_l) >= 3 and model_l in title_lower
-        combined = brand_in_title and model_in_title
-        url_brand = bool(brand_l) and brand_l in url_lower
-        url_model = bool(model_l) and len(model_l) >= 3 and model_l in url_lower
 
-        if combined:
+        def _wbmatch(needle: str, haystack: str) -> bool:
+            """True se needle appare come token separato (non sottostringa di parola più lunga)."""
+            if not needle or len(needle) < 2:
+                return False
+            # Substring check veloce prima della regex
+            if needle not in haystack:
+                return False
+            return bool(re.search(r'(?<![a-z0-9])' + re.escape(needle) + r'(?![a-z0-9])', haystack))
+
+        brand_in_title   = _wbmatch(brand_l, title_lower)
+        model_in_title   = len(model_l) >= 3 and _wbmatch(model_l, title_lower)
+        brand_in_snippet = _wbmatch(brand_l, snippet_lower)
+        model_in_snippet = len(model_l) >= 3 and _wbmatch(model_l, snippet_lower)
+        url_brand        = bool(brand_l) and brand_l in url_lower
+        url_model        = len(model_l) >= 3 and model_l in url_lower
+
+        if brand_in_title and model_in_title:
             score += 18  # Brand + modello entrambi nel titolo → massima pertinenza
         elif model_in_title:
-            score += 10  # Solo modello nel titolo
+            score += 10
         elif brand_in_title:
-            score += 5   # Solo brand nel titolo
+            score += 5
+
+        # Snippet: segnale secondario (meno affidabile del titolo, ma utile)
+        if model_in_snippet and brand_in_snippet and not model_in_title:
+            score += 7
+        elif model_in_snippet and not model_in_title:
+            score += 4
 
         if url_brand and url_model:
-            score += 8   # Brand + modello nell'URL → PDF dedicato al modello
+            score += 8   # Brand+modello nell'URL → PDF dedicato al modello
         elif url_model:
             score += 4
 
-    # ── 4. Qualità titolo ────────────────────────────────────────────────
+    # ── 4. Qualità titolo/snippet ────────────────────────────────────────
+    combined_text = title_lower + " " + snippet_lower
     for kw, pts in _TITLE_POSITIVE:
-        if kw in title_lower:
+        if kw in combined_text:
             score += pts
-            break  # Solo la corrispondenza migliore (sono ordinati per peso)
+            break  # Solo la corrispondenza migliore
 
     for kw, pts in _TITLE_NEGATIVE:
-        if kw in title_lower:
+        if kw in combined_text:
             score += pts  # pts è negativo
             break
 
-    # ── 5. Penalità URL — percorsi che indicano documento non pertinente ────
+    # ── 5. Percorsi URL tipici dei manuali (boost) ───────────────────────
+    _URL_MANUAL_PATHS = (
+        "/manual", "/manuals", "/manuale", "/manuali",
+        "/operator", "/operators", "/operatori",
+        "/downloads/", "/download/", "/documents/", "/documenti/",
+        "/support/", "/resources/", "/media/manuals",
+    )
+    if any(p in url_lower for p in _URL_MANUAL_PATHS):
+        score += 6
+
+    # ── 6. Penalità URL — percorsi che indicano documento non pertinente ─
     _URL_NEGATIVE_PATHS = (
         "brochure", "environmental", "/epd/", "declaration", "sustainability",
         "emissions", "carbon", "/flyer", "/promo", "/news/", "/press-release",
     )
     if any(p in url_lower for p in _URL_NEGATIVE_PATHS):
-        score -= 40  # Penalità forte: molto probabilmente non è un manuale d'uso
+        score -= 40
 
     return max(0, min(100, score))
 
@@ -988,16 +1019,27 @@ async def search_manual(
     rental_queries = _build_rental_queries(brand, model)
     auction_queries = _build_auction_queries(brand, model)
 
-    for query in manual_queries[:3]:
-        try:
-            results = await _search_with_provider(query, provider)
-            if results:
-                all_results.extend(results)
-                pdf_results = [r for r in all_results if r.is_pdf]
-                if len(pdf_results) >= 3:
-                    break
-        except Exception:
-            continue
+    # Le prime 3 query (filetype:pdf, manuale operatore, sito produttore) in parallelo
+    # Riduce la latenza da ~3×2s a ~2s; i rate limit DuckDuckGo non si attivano su 3 req
+    _manual_batches = await asyncio.gather(
+        *[_search_with_provider(q, provider) for q in manual_queries[:3]],
+        return_exceptions=True,
+    )
+    for batch in _manual_batches:
+        if isinstance(batch, list):
+            all_results.extend(batch)
+    # Query 4-6 in sequenza solo se ancora pochi PDF dopo il batch parallelo
+    pdf_after_batch = [r for r in all_results if r.is_pdf]
+    if len(pdf_after_batch) < 3:
+        for query in manual_queries[3:6]:
+            try:
+                results = await _search_with_provider(query, provider)
+                if results:
+                    all_results.extend(results)
+                    if len([r for r in all_results if r.is_pdf]) >= 4:
+                        break
+            except Exception:
+                continue
 
     # Portali noleggio: solo se ancora pochi PDF (macchine da cantiere su portali noleggio,
     # inutile per macchine utensili da officina come piegatrici, torni, ecc.)
@@ -1133,8 +1175,8 @@ def _apply_brand_model_score(
     results: List[ManualSearchResult], brand: str, model: str
 ) -> List[ManualSearchResult]:
     """
-    Aggiunge un bonus di score basato sulla presenza di brand/modello nel titolo e nell'URL.
-    Applicato su tutti i risultati dopo la raccolta, prima della deduplicazione.
+    Aggiunge un bonus di score basato sulla presenza di brand/modello nel titolo, snippet e URL.
+    Usa word-boundary matching per evitare falsi positivi (es. "JCB" in "Jacob").
     Non penalizza mai — aggiunge solo bonus positivi.
     """
     if not brand and not model:
@@ -1143,25 +1185,35 @@ def _apply_brand_model_score(
     brand_l = brand.lower().strip()
     model_l = model.lower().strip()
 
+    def _wbmatch(needle: str, haystack: str) -> bool:
+        if not needle or len(needle) < 2 or needle not in haystack:
+            return False
+        return bool(re.search(r'(?<![a-z0-9])' + re.escape(needle) + r'(?![a-z0-9])', haystack))
+
     for r in results:
-        title_l = r.title.lower()
-        url_l = r.url.lower()
+        title_l   = r.title.lower()
+        url_l     = r.url.lower()
+        snippet_l = (r.snippet or "").lower()
         bonus = 0
 
-        brand_in_title = bool(brand_l) and brand_l in title_l
-        model_in_title = bool(model_l) and len(model_l) >= 3 and model_l in title_l
-        brand_in_url   = bool(brand_l) and brand_l in url_l
-        model_in_url   = bool(model_l) and len(model_l) >= 3 and model_l in url_l
+        brand_in_title   = _wbmatch(brand_l, title_l)
+        model_in_title   = len(model_l) >= 3 and _wbmatch(model_l, title_l)
+        model_in_snippet = len(model_l) >= 3 and _wbmatch(model_l, snippet_l)
+        brand_in_url     = bool(brand_l) and brand_l in url_l
+        model_in_url     = len(model_l) >= 3 and model_l in url_l
 
         if brand_in_title and model_in_title:
-            bonus += 18   # Corrispondenza esatta brand+modello nel titolo
+            bonus += 18
         elif model_in_title:
             bonus += 10
         elif brand_in_title:
             bonus += 5
 
+        if model_in_snippet and not model_in_title:
+            bonus += 4
+
         if brand_in_url and model_in_url:
-            bonus += 8    # Brand+modello nell'URL → PDF dedicato al modello
+            bonus += 8
         elif model_in_url:
             bonus += 4
 
@@ -2324,7 +2376,32 @@ async def _scrape_page_for_pdf_links(
     results: list[ManualSearchResult] = []
 
     if soup:
-        candidates = [(tag.get("href", ""), tag.get_text(strip=True)) for tag in soup.find_all("a", href=True)]
+        # Raccoglie candidati da: <a href>, data-href/data-url, onclick JS, <iframe src>
+        raw_candidates: list[tuple[str, str]] = []
+
+        for tag in soup.find_all("a", href=True):
+            raw_candidates.append((tag.get("href", ""), tag.get_text(strip=True)))
+
+        # data-href / data-url — pattern comuni su siti produttore moderni (SPA, lazy-load)
+        for tag in soup.find_all(True, attrs={"data-href": True}):
+            raw_candidates.append((tag["data-href"], tag.get_text(strip=True)))
+        for tag in soup.find_all(True, attrs={"data-url": True}):
+            raw_candidates.append((tag["data-url"], tag.get_text(strip=True)))
+        for tag in soup.find_all(True, attrs={"data-file": True}):
+            raw_candidates.append((tag["data-file"], tag.get_text(strip=True)))
+
+        # onclick="window.open('/path/to/manual.pdf')" — pattern tipico su siti datati
+        onclick_re = re.compile(r"""(?:window\.open|location\.href)\s*[=(]\s*['"]([^'"]+\.pdf[^'"]*)['"]""", re.I)
+        for tag in soup.find_all(True, onclick=True):
+            m = onclick_re.search(tag.get("onclick", ""))
+            if m:
+                raw_candidates.append((m.group(1), tag.get_text(strip=True)))
+
+        # <iframe src="...pdf..."> — alcuni siti embeddano il PDF direttamente
+        for tag in soup.find_all("iframe", src=True):
+            raw_candidates.append((tag["src"], ""))
+
+        candidates = raw_candidates
     else:
         candidates = [(u, "") for u in pdf_urls]  # type: ignore[name-defined]
 
@@ -2337,7 +2414,7 @@ async def _scrape_page_for_pdf_links(
         if not abs_url.startswith("http"):
             continue
 
-        # Deve terminare con .pdf (o contenere .pdf? nel query string)
+        # Deve contenere .pdf nell'URL (path o query string)
         lower_url = abs_url.lower()
         if ".pdf" not in lower_url:
             continue
@@ -2360,11 +2437,15 @@ async def _scrape_page_for_pdf_links(
             score += 20
         if any(t in combined for t in _PDF_INCLUDE_TERMS):
             score += 20
+        # Bonus percorsi URL tipici dei manuali
+        _MANUAL_URL_PATHS = ("/manual", "/manuale", "/operator", "/download", "/document", "/support")
+        if any(p in lower_url for p in _MANUAL_URL_PATHS):
+            score += 8
         # Bonus dominio istituzionale o produttore
         domain = urlparse(abs_url).netloc.lower()
-        if domain in _INSTITUTIONAL_DOMAINS:
+        if any(d in domain for d in _INSTITUTIONAL_DOMAINS):
             score += 25
-        elif domain in _MANUFACTURER_DOMAINS:
+        elif any(d in domain for d in _MANUFACTURER_DOMAINS):
             score += 15
 
         title = link_text or abs_url.split("/")[-1].replace("-", " ").replace("_", " ").removesuffix(".pdf")
@@ -2374,18 +2455,18 @@ async def _scrape_page_for_pdf_links(
             source_type=source_type,
             language="unknown",
             is_pdf=True,
-            relevance_score=min(score, 80),  # cap: inferiore ai risultati di ricerca diretti
+            relevance_score=min(score, 80),
         ))
 
     results.sort(key=lambda r: r.relevance_score, reverse=True)
-    return results[:3]  # Max 3 PDF per pagina
+    return results[:5]  # Max 5 PDF per pagina (era 3)
 
 
 async def scrape_html_results_for_pdfs(
     html_results: list[ManualSearchResult],
     brand: str,
     model: str,
-    max_pages: int = 4,
+    max_pages: int = 6,
 ) -> list[ManualSearchResult]:
     """
     Quando la ricerca non trova PDF diretti, scarica le prime N pagine HTML
