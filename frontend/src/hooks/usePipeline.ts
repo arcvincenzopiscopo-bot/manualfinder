@@ -59,7 +59,7 @@ export function usePipeline() {
 
   const run = useCallback(async (
     imageBase64: string, brand: string, model: string,
-    machineType?: string, qrUrls?: string[],
+    machineType?: string, qrUrls?: string[], machineTypeId?: number | null,
   ) => {
     abortRef.current?.abort()
     const controller = new AbortController()
@@ -72,6 +72,7 @@ export function usePipeline() {
         onEvent: handleEvent,
         signal: controller.signal,
         machineType,
+        machineTypeId,
         qrUrls,
       })
     } catch (err) {

@@ -484,6 +484,9 @@ async def generate_safety_card(
     producer_bytes: Optional[bytes] = None,
     producer_url: Optional[str] = None,
     producer_page_count: int = 0,
+    # Scheda tecnica commerciale (dati numerici specifici del modello)
+    datasheet_bytes: Optional[bytes] = None,
+    datasheet_url: Optional[str] = None,
     # Compatibilità legacy (singolo PDF)
     pdf_bytes: Optional[bytes] = None,
     pdf_url: Optional[str] = None,
@@ -496,6 +499,8 @@ async def generate_safety_card(
     norme: Optional[list] = None,
     # Label fonte del manuale produttore (es. "Produttore (Brand)" o "Manuale categoria simile")
     producer_source_label: Optional[str] = None,
+    # ID nel catalogo machine_types (None = testo libero, fallback normative hardcoded)
+    machine_type_id: Optional[int] = None,
 ) -> SafetyCard:
     """
     Genera la scheda di sicurezza combinando INAIL (normativa) + produttore (raccomandazioni).
@@ -555,7 +560,22 @@ async def generate_safety_card(
         card = await _generate_fallback(
             brand, model, provider, norme=norme or [],
             allegato_v_context=allegato_v_context,
+            machine_type=machine_type,
         )
+        # Se disponibile un datasheet (scheda tecnica commerciale ≤20 pagine),
+        # estrai i limiti operativi e sovrascrivili nel risultato fallback AI.
+        # Il datasheet non influenza rischi, procedure o dispositivi.
+        if datasheet_bytes and not card.limiti_operativi:
+            try:
+                limiti = await _extract_limiti_from_datasheet(
+                    datasheet_bytes, brand, model, provider
+                )
+                if limiti:
+                    card.limiti_operativi = limiti
+                    if datasheet_url:
+                        card.fonte_manuale = datasheet_url
+            except Exception:
+                pass  # Non bloccare la scheda se l'estrazione datasheet fallisce
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
     elif has_inail and has_producer:
@@ -608,7 +628,7 @@ async def generate_safety_card(
     # Override deterministico post-AI: per macchine la cui classificazione normativa
     # è nota e non ambigua, forza i valori corretti indipendentemente da quanto
     # estratto dal PDF o generato dall'AI (che spesso sbaglia su queste categorie).
-    _apply_normative_overrides(card, machine_type)
+    _apply_normative_overrides(card, machine_type, machine_type_id=machine_type_id)
 
     # Normative applicabili: mapping deterministico per tipo macchina + norme dalla targa OCR
     try:
@@ -669,11 +689,26 @@ _NO_VERIFICHE_TYPES: frozenset[str] = frozenset({
 })
 
 
-def _apply_normative_overrides(card, machine_type: Optional[str]) -> None:
+def _apply_normative_overrides(card, machine_type: Optional[str], machine_type_id: Optional[int] = None) -> None:
     """
     Forza a None i campi normativi per categorie dove la regola è certa e l'AI sbaglia spesso.
+    Priorità: DB flags (machine_type_id) > frozenset hardcoded (backward compat).
     Chiamata dopo _enrich_legal_fields() — sovrascrive sia output AI che contenuto estratto dal PDF.
     """
+    if machine_type_id is not None:
+        # DB è la fonte autorevole — fail-safe conservativo integrato in get_type_flags
+        try:
+            from app.services.machine_type_service import get_type_flags
+            flags = get_type_flags(machine_type_id)
+            if not flags["requires_patentino"]:
+                card.abilitazione_operatore = None
+            if not flags["requires_verifiche"]:
+                card.verifiche_periodiche = None
+            return  # DB ha risposto — non serve il fallback hardcoded
+        except Exception:
+            pass  # Fallback sotto
+
+    # Fallback hardcoded (backward compat quando machine_type_id non disponibile)
     if not machine_type:
         return
     mt = machine_type.lower().strip()
@@ -958,6 +993,7 @@ async def _generate_fallback(
     brand: str, model: str, provider: str,
     norme: list = [],
     allegato_v_context: Optional[str] = None,
+    machine_type: Optional[str] = None,
 ) -> SafetyCard:
     """Genera scheda di sicurezza dalla conoscenza AI senza manuale."""
     norme_context = ""
@@ -968,6 +1004,21 @@ async def _generate_fallback(
             "Usa queste norme per identificare i requisiti minimi di sicurezza applicabili a questa macchina. "
             "Includile nelle raccomandazioni dove pertinente."
         )
+    # Inietta norma EN di categoria per migliorare precisione valori limite nel fallback.
+    # get_normative() già esiste e mappa tipo macchina → norme EN/UNI/ISO applicabili.
+    if machine_type and not norme_context:
+        try:
+            from app.data.machine_normative import get_normative
+            cat_norme = get_normative(machine_type)
+            norma_en = next((n for n in cat_norme if "EN" in n or "ISO" in n), None)
+            if norma_en:
+                norme_context = (
+                    f"\n\nNORMA EN APPLICABILE A QUESTA CATEGORIA: {norma_en}\n"
+                    "Per i limiti operativi e i dispositivi obbligatori, usa i valori minimi/massimi "
+                    "definiti da questa norma come riferimento. Citala nelle voci pertinenti."
+                )
+        except Exception:
+            pass
     av_context = ""
     if allegato_v_context:
         av_context = f"\n\nCONTESTO ALLEGATO V (macchina ante-1996):\n{allegato_v_context}\n{ALLEGATO_V_EXTRA_FIELDS}"
@@ -980,6 +1031,40 @@ async def _generate_fallback(
     card.gap_ce_ante = result_json.get("gap_ce_ante")
     card.bozze_prescrizioni = result_json.get("bozze_prescrizioni") or []
     return card
+
+
+_DATASHEET_LIMITI_PROMPT = """Dalla scheda tecnica commerciale di {brand} {model} estrai SOLO i dati numerici misurabili:
+potenza (kW o HP), peso (kg o t), livello rumore dichiarato (dB(A)), dimensioni operative (mm o cm),
+portata/capacità massima (kg o t), velocità massima (km/h o m/s), tensione alimentazione (V/Hz),
+grado di protezione IP, altre specifiche numeriche rilevanti per la sicurezza.
+
+Rispondi SOLO con JSON valido:
+{{"limiti_operativi": [{{"valore": "...", "unita": "...", "descrizione": "..."}}]}}
+
+Lista vuota [] se nessun dato numerico trovato nel documento.
+Non inventare valori non presenti nel testo."""
+
+
+async def _extract_limiti_from_datasheet(
+    pdf_bytes: bytes, brand: str, model: str, provider: str
+) -> list:
+    """
+    Estrae solo i dati numerici (limiti_operativi) da una scheda tecnica commerciale.
+    Usato esclusivamente quando non è disponibile né INAIL né manuale produttore.
+    """
+    try:
+        text = pdf_service.extract_full_text(pdf_bytes)
+        if not text or len(text.strip()) < 50:
+            return []
+        safe_brand = brand.replace("{", "{{").replace("}", "}}")
+        safe_model = model.replace("{", "{{").replace("}", "}}")
+        prompt = _DATASHEET_LIMITI_PROMPT.format(brand=safe_brand, model=safe_model)
+        result_json = await _call_ai_with_text(text[:4000], prompt, provider)
+        limiti = result_json.get("limiti_operativi") or []
+        # Valida struttura minima: ogni voce deve avere almeno "valore"
+        return [item for item in limiti if isinstance(item, dict) and item.get("valore")]
+    except Exception:
+        return []
 
 
 import logging as _logging

@@ -491,6 +491,10 @@ def _build_institutional_queries(machine_type: Optional[str]) -> List[str]:
         f'site:osha.europa.eu "{base}" sicurezza filetype:pdf',
         # DGUV — equivalente INAIL tedesco, utile per brand DE (Liebherr, Komatsu, ecc.)
         f'site:dguv.de "{base}" filetype:pdf',
+        # INRS Francia — schede sicurezza categoria in francese, contenuto tecnico EN valido in tutta Europa
+        # Copre categorie assenti in INAIL IT: presse, torni, saldatrici, compressori
+        f'site:inrs.fr "{base}" sécurité filetype:pdf',
+        f'inrs.fr "{base}" fiche sécurité prévention',
     ]
 
     # Macchine utensili / lavorazione lamiera → UCIMU
@@ -515,6 +519,24 @@ def _build_institutional_queries(machine_type: Optional[str]) -> List[str]:
         ]
 
     return queries
+
+
+def _build_datasheet_queries(brand: str, model: str) -> List[str]:
+    """
+    Cerca la scheda tecnica commerciale (2-8 pagine) del costruttore.
+    Fonte per dati numerici specifici del modello: potenza, peso, dB, dimensioni.
+    NON cerca il manuale completo: usa termini di esclusione per filtrare.
+    Nota: i risultati vengono classificati source_type="datasheet" e usati
+    SOLO per estrarre limiti_operativi — mai per rischi o procedure.
+    """
+    b, m = brand.strip(), model.strip()
+    return [
+        f'"{b}" "{m}" "scheda tecnica" filetype:pdf',
+        f'"{b}" "{m}" datasheet filetype:pdf',
+        f'"{b}" "{m}" "technical specifications" filetype:pdf',
+        f'"{b}" "{m}" "dati tecnici" filetype:pdf',
+        f'"{b}" "{m}" specifications -"use and maintenance" -"manuale d\'uso" -"istruzioni"',
+    ]
 
 
 def _build_multilingual_queries(brand: str, model: str) -> List[str]:
@@ -1000,6 +1022,20 @@ async def search_manual(
                 all_results.extend(results)
             except Exception:
                 continue
+
+    # LIVELLO 2c: Scheda tecnica commerciale (dati numerici specifici del modello)
+    # Cercata sempre, indipendentemente da INAIL. Risultati taggati source_type="datasheet"
+    # e usati solo per estrarre limiti_operativi (non rischi né procedure).
+    # PREREQUISITO: verificare tasso successo su campione reale prima di aumentare le query.
+    datasheet_queries = _build_datasheet_queries(brand, model)
+    for query in datasheet_queries[:2]:  # max 2 per non rallentare il processo
+        try:
+            results = await _search_with_provider(query, provider)
+            for r in results:
+                r.source_type = "datasheet"
+            all_results.extend(results)
+        except Exception:
+            continue
 
     # LIVELLO 3a: Fonti dirette indipendenti (in parallelo)
     direct_tasks = [

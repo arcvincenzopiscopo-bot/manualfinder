@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from app.routers import analyze, manual, health, manuals
+from app.routers import analyze, manual, health, manuals, machine_types
 from app.config import settings
 
 # Rate limiting
@@ -41,6 +41,7 @@ app.include_router(health.router)
 app.include_router(analyze.router, prefix="/analyze")
 app.include_router(manual.router, prefix="/manual")
 app.include_router(manuals.router, prefix="/manuals")
+app.include_router(machine_types.router)
 
 
 @app.on_event("startup")
@@ -51,6 +52,13 @@ async def on_startup():
         search_cache._store.clear()
     elif hasattr(search_cache, "_fallback"):
         search_cache._fallback._store.clear()
+    # Inizializza catalogo tipi macchina: crea tabelle + seed + carica alias map
+    try:
+        from app.services.machine_type_service import _ensure_tables
+        _ensure_tables()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("machine_type_service init fallito: %s", e)
 
 
 @app.get("/admin/cache-clear")

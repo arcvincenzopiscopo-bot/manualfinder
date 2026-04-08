@@ -10,6 +10,7 @@ class PlateOCRResult(BaseModel):
     serial_number: Optional[str] = None
     year: Optional[str] = None
 
+    machine_type_id: Optional[int] = None  # ID nel catalogo machine_types (None = tipo non nel catalogo)
     confidence: str = "low"       # "high" | "medium" | "low"
     raw_text: str = ""
     norme: List[str] = []          # Norme armonizzate estratte dalla targa (EN, UNI, ISO)
@@ -42,7 +43,7 @@ class PlateOCRResult(BaseModel):
 class ManualSearchResult(BaseModel):
     url: str
     title: str
-    source_type: str              # "inail" | "manufacturer" | "web"
+    source_type: str              # "inail" | "manufacturer" | "web" | "datasheet"
     language: str = "unknown"     # "it" | "en" | "de" | "unknown"
     is_pdf: bool = False
     relevance_score: int = 0      # 0-100, per ordinamento

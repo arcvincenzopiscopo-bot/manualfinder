@@ -29,6 +29,9 @@ pytesseract>=0.3.13
 pyzbar>=0.1.9
 pylibdmtx>=0.1.10
 
+# Fuzzy matching per catalogo tipi macchina
+rapidfuzz>=3.0.0
+
 # Rate limiting
 slowapi>=0.1.9
 

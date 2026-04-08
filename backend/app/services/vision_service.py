@@ -176,9 +176,11 @@ async def extract_plate_info(image_base64: str) -> PlateOCRResult:
     if result.brand and result.model:
         ocr_hint = (result.machine_type or "").strip()
         # Passa il tipo OCR come hint — l'AI può confermarlo o correggerlo
-        enriched = await _infer_machine_type(result.brand, result.model, provider, ocr_hint=ocr_hint or None)
+        enriched, mt_id = await _infer_machine_type(result.brand, result.model, provider, ocr_hint=ocr_hint or None)
         if enriched:
             result.machine_type = enriched
+        # Registra l'ID canonico (None se tipo non nel catalogo — backward compat)
+        result.machine_type_id = mt_id
 
     # Post-inferenza: rileva accessori/attrezzature per evitare analisi come macchina completa
     if result.machine_type:
@@ -521,19 +523,35 @@ def _lookup_brand_type(brand: str, model: str) -> Optional[str]:
     return None
 
 
-async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: Optional[str] = None) -> Optional[str]:
+async def _infer_machine_type(
+    brand: str, model: str, provider: str, ocr_hint: Optional[str] = None
+) -> tuple[Optional[str], Optional[int]]:
     """
     Determina il tipo di macchina da brand+modello.
+    Ritorna (machine_type_str, machine_type_id) — id può essere None (backward compat).
+
+    Pipeline:
     1. Lookup deterministico su _BRAND_TYPE_MAP (istantaneo, 100% affidabile per brand noti)
-    2. Se brand sconosciuto → AI con prompt mirato
-    ocr_hint: tipo estratto dall'OCR, usato solo come contesto per l'AI.
+    2. DB matching su ocr_hint via machine_type_service (rapidfuzz + LLM candidati)
+    3. AI inference con prompt mirato, poi match DB sul testo restituito
     """
+    from app.services.machine_type_service import match_ocr_text, get_name_by_id
+
     # Step 1: lookup deterministico — nessuna chiamata AI
     lookup = _lookup_brand_type(brand, model)
     if lookup:
-        return lookup
+        # Prova a trovare l'ID nel catalogo
+        mt_id, score, _ = match_ocr_text(lookup)
+        return (lookup, mt_id if score >= 0.82 else None)
 
-    # Step 2: brand sconosciuto — chiedi all'AI con istruzioni precise
+    # Step 2: DB matching diretto su ocr_hint (se disponibile e affidabile)
+    if ocr_hint and ocr_hint not in _GENERIC_TYPES:
+        mt_id, score, method = match_ocr_text(ocr_hint)
+        if mt_id and score >= 0.82:
+            name = get_name_by_id(mt_id)
+            return (name or ocr_hint, mt_id)
+
+    # Step 3: brand sconosciuto — chiedi all'AI con istruzioni precise
     hint_line = f"Nota: l'OCR ha letto dalla targa '{ocr_hint}' come tipo — verifica se è corretto.\n" if ocr_hint else ""
     prompt = (
         f"Rispondi con UNA SOLA RIGA di testo, senza spiegazioni.\n"
@@ -564,6 +582,7 @@ async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: O
         f"'benna a polipo', 'benna carico-pietrisco', 'testa saldante', 'attrezzatura idraulica per escavatore'.\n"
         f"Se non sei sicuro o il brand è sconosciuto: null"
     )
+    answer = None
     try:
         if provider == "anthropic":
             import anthropic
@@ -590,14 +609,21 @@ async def _infer_machine_type(brand: str, model: str, provider: str, ocr_hint: O
             )
             answer = resp.text.strip().lower()
         else:
-            return None
-
-        if answer in ("null", "non so", "sconosciuto", "unknown", ""):
-            return None
-        # Rimuovi eventuali virgolette o punteggiatura residua, poi normalizza EN→IT
-        return _normalize_machine_type(answer.strip('"\'.,').strip())
+            return (None, None)
     except Exception:
-        return None
+        return (None, None)
+
+    if not answer or answer in ("null", "non so", "sconosciuto", "unknown", ""):
+        return (None, None)
+
+    # Normalizza EN→IT, poi cerca nel catalogo DB
+    normalized = _normalize_machine_type(answer.strip('"\'.,').strip())
+    mt_id, score, _ = match_ocr_text(normalized)
+    if mt_id and score >= 0.65:
+        name = get_name_by_id(mt_id) or normalized
+        return (name, mt_id)
+    # Tipo non nel catalogo — backward compat: testo libero senza ID
+    return (normalized, None)
 
 
 async def _extract_with_claude(image_base64: str) -> PlateOCRResult:

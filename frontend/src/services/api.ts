@@ -1,4 +1,4 @@
-import type { ManualSearchResult, PlateOCRResult, SSEEvent } from '../types'
+import type { ManualSearchResult, MachineType, PlateOCRResult, SSEEvent } from '../types'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
@@ -26,6 +26,7 @@ export async function analyzeFullSSE(
     signal?: AbortSignal
     preferredLanguage?: string
     machineType?: string
+    machineTypeId?: number | null
     year?: string | null
     qrUrls?: string[]
   }
@@ -38,6 +39,7 @@ export async function analyzeFullSSE(
       brand,
       model,
       machine_type: options.machineType || null,
+      machine_type_id: options.machineTypeId ?? null,
       year: options.year || null,
       preferred_language: options.preferredLanguage ?? 'it',
       qr_urls: options.qrUrls ?? [],
@@ -191,6 +193,43 @@ export async function submitManualFeedback(payload: {
   if (payload.useful_for_type) fd.append('useful_for_type', payload.useful_for_type)
   if (payload.notes) fd.append('notes', payload.notes)
   await fetch(`${BASE_URL}/manuals/feedback`, { method: 'POST', body: fd })
+}
+
+export async function getMachineTypes(): Promise<MachineType[]> {
+  try {
+    const response = await fetch(`${BASE_URL}/machine-types`)
+    if (!response.ok) return []
+    return response.json()
+  } catch {
+    return []
+  }
+}
+
+export async function submitMachineTypeFeedback(
+  machineTypeId: number,
+  outcome: 'confirmed' | 'corrected' | 'skipped',
+): Promise<void> {
+  try {
+    await fetch(`${BASE_URL}/machine-types/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ machine_type_id: machineTypeId, outcome }),
+    })
+  } catch {
+    // silenzioso — non critico
+  }
+}
+
+export async function suggestMachineType(proposedName: string): Promise<void> {
+  try {
+    await fetch(`${BASE_URL}/machine-types/suggest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proposed_name: proposedName }),
+    })
+  } catch {
+    // silenzioso
+  }
 }
 
 export async function checkHealth(): Promise<boolean> {

@@ -6,6 +6,7 @@ Routers analisi:
 """
 import json
 import asyncio
+from typing import Optional
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from app.models.requests import PlateAnalysisRequest, FullAnalysisRequest
@@ -52,6 +53,7 @@ async def analyze_ocr(request: Request, body: PlateAnalysisRequest):
         "brand": result.brand,
         "model": result.model,
         "machine_type": result.machine_type,
+        "machine_type_id": result.machine_type_id,
         "serial_number": result.serial_number,
         "year": result.year,
         "confidence": result.confidence,
@@ -80,6 +82,7 @@ async def _pipeline(request: FullAnalysisRequest):
     brand = request.brand.strip()
     model = request.model.strip()
     machine_type = request.machine_type.strip() if request.machine_type else None
+    machine_type_id: Optional[int] = getattr(request, "machine_type_id", None)
     machine_year = request.year.strip() if getattr(request, "year", None) else None
     serial_number = getattr(request, "serial_number", None) or None
     norme = getattr(request, "norme", None) or []
@@ -218,14 +221,18 @@ async def _pipeline(request: FullAnalysisRequest):
         full = (urlparse(url).netloc + urlparse(url).path).lower()
         return any(d in full for d in INAIL_MIRROR_DOMAINS)
 
-    # Separa candidati: INAIL locale/mirror vs manuale produttore online
+    # Separa candidati: INAIL locale/mirror vs datasheet vs manuale produttore online
     inail_candidates = [r for r in pdf_candidates
                         if r.source_type == "inail" or _is_inail_mirror(r.url)]
+    datasheet_candidates = [r for r in pdf_candidates
+                            if r.source_type == "datasheet" and not _is_inail_mirror(r.url)]
     producer_candidates = [r for r in pdf_candidates
-                           if r.source_type != "inail" and not _is_inail_mirror(r.url)]
+                           if r.source_type not in ("inail", "datasheet") and not _is_inail_mirror(r.url)]
 
     inail_bytes = None
     inail_url = None
+    datasheet_bytes = None
+    datasheet_url = None
     producer_bytes = None
     producer_url = None
     producer_pages = 0
@@ -285,6 +292,32 @@ async def _pipeline(request: FullAnalysisRequest):
                         continue  # prova il prossimo candidato
                 inail_bytes, inail_url = _ibytes, _iurl
                 break
+
+        # Scarica scheda tecnica commerciale (datasheet) — usata solo per limiti_operativi
+        # Soglia pagine: <= 20 = datasheet breve. Se più lungo → reindirizza a producer.
+        DATASHEET_MAX_PAGES = 20
+        if datasheet_candidates:
+            for ds_candidate in datasheet_candidates[:2]:
+                try:
+                    ok, _ = await pdf_service.head_check_url(ds_candidate.url)
+                    if not ok:
+                        continue
+                    ds_data, _ = await pdf_service.download_pdf(ds_candidate.url)
+                    if not ds_data:
+                        continue
+                    ds_pages = pdf_service.count_pdf_pages(ds_data)
+                    if ds_pages > DATASHEET_MAX_PAGES:
+                        # Documento troppo lungo: reindirizza al percorso manuale
+                        if not producer_bytes:
+                            producer_bytes = ds_data
+                            producer_url = ds_candidate.url
+                            producer_pages = ds_pages
+                    else:
+                        datasheet_bytes = ds_data
+                        datasheet_url = ds_candidate.url
+                    break
+                except Exception:
+                    continue
 
         # Filtra URL con domini o path chiaramente non industriali prima di scaricare
         def _is_industrial_url(url: str) -> bool:
@@ -595,8 +628,10 @@ async def _pipeline(request: FullAnalysisRequest):
             inail_bytes=inail_bytes, inail_url=inail_url,
             producer_bytes=producer_bytes, producer_url=producer_url,
             producer_page_count=producer_pages,
+            datasheet_bytes=datasheet_bytes, datasheet_url=datasheet_url,
             machine_year=machine_year,
             machine_type=machine_type,
+            machine_type_id=machine_type_id,
             is_ante_ce=is_ante_ce,
             is_allegato_v=is_allegato_v,
             norme=norme,

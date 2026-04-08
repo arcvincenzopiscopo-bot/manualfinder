@@ -10,6 +10,7 @@ import { SafetyCard } from './components/results/SafetyCard'
 import { ErrorBanner } from './components/ui/ErrorBanner'
 import { OfflineBadge } from './components/ui/OfflineBadge'
 import { UploadManualModal } from './components/upload/UploadManualModal'
+import { AdminPanel } from './components/admin/AdminPanel'
 import type { PlateOCRResult } from './types'
 
 type AppState = 'idle' | 'preview' | 'ocr_loading' | 'confirming' | 'running' | 'done' | 'error'
@@ -49,6 +50,15 @@ export default function App() {
   const { state: pipeline, run, reset } = usePipeline()
   const { cached, isOnline, save } = useOfflineCache()
   const backendReady = useBackendReady()
+
+  const [isAdmin, setIsAdmin] = useState(window.location.hash === '#admin')
+  useEffect(() => {
+    const handler = () => setIsAdmin(window.location.hash === '#admin')
+    window.addEventListener('hashchange', handler)
+    return () => window.removeEventListener('hashchange', handler)
+  }, [])
+
+  if (isAdmin) return <AdminPanel />
 
   const [appState, setAppState] = useState<AppState>('idle')
   const [showUpload, setShowUpload] = useState(false)
@@ -93,14 +103,14 @@ export default function App() {
     }
   }
 
-  const handleConfirm = (brand: string, model: string, serial: string, year: string, machineType: string) => {
+  const handleConfirm = (brand: string, model: string, serial: string, year: string, machineType: string, machineTypeId: number | null = null) => {
     if (!imageBase64) return
     // Aggiorna ocrResult con i valori corretti dall'utente
     if (ocrResult) {
-      setOcrResult({ ...ocrResult, brand, model, serial_number: serial || null, year: year || null, machine_type: machineType || null })
+      setOcrResult({ ...ocrResult, brand, model, serial_number: serial || null, year: year || null, machine_type: machineType || null, machine_type_id: machineTypeId })
     }
     setAppState('running')
-    run(imageBase64, brand, model, machineType, ocrResult?.qr_urls ?? [])
+    run(imageBase64, brand, model, machineType, ocrResult?.qr_urls ?? [], machineTypeId)
   }
 
   const handleNewSearch = () => {
@@ -274,7 +284,7 @@ export default function App() {
             )}
             <ErrorBanner
               message={ocrError ?? pipeline.error ?? 'Errore sconosciuto'}
-              onRetry={ocrError ? handleStartOcr : () => { if (imageBase64 && ocrResult) handleConfirm(ocrResult.brand ?? '', ocrResult.model ?? '', ocrResult.serial_number ?? '', ocrResult.year ?? '', ocrResult.machine_type ?? '') }}
+              onRetry={ocrError ? handleStartOcr : () => { if (imageBase64 && ocrResult) handleConfirm(ocrResult.brand ?? '', ocrResult.model ?? '', ocrResult.serial_number ?? '', ocrResult.year ?? '', ocrResult.machine_type ?? '', ocrResult.machine_type_id ?? null) }}
             />
             <div style={{ padding: '0 16px 16px' }}>
               <button

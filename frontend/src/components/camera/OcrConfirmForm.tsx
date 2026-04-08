@@ -1,10 +1,11 @@
 import { useState, useRef } from 'react'
 import type { PlateOCRResult } from '../../types'
 import { inferMachineType } from '../../services/api'
+import { MachineTypeSelector } from '../ocr/MachineTypeSelector'
 
 interface Props {
   ocr: PlateOCRResult & { brightness_warning?: string }
-  onConfirm: (brand: string, model: string, serial: string, year: string, machineType: string) => void
+  onConfirm: (brand: string, model: string, serial: string, year: string, machineType: string, machineTypeId: number | null) => void
   onRetake: () => void
 }
 
@@ -18,6 +19,7 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
   const [brand, setBrand] = useState(ocr.brand ?? '')
   const [model, setModel] = useState(ocr.model ?? '')
   const [machineType, setMachineType] = useState(ocr.machine_type ?? '')
+  const [machineTypeId, setMachineTypeId] = useState<number | null>(ocr.machine_type_id ?? null)
   const [serial, setSerial] = useState(ocr.serial_number ?? '')
   const [year, setYear] = useState(ocr.year ?? '')
   const [inferring, setInferring] = useState(false)
@@ -34,7 +36,11 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
     setInferring(true)
     try {
       const result = await inferMachineType(b, m, machineType.trim() || undefined)
-      if (result) setMachineType(result)
+      if (result) {
+        setMachineType(result)
+        // machine_type_id sarà aggiornato da MachineTypeSelector quando riceve il nuovo valore
+        setMachineTypeId(null) // reset — il selector lo aggiornerà dal catalogo
+      }
     } catch {
       // silenzioso — l'utente può inserire il tipo manualmente
     } finally {
@@ -48,11 +54,11 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
   return (
     <div style={{ padding: '16px' }}>
 
-      {/* Tipo macchina - campo informativo */}
-      {machineType && (
+      {/* Tipo macchina — mostra icona solo quando rilevato dal catalogo */}
+      {machineType && machineTypeId && (
         <div style={{
-          background: '#f0f9ff',
-          border: '1px solid #7dd3fc',
+          background: '#f0fdf4',
+          border: '1px solid #86efac',
           borderRadius: 8,
           padding: '10px 12px',
           marginBottom: 16,
@@ -63,9 +69,9 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
           <span style={{ fontSize: 16 }}>🏗️</span>
           <div>
             <p style={{ margin: 0, fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>
-              Tipo di macchina
+              Tipo di macchina — catalogo
             </p>
-            <p style={{ margin: '2px 0 0', fontSize: 14, color: '#0c4a6e', fontWeight: 600 }}>
+            <p style={{ margin: '2px 0 0', fontSize: 14, color: '#166534', fontWeight: 600 }}>
               {machineType}
             </p>
           </div>
@@ -146,23 +152,15 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
           autoCapitalize="characters"
         />
 
-        <label style={{ ...labelStyle, marginTop: 12 }}>
-          Tipo di macchina (per ricerca INAIL)
-          {inferring && (
-            <span style={{ marginLeft: 8, fontSize: 11, color: '#3b82f6', fontWeight: 400 }}>
-              ⟳ Rilevamento...
-            </span>
-          )}
-        </label>
-        <input
-          type="text"
-          value={inferring ? '' : machineType}
-          onChange={e => { if (!inferring) setMachineType(e.target.value) }}
-          placeholder={inferring ? 'Rilevamento tipo in corso...' : 'es. piattaforma aerea, escavatore, gru'}
-          style={{ ...inputStyle(!!machineType && !inferring), opacity: inferring ? 0.6 : 1 }}
-          autoCapitalize="sentences"
-          disabled={inferring}
-        />
+        <div style={{ marginTop: 12 }}>
+          <MachineTypeSelector
+            value={machineType}
+            valueId={machineTypeId}
+            onChange={(name, id) => { setMachineType(name); setMachineTypeId(id) }}
+            disabled={false}
+            loading={inferring}
+          />
+        </div>
 
         <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
           <div style={{ flex: 2 }}>
@@ -214,7 +212,7 @@ export function OcrConfirmForm({ ocr, onConfirm, onRetake }: Props) {
       {/* Azioni */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <button
-          onClick={() => onConfirm(brand.trim(), model.trim(), serial.trim(), year.trim(), machineType.trim())}
+          onClick={() => onConfirm(brand.trim(), model.trim(), serial.trim(), year.trim(), machineType.trim(), machineTypeId)}
           disabled={!canConfirm}
           style={{
             padding: '14px',

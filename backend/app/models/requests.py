@@ -36,6 +36,7 @@ class FullAnalysisRequest(BaseModel):
     brand: str
     model: str
     machine_type: Optional[str] = None    # Tipo di macchina per ricerca INAIL
+    machine_type_id: Optional[int] = None # ID nel catalogo machine_types (None = testo libero)
     year: Optional[str] = None            # Anno di fabbricazione dalla targa
     serial_number: Optional[str] = None   # Numero di serie dalla targa (per ricerca su portali produttore)
     norme: List[str] = []                 # Norme armonizzate estratte dalla targa

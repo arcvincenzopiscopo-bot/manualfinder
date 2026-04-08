@@ -2,6 +2,7 @@ export interface PlateOCRResult {
   brand: string | null
   model: string | null
   machine_type: string | null  // Tipo di macchina (es: "piattaforma aerea", "escavatore")
+  machine_type_id: number | null  // ID nel catalogo machine_types (null = non nel catalogo)
   serial_number: string | null
   year: string | null
   confidence: 'high' | 'medium' | 'low'
@@ -12,6 +13,15 @@ export interface PlateOCRResult {
   machine_category: 'cantiere' | 'industriale' | 'agricola' | 'sollevamento' | 'altro' | null
   qr_url: string | null
   qr_urls: string[]
+}
+
+export interface MachineType {
+  id: number
+  name: string
+  requires_patentino: boolean
+  requires_verifiche: boolean
+  inail_search_hint: string | null
+  usage_count: number
 }
 
 export interface ManualSearchResult {
