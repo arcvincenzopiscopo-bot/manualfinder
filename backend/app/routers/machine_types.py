@@ -19,7 +19,7 @@ from typing import Optional
 
 from app.services import machine_type_service
 
-router = APIRouter(prefix="/api/machine-types", tags=["machine-types"])
+router = APIRouter(prefix="/machine-types", tags=["machine-types"])
 
 
 # ── Modelli request ───────────────────────────────────────────────────────────
