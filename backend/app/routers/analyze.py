@@ -658,6 +658,26 @@ async def _pipeline(request: FullAnalysisRequest):
         producer_url=producer_url,
     )
 
+    # ── Scan log: storico letture targa per batch e analytics ──────────────
+    from app.services import scan_log_service
+    scan_log_service.log_scan(
+        brand=brand, model=model,
+        machine_type=machine_type,
+        machine_type_id=machine_type_id,
+        serial_number=serial_number,
+        machine_year=machine_year,
+        norme=norme,
+        qr_urls=qr_urls,
+        inail_url=inail_url,
+        producer_url=producer_url,
+        producer_pages=producer_pages,
+        fonte_tipo=getattr(safety_card, "fonte_tipo", None),
+        is_ante_ce=is_ante_ce,
+        is_allegato_v=is_allegato_v,
+        safety_alerts_count=len(safety_alerts_data),
+        session_id=getattr(request, "session_id", None),
+    )
+
     yield _sse(SSEEvent(step="analysis", status="completed", progress=90, message="Scheda generata."))
 
     # ── COMPLETE ──────────────────────��──────────────────────────────────

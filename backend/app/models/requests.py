@@ -43,3 +43,4 @@ class FullAnalysisRequest(BaseModel):
     qr_url: Optional[str] = None          # Primo URL QR (backward compat, usato se qr_urls vuoto)
     qr_urls: List[str] = []               # Tutti gli URL decodificati da QR Code sulla targa
     preferred_language: str = "it"
+    session_id: Optional[str] = None      # ID sessione ispettore (opzionale, per audit e batch)
