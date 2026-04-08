@@ -25,6 +25,10 @@ google-genai>=0.21.0
 # OCR fallback
 pytesseract>=0.3.13
 
+# QR Code e DataMatrix nativi (richiede libzbar0 e libdmtx-dev come dipendenze di sistema)
+pyzbar>=0.1.9
+pylibdmtx>=0.1.10
+
 # Rate limiting
 slowapi>=0.1.9
 

@@ -749,7 +749,12 @@ async def _analyze_dual_source(
                 result.append({**d, "fonte": fonte})
         return result
 
-    # Merge: INAIL fornisce rischi/DPI/residui; produttore fornisce raccomandazioni
+    # ── PESATURA FONTI ────────────────────────────────────────────────────────
+    # INAIL = fonte normativa → vince sempre sui campi normativi (rischi, DPI, residui).
+    # Produttore = fonte operativa → aggiunge solo ciò che INAIL non copre già.
+    # Deduplicazione semantica (Jaccard su token) per evitare ridondanze tra fonti.
+
+    # Rischi: INAIL è primario; produttore aggiunge SOLO rischi semanticamente nuovi
     rischi = _tag_items(inail_json.get("rischi_principali") or [], inail_label)
     dpi = _tag_items(inail_json.get("dispositivi_protezione") or [], inail_label)
     racc = _tag_items(
@@ -759,37 +764,42 @@ async def _analyze_dual_source(
     )
     residui = _tag_items(inail_json.get("rischi_residui") or [], inail_label)
 
-    # Arricchisci con rischi specifici del modello se il produttore ne ha trovati
-    rischi_specifici = producer_json.get("rischi_specifici_modello") or []
-    if rischi_specifici:
-        existing_testi = {item["testo"].lower() for item in rischi}
-        for r in rischi_specifici:
-            if r.lower() not in existing_testi:
-                rischi.append({"testo": str(r), "fonte": producer_label})
+    # Arricchisci con rischi specifici del modello — dedup semantica contro rischi INAIL
+    rischi_specifici_raw = _tag_items(
+        producer_json.get("rischi_specifici_modello") or [], producer_label
+    )
+    nuovi_rischi = _semantic_dedup(rischi_specifici_raw, rischi)
+    rischi.extend(nuovi_rischi)
 
-    # Dispositivi di sicurezza: produttore prima (più specifico), poi INAIL, deduplicati per nome
-    disp_prod = _tag_devices(producer_json.get("dispositivi_sicurezza") or [], producer_label)
+    # Dispositivi di sicurezza: INAIL è normativo → vince sui conflitti per nome;
+    # produttore aggiunge dispositivi specifici del modello non già in INAIL
     disp_inail = _tag_devices(inail_json.get("dispositivi_sicurezza") or [], inail_label)
+    disp_prod  = _tag_devices(producer_json.get("dispositivi_sicurezza") or [], producer_label)
     seen_device_names: set[str] = set()
     dispositivi_merged = []
-    for d in disp_prod + disp_inail:
+    # INAIL prima (fonte normativa ha precedenza in caso di conflitto per nome)
+    for d in disp_inail + disp_prod:
         key = d.get("nome", "").lower().strip()
         if key and key not in seen_device_names:
             seen_device_names.add(key)
             dispositivi_merged.append(d)
 
-    # Checklist: merge INAIL + produttore, deduplicata
-    checklist_inail = inail_json.get("checklist") or []
-    checklist_prod = producer_json.get("checklist") or []
+    # Checklist: INAIL prima, poi produttore con dedup semantica
+    checklist_inail_raw = [i for i in (inail_json.get("checklist") or []) if isinstance(i, str)]
+    checklist_prod_raw  = [i for i in (producer_json.get("checklist") or []) if isinstance(i, str)]
+    # Dedup esatta su INAIL stesso
     seen_cl: set[str] = set()
-    checklist_merged = []
-    for item in checklist_inail + checklist_prod:
-        if not isinstance(item, str):
-            continue
+    checklist_inail_deduped: list[str] = []
+    for item in checklist_inail_raw:
         key = item.lower().strip()
         if key not in seen_cl:
             seen_cl.add(key)
-            checklist_merged.append(item)
+            checklist_inail_deduped.append(item)
+    # Dedup semantica: aggiunge dal produttore solo voci non già coperte da INAIL
+    cl_inail_dicts = [{"testo": i} for i in checklist_inail_deduped]
+    cl_prod_dicts  = [{"testo": i} for i in checklist_prod_raw]
+    nuove_cl = _semantic_dedup(cl_prod_dicts, cl_inail_dicts)
+    checklist_merged = checklist_inail_deduped + [d["testo"] for d in nuove_cl]
 
     # Nuovi campi ispettivi da fonti distinte
     procedure_emergenza = _tag_items(
@@ -801,9 +811,43 @@ async def _analyze_dual_source(
         producer_label,
     )
     pittogrammi_sicurezza = producer_json.get("pittogrammi_sicurezza") or []
-    abilitazione_operatore = _nullable_str(inail_json.get("abilitazione_operatore"))
-    documenti_da_richiedere = inail_json.get("documenti_da_richiedere") or []
-    verifiche_periodiche = _nullable_str(inail_json.get("verifiche_periodiche"))
+
+    # abilitazione_operatore: INAIL è fonte normativa primaria; produttore come fallback
+    # o integrazione se aggiunge informazioni non presenti in INAIL
+    _abilitazione_inail = _nullable_str(inail_json.get("abilitazione_operatore"))
+    _abilitazione_prod  = _nullable_str(producer_json.get("abilitazione_operatore"))
+    if _abilitazione_inail and _abilitazione_prod:
+        # Combina se il produttore aggiunge info non già presenti (evita duplicati verbatim)
+        if _abilitazione_prod.lower().strip() not in _abilitazione_inail.lower():
+            abilitazione_operatore = f"{_abilitazione_inail} | [{brand}] {_abilitazione_prod}"
+        else:
+            abilitazione_operatore = _abilitazione_inail
+    else:
+        abilitazione_operatore = _abilitazione_inail or _abilitazione_prod
+
+    # verifiche_periodiche: stessa logica — INAIL primario, produttore come fallback/integrazione
+    _verifiche_inail = _nullable_str(inail_json.get("verifiche_periodiche"))
+    _verifiche_prod  = _nullable_str(producer_json.get("verifiche_periodiche"))
+    if _verifiche_inail and _verifiche_prod:
+        if _verifiche_prod.lower().strip() not in _verifiche_inail.lower():
+            verifiche_periodiche = f"{_verifiche_inail} | [{brand}] {_verifiche_prod}"
+        else:
+            verifiche_periodiche = _verifiche_inail
+    else:
+        verifiche_periodiche = _verifiche_inail or _verifiche_prod
+
+    # documenti_da_richiedere: merge liste, deduplicati (INAIL prima, poi aggiunte del produttore)
+    _docs_inail = inail_json.get("documenti_da_richiedere") or []
+    _docs_prod  = producer_json.get("documenti_da_richiedere") or []
+    _docs_seen: set[str] = set()
+    documenti_da_richiedere = []
+    for doc in _docs_inail + _docs_prod:
+        if not isinstance(doc, str):
+            continue
+        key = doc.lower().strip()
+        if key not in _docs_seen:
+            _docs_seen.add(key)
+            documenti_da_richiedere.append(doc)
 
     # Nota combinata
     notes = []
@@ -888,7 +932,7 @@ async def _analyze_pdf_map_reduce(
 
     # MAP: analizza ogni chunk
     partial = []
-    for chunk in chunks[:5]:  # Max 5 chunk per contenere i costi
+    for chunk in chunks[:8]:  # Max 8 chunk (aumentato da 5 per manuali molto grandi)
         try:
             partial_json = await _call_ai_with_text(chunk, prompt, provider)
             partial.append(json.dumps(partial_json, ensure_ascii=False))
@@ -1116,6 +1160,47 @@ def _parse_json_response(text: str) -> dict:
 
 
 _NULL_STR_VALUES = {"null", "none", "n/a", "non previsto", "non applicabile"}
+
+
+def _semantic_dedup(items: list[dict], existing: list[dict], threshold: float = 0.55) -> list[dict]:
+    """
+    Deduplicazione semantica leggera basata su overlap di token.
+    Aggiunge da `items` solo le voci il cui testo non sia già "coperto" da
+    qualcosa in `existing` con Jaccard similarity ≥ threshold.
+
+    Strategia: tokenizza in parole significative (≥4 char, escluse stopword
+    comuni), calcola |A∩B|/|A∪B|. Nessuna dipendenza esterna.
+    """
+    _STOPWORDS = {
+        "della", "dello", "degli", "delle", "nella", "nello", "negli", "nelle",
+        "questo", "questa", "questi", "queste", "sono", "essere", "avere",
+        "viene", "devono", "deve", "verificare", "controllo", "verifica",
+        "assicurarsi", "accertarsi", "presenza", "assenza", "durante",
+        "prima", "dopo", "ogni", "volta", "come", "dove", "cosa",
+        "macchina", "macchinario", "operatore", "dispositivo",
+    }
+
+    def _tokens(text: str) -> set[str]:
+        words = re.findall(r"[a-zA-ZÀ-ú]{4,}", text.lower())
+        return {w for w in words if w not in _STOPWORDS}
+
+    def _jaccard(a: set, b: set) -> float:
+        if not a or not b:
+            return 0.0
+        return len(a & b) / len(a | b)
+
+    existing_token_sets = [_tokens(e.get("testo", "")) for e in existing]
+    result = []
+    combined_token_sets = list(existing_token_sets)
+    for item in items:
+        tok = _tokens(item.get("testo", ""))
+        if not tok:
+            continue
+        if any(_jaccard(tok, ex) >= threshold for ex in combined_token_sets):
+            continue  # semanticamente duplicato
+        result.append(item)
+        combined_token_sets.append(tok)
+    return result
 
 def _nullable_str(value) -> Optional[str]:
     """Restituisce None se il valore è una stringa null-like (es. 'Null', 'None', 'N/A')."""

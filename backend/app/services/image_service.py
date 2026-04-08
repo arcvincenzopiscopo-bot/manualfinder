@@ -77,6 +77,70 @@ def preprocess_plate_image_variant(image_base64: str, variant: int) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
+def decode_barcodes(image_base64: str) -> list[str]:
+    """
+    Decodifica QR Code, DataMatrix e barcode lineari dall'immagine originale.
+    Tenta più varianti di preprocessing per codici rovinati/riflessi/a basso contrasto.
+    Ritorna lista di URL/stringhe decodificate (deduplicata, solo stringhe non vuote).
+    Fallback silenzioso se pyzbar/pylibdmtx non sono installati.
+    """
+    raw = base64.b64decode(image_base64)
+    img = Image.open(io.BytesIO(raw)).convert("RGB")
+
+    # Prepara varianti per massimizzare le chance di decodifica
+    variants: list[Image.Image] = []
+
+    # 1. Originale ridimensionato (non processato — i decoder nativi preferiscono l'originale)
+    img_resized = _resize_for_api(img, 1568)
+    variants.append(img_resized)
+
+    # 2. Grayscale ad alto contrasto — aiuta con codici ossidati/sbiaditi
+    gray = img_resized.convert("L")
+    high_contrast = ImageEnhance.Contrast(gray.convert("RGB")).enhance(3.0)
+    variants.append(high_contrast.convert("L"))
+
+    # 3. Invertito — alcuni DataMatrix sono chiari su scuro (il decoder si aspetta scuro su chiaro)
+    arr_inv = np.array(gray)
+    inverted = Image.fromarray(255 - arr_inv)
+    variants.append(inverted)
+
+    found: list[str] = []
+
+    for variant in variants:
+        pil_img = variant if variant.mode in ("L", "RGB") else variant.convert("RGB")
+
+        # ── pyzbar: QR Code, Code128, EAN, PDF417, ecc. ──────────────────────
+        try:
+            from pyzbar.pyzbar import decode as pyzbar_decode
+            from pyzbar.pyzbar import ZBarSymbol
+            decoded = pyzbar_decode(pil_img, symbols=[ZBarSymbol.QRCODE])
+            for sym in decoded:
+                data = sym.data.decode("utf-8", errors="ignore").strip()
+                if data and data not in found:
+                    found.append(data)
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+        # ── pylibdmtx: DataMatrix ─────────────────────────────────────────────
+        try:
+            from pylibdmtx.pylibdmtx import decode as dmtx_decode
+            # pylibdmtx vuole un'immagine PIL in modalità RGB o L
+            pil_for_dmtx = pil_img if isinstance(pil_img, Image.Image) else Image.fromarray(np.array(pil_img))
+            decoded_dm = dmtx_decode(pil_for_dmtx, timeout=500)
+            for sym in decoded_dm:
+                data = sym.data.decode("utf-8", errors="ignore").strip()
+                if data and data not in found:
+                    found.append(data)
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+    return found
+
+
 def _resize_for_api(img: Image.Image, max_dimension: int) -> Image.Image:
     w, h = img.size
     if max(w, h) > max_dimension:

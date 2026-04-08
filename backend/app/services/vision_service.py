@@ -192,6 +192,25 @@ async def extract_plate_info(image_base64: str) -> PlateOCRResult:
                     )
                 break
 
+    # Decodifica nativa QR/DataMatrix: integra con quanto già trovato dall'AI vision.
+    # Viene eseguita sull'immagine originale (non preprocessata) per massimizzare la resa.
+    # I decoder nativi leggono codici rovinati/angolati che il modello vision ignora.
+    try:
+        from app.services.image_service import decode_barcodes
+        native_urls = decode_barcodes(image_base64)
+        if native_urls:
+            # Aggiungi solo URL non già presenti (confronto case-insensitive)
+            existing_lower = {u.lower() for u in result.qr_urls}
+            for url in native_urls:
+                if url.lower() not in existing_lower:
+                    result.qr_urls.append(url)
+                    existing_lower.add(url.lower())
+            # Aggiorna qr_url (primo elemento) per retrocompatibilità
+            if result.qr_urls and not result.qr_url:
+                result.qr_url = result.qr_urls[0]
+    except Exception:
+        pass  # Librerie non installate o errore — non blocca l'OCR
+
     return result
 
 
