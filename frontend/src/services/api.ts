@@ -27,6 +27,7 @@ export async function analyzeFullSSE(
     preferredLanguage?: string
     machineType?: string
     year?: string | null
+    qrUrls?: string[]
   }
 ): Promise<void> {
   const response = await fetch(`${BASE_URL}/analyze/full`, {
@@ -39,6 +40,8 @@ export async function analyzeFullSSE(
       machine_type: options.machineType || null,
       year: options.year || null,
       preferred_language: options.preferredLanguage ?? 'it',
+      qr_urls: options.qrUrls ?? [],
+      qr_url: options.qrUrls?.[0] ?? null,
     }),
     signal: options.signal,
   })

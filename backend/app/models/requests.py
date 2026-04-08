@@ -39,5 +39,6 @@ class FullAnalysisRequest(BaseModel):
     year: Optional[str] = None            # Anno di fabbricazione dalla targa
     serial_number: Optional[str] = None   # Numero di serie dalla targa (per ricerca su portali produttore)
     norme: List[str] = []                 # Norme armonizzate estratte dalla targa
-    qr_url: Optional[str] = None          # URL da QR Code sulla targa (link diretto al manuale)
+    qr_url: Optional[str] = None          # Primo URL QR (backward compat, usato se qr_urls vuoto)
+    qr_urls: List[str] = []               # Tutti gli URL decodificati da QR Code sulla targa
     preferred_language: str = "it"

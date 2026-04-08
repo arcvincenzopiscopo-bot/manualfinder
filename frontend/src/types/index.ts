@@ -10,6 +10,8 @@ export interface PlateOCRResult {
   // Nuovi campi per routing ante-CE
   ce_marking: 'presente' | 'assente' | 'non_visibile' | null
   machine_category: 'cantiere' | 'industriale' | 'agricola' | 'sollevamento' | 'altro' | null
+  qr_url: string | null
+  qr_urls: string[]
 }
 
 export interface ManualSearchResult {

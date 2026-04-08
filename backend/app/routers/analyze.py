@@ -15,6 +15,23 @@ from app.config import settings
 
 router = APIRouter()
 
+# URL QR che non puntano a documenti (portali assistenza, landing page, ecc.)
+_QR_SERVICE_PATTERNS = [
+    "service/scan", "/scan?", "/aftersales", "/support/scan",
+    "cat.com/service", "komatsu.com/scan", "/qrcode/", "/qr?",
+    "parts.cat.com", "sos.cat.com",
+]
+
+
+def _filter_qr_urls(urls: list[str]) -> list[str]:
+    """Scarta URL QR che puntano a portali-servizio invece che a documenti."""
+    filtered = []
+    for u in urls:
+        u_low = u.lower()
+        if not any(p in u_low for p in _QR_SERVICE_PATTERNS):
+            filtered.append(u)
+    return filtered
+
 
 # ── Endpoint 1: solo OCR ──────────────────────────────────────────────────────
 
@@ -40,6 +57,8 @@ async def analyze_ocr(request: Request, body: PlateAnalysisRequest):
         "confidence": result.confidence,
         "raw_text": result.raw_text,
         "notes": result.notes,
+        "qr_url": result.qr_url,
+        "qr_urls": result.qr_urls,
         "brightness_warning": (
             "Immagine molto scura — OCR potrebbe essere impreciso." if brightness["is_too_dark"]
             else "Immagine sovraesposta — OCR potrebbe essere impreciso." if brightness["is_too_bright"]
@@ -64,7 +83,13 @@ async def _pipeline(request: FullAnalysisRequest):
     machine_year = request.year.strip() if getattr(request, "year", None) else None
     serial_number = getattr(request, "serial_number", None) or None
     norme = getattr(request, "norme", None) or []
-    qr_url = getattr(request, "qr_url", None)
+    # Risolve qr_urls: usa lista nuova se disponibile, altrimenti fallback su singolo qr_url
+    _qr_urls_raw: list[str] = list(getattr(request, "qr_urls", None) or [])
+    _qr_legacy = getattr(request, "qr_url", None)
+    if not _qr_urls_raw and _qr_legacy:
+        _qr_urls_raw = [_qr_legacy]
+    qr_urls = _filter_qr_urls(_qr_urls_raw)
+    qr_url = qr_urls[0] if qr_urls else None  # backward compat per messaggi SSE
 
     # ── STEP 1: Ricerca Manuale ──────────────────────────────────────────
     search_msg = f"Ricerca manuale per {brand} {model}"
@@ -159,18 +184,19 @@ async def _pipeline(request: FullAnalysisRequest):
     # (lo scraping HTML è ora dentro search_manual — i pdf_candidates già includono
     #  i PDF trovati per scraping di produttore e pagine HTML)
 
-    # Se il QR Code sulla targa punta direttamente a un manuale, aggiungilo come candidato prioritario
-    if qr_url:
+    # Se i QR Code sulla targa puntano direttamente a manuali, aggiungili come candidati prioritari
+    if qr_urls:
         from app.models.responses import ManualSearchResult as MSR
-        qr_candidate = MSR(
-            url=qr_url,
-            title=f"Manuale da QR Code — {brand} {model}",
-            source_type="manufacturer",
-            language="unknown",
-            is_pdf=qr_url.lower().endswith(".pdf"),
-            relevance_score=95,  # Alta priorità: link diretto dal costruttore
-        )
-        pdf_candidates.insert(0, qr_candidate)
+        for i, qu in enumerate(qr_urls):
+            qr_candidate = MSR(
+                url=qu,
+                title=f"Manuale da QR Code — {brand} {model}",
+                source_type="manufacturer",
+                language="unknown",
+                is_pdf=qu.lower().endswith(".pdf"),
+                relevance_score=95 - i,  # Alta priorità; primo QR > secondo
+            )
+            pdf_candidates.insert(i, qr_candidate)
 
     # Domini che ospitano schede normative/INAIL — trattati come INAIL, non produttore
     INAIL_MIRROR_DOMAINS = [

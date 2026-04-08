@@ -22,7 +22,7 @@ Analizza l'immagine della targa identificativa del macchinario e estrai le segue
   "year": "anno di fabbricazione (se visibile, es: 2018)",
   "ce_marking": "presente | assente | non_visibile",
   "norme": ["EN 280", "UNI EN 474-1"],
-  "qr_url": "URL decodificato dal QR Code se presente nella foto, altrimenti null",
+  "qr_urls": ["URL1 decodificato da QR Code se presente nella foto", "URL2 se ci sono più QR Code"],
   "confidence": "high|medium|low",
   "raw_text": "tutto il testo visibile sulla targa, riga per riga",
   "notes": "eventuali osservazioni (es: targa parzialmente leggibile, ossidazione severa, QR Code presente ma illeggibile)"
@@ -86,7 +86,7 @@ REGOLE IMPORTANTI:
   - "non_visibile" = targa parzialmente illeggibile, impossibile determinare con certezza
   - NOTA: la presenza/assenza della marcatura CE determina il regime normativo applicabile (Dir. 2006/42/CE vs Allegato V D.Lgs. 81/08)
 - Per "norme": lista delle norme armonizzate riportate sulla targa (stringhe che iniziano per EN, UNI, ISO, IEC, prEN). Esempi: "EN 280", "UNI EN 474-1", "ISO 4309". Lista vuota [] se non presenti.
-- Per "qr_url": se nell'immagine è presente un QR Code, tentane la decodifica anche se parzialmente visibile (almeno 3 angoli leggibili). Se riesci, riporta l'URL completo. Se il QR è presente ma illeggibile, scrivi null e aggiungi "QR Code presente ma illeggibile" nelle notes. Spesso rimanda direttamente al manuale digitale del produttore.
+- Per "qr_urls": lista di TUTTI gli URL decodificati dai QR Code presenti nell'immagine. Ogni QR Code visibile va tentato (almeno 3 angoli leggibili). Lista vuota [] se nessun QR presente o leggibile. Se un QR è presente ma illeggibile, aggiungi "QR Code presente ma illeggibile" nelle notes. I QR Code sulle targhe spesso rimandano al manuale digitale del produttore.
 - confidence "high": testo chiaramente leggibile senza dubbi
 - confidence "medium": leggibile ma con qualche incertezza su alcuni caratteri o valori
 - confidence "low": molto difficile da leggere, probabili errori di interpretazione
@@ -678,6 +678,29 @@ async def _extract_with_tesseract(image_base64: str) -> PlateOCRResult:
     )
 
 
+def _qr_fields(data: dict) -> dict:
+    """Ritorna {'qr_urls': [...], 'qr_url': first_or_None} per PlateOCRResult."""
+    urls = _parse_qr_urls(data)
+    return {"qr_urls": urls, "qr_url": urls[0] if urls else None}
+
+
+def _parse_qr_urls(data: dict) -> list[str]:
+    """
+    Estrae la lista di URL QR Code da un dict OCR.
+    Supporta sia il nuovo campo 'qr_urls' (list) che il vecchio 'qr_url' (str) per retrocompatibilità.
+    Filtra URL null/vuoti.
+    """
+    urls: list[str] = []
+    raw = data.get("qr_urls")
+    if isinstance(raw, list):
+        urls = [u for u in raw if isinstance(u, str) and u.strip()]
+    if not urls:
+        legacy = data.get("qr_url")
+        if isinstance(legacy, str) and legacy.strip():
+            urls = [legacy.strip()]
+    return urls
+
+
 def _try_extract_json_field(text: str, field: str) -> Optional[str]:
     """
     Estrae un singolo campo stringa da JSON malformato via regex.
@@ -717,7 +740,7 @@ def _parse_ocr_json(text: str) -> PlateOCRResult:
             serial_number=data.get("serial_number"),
             year=data.get("year"),
             norme=norme,
-            qr_url=data.get("qr_url"),
+            **_qr_fields(data),
             confidence=data.get("confidence", "low"),
             raw_text=data.get("raw_text", ""),
             notes=data.get("notes"),

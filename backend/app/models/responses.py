@@ -13,7 +13,8 @@ class PlateOCRResult(BaseModel):
     confidence: str = "low"       # "high" | "medium" | "low"
     raw_text: str = ""
     norme: List[str] = []          # Norme armonizzate estratte dalla targa (EN, UNI, ISO)
-    qr_url: Optional[str] = None   # URL decodificato da QR Code sulla targa
+    qr_url: Optional[str] = None   # Primo URL QR (backward compat)
+    qr_urls: List[str] = []        # Tutti gli URL decodificati da QR Code sulla targa
     # Nuovi campi per determinazione ante-CE e routing ricerca
     ce_marking: Optional[str] = None      # "presente" | "assente" | "non_visibile"
     machine_category: Optional[str] = None # "cantiere" | "industriale" | "agricola" | "sollevamento" | "altro"
