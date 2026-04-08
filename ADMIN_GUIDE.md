@@ -167,38 +167,39 @@ La lista a sinistra si aggiorna immediatamente con i nuovi badge.
 
 Il catalogo viene inizializzato automaticamente al primo avvio con 39 tipi verificati:
 
-| Tipo | Patentino | Verifiche |
-|------|-----------|-----------|
-| Piattaforma aerea | ✓ | ✓ |
-| Carrello elevatore | ✓ | ✓ |
-| Carrello portacontainer | ✓ | ✓ |
-| Piattaforma a forbice | ✓ | ✓ |
-| Sollevatore telescopico | ✓ | ✓ |
-| Gru mobile | ✓ | ✓ |
-| Gru a torre | ✓ | ✓ |
-| Carrello retrattile | ✓ | ✓ |
-| Escavatore | — | ✓ |
-| Pala caricatrice | — | ✓ |
-| Terna | — | ✓ |
-| Minipala | — | ✓ |
-| Rullo compattatore | — | ✓ |
-| Finitrice stradale | — | ✓ |
-| Dumper | — | ✓ |
-| Bulldozer | — | ✓ |
-| Pompa calcestruzzo | — | ✓ |
-| Trattore agricolo | — | ✓ |
-| Elevatore a colonna | — | ✓ |
-| Piattaforma verticale | — | ✓ |
-| Gru a bandiera | — | ✓ |
-| Paranco elettrico | — | ✓ |
-| Argano | — | ✓ |
-| Livellatrice | — | — |
-| Betoniera | — | — |
-| Generatore | — | — |
-| Compressore | — | — |
-| Saldatrice | — | — |
-| Transpallet elettrico | — | — |
-| Accessorio/attrezzatura | — | — |
+| Tipo | Patentino | Verifiche | Fonte normativa |
+|------|-----------|-----------|-----------------|
+| Piattaforma aerea | ✓ | ✓ | Accordo S-R 2012 / Allegato VII |
+| Carrello elevatore | ✓ | ✓ | Accordo S-R 2012 / Allegato VII |
+| Carrello portacontainer | ✓ | ✓ | Accordo S-R 2012 / Allegato VII |
+| Piattaforma a forbice | ✓ | ✓ | Accordo S-R 2012 / Allegato VII |
+| Sollevatore telescopico | ✓ | ✓ | Accordo S-R 2012 / Allegato VII |
+| Gru mobile | ✓ | ✓ | Accordo S-R 2012 / Allegato VII |
+| Gru a torre | ✓ | ✓ | Accordo S-R 2012 / Allegato VII |
+| Gru su autocarro | ✓ | ✓ | Accordo S-R 2012 / Allegato VII |
+| Carrello retrattile | ✓ | ✓ | Accordo S-R 2012 / Allegato VII |
+| Escavatore | ✓ | — | Accordo S-R 2012 (mov. terra) |
+| Pala caricatrice | ✓ | — | Accordo S-R 2012 (mov. terra) |
+| Terna | ✓ | — | Accordo S-R 2012 (mov. terra) |
+| Minipala | ✓ | — | Accordo S-R 2012 (mov. terra) |
+| Rullo compattatore | ✓ | — | Accordo S-R 2012 (mov. terra) |
+| Livellatrice | ✓ | — | Accordo S-R 2012 (mov. terra) |
+| Finitrice stradale | ✓ | — | Accordo S-R 2012 (mov. terra) |
+| Dumper | ✓ | — | Accordo S-R 2012 (mov. terra) |
+| Pompa calcestruzzo | ✓ | ✓ | Accordo S-R 2012 / Allegato VII (braccio) |
+| Trattore agricolo | ✓ | — | Accordo S-R 2012 |
+| Elevatore a colonna | — | ✓ | Allegato VII |
+| Piattaforma verticale | — | ✓ | Allegato VII |
+| Gru a bandiera | — | ✓ | Allegato VII |
+| Paranco elettrico | — | ✓ | Allegato VII |
+| Argano | — | ✓ | Allegato VII |
+| Bulldozer | — | — | Non coperto dall'Accordo 2012 né dall'Allegato VII |
+| Betoniera | — | — | — |
+| Generatore | — | — | — |
+| Compressore | — | — | — |
+| Saldatrice | — | — | — |
+| Transpallet elettrico | — | — | — |
+| Accessorio/attrezzatura | — | — | — |
 
 ---
 

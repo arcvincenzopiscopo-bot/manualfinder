@@ -59,21 +59,21 @@ _SEED_TYPES: list[tuple] = [
     ("carrello retrattile",         True,  True,  "carrello retrattile reach truck"),
     ("transpallet elettrico",       False, False, "transpallet elettrico"),
     ("elevatore a colonna",         False, True,  "elevatore a colonna montacarichi"),
-    ("escavatore",                  False, True,  "escavatore idraulico cingolato"),
-    ("pala caricatrice",            False, True,  "pala meccanica caricatrice"),
-    ("terna",                       False, True,  "terna escavatore caricatrice"),
-    ("minipala",                    False, True,  "minipala skid steer"),
-    ("rullo compattatore",          False, False, "rullo compattatore stradale"),
-    ("livellatrice",                False, False, "livellatrice grader stradale"),
-    ("finitrice stradale",          False, False, "finitrice asfaltice paver"),
-    ("dumper",                      False, False, "dumper articolato cantiere"),
-    ("bulldozer",                   False, True,  "bulldozer apripista"),
-    ("pompa calcestruzzo",          False, True,  "pompa calcestruzzo autopompa"),
+    ("escavatore",                  True,  False, "escavatore idraulico cingolato"),
+    ("pala caricatrice",            True,  False, "pala meccanica caricatrice"),
+    ("terna",                       True,  False, "terna escavatore caricatrice"),
+    ("minipala",                    True,  False, "minipala skid steer"),
+    ("rullo compattatore",          True,  False, "rullo compattatore stradale"),
+    ("livellatrice",                True,  False, "livellatrice grader stradale"),
+    ("finitrice stradale",          True,  False, "finitrice asfaltice paver"),
+    ("dumper",                      True,  False, "dumper articolato cantiere"),
+    ("bulldozer",                   False, False, "bulldozer apripista"),
+    ("pompa calcestruzzo",          True,  True,  "pompa calcestruzzo autopompa"),
     ("betoniera",                   False, False, "betoniera autobetoniera"),
     ("generatore",                  False, False, "gruppo elettrogeno generatore"),
     ("compressore",                 False, False, "compressore aria"),
     ("saldatrice",                  False, False, "saldatrice elettrica"),
-    ("trattore agricolo",           False, True,  "trattore agricolo"),
+    ("trattore agricolo",           True,  False, "trattore agricolo"),
     ("pressa piegatrice",           False, False, "pressa piegatrice CNC"),
     ("punzonatrice",                False, False, "punzonatrice lamiera"),
     ("macchina taglio laser",       False, False, "taglio laser fibra"),
@@ -180,6 +180,8 @@ def _ensure_tables() -> None:
             count = cur.fetchone()[0]
         if count == 0:
             _seed_db(conn)
+        else:
+            _apply_flag_corrections(conn)
         conn.close()
         # Ricarica alias map in memoria
         _rebuild_alias_map()
@@ -224,6 +226,42 @@ def _seed_db(conn) -> None:
                 )
         conn.commit()
     logger.info("machine_type_service: seed DB completato (%d tipi)", len(_SEED_TYPES))
+
+
+# Correzioni normative v2 — applicate anche su DB esistenti (idempotente)
+# Accordo Stato-Regioni 22/02/2012: tutte le macchine movimento terra richiedono patentino.
+# D.Lgs. 81/08 Allegato VII: solo apparecchi di sollevamento richiedono verifiche INAIL;
+# macchine movimento terra, trattori e bulldozer NON sono nell'Allegato VII.
+_FLAG_CORRECTIONS: list[tuple[str, bool, bool]] = [
+    # (normalized_name, requires_patentino, requires_verifiche)
+    ("escavatore",        True,  False),
+    ("pala caricatrice",  True,  False),
+    ("terna",             True,  False),
+    ("minipala",          True,  False),
+    ("rullo compattatore",True,  False),
+    ("livellatrice",      True,  False),
+    ("finitrice stradale",True,  False),
+    ("dumper",            True,  False),
+    ("bulldozer",         False, False),
+    ("pompa calcestruzzo",True,  True),
+    ("trattore agricolo", True,  False),
+]
+
+
+def _apply_flag_corrections(conn) -> None:
+    """Corregge i flag normativi su DB esistenti. Sicuro da chiamare ad ogni avvio."""
+    try:
+        with conn.cursor() as cur:
+            for norm_name, req_pat, req_ver in _FLAG_CORRECTIONS:
+                cur.execute(
+                    "UPDATE machine_types SET requires_patentino = %s, requires_verifiche = %s "
+                    "WHERE normalized_name = %s",
+                    (req_pat, req_ver, norm_name),
+                )
+        conn.commit()
+        logger.info("machine_type_service: flag corrections applicati")
+    except Exception as e:
+        logger.warning("machine_type_service: _apply_flag_corrections fallito: %s", e)
 
 
 def _seed_in_memory() -> None:

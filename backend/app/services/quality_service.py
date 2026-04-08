@@ -48,11 +48,11 @@ _SHOULD_HAVE_MANUAL = {
 }
 
 _NO_PATENTINO = {
+    # Accordo Stato-Regioni 22/02/2012 NON copre queste macchine
     "compressore", "motocompressore", "gruppo elettrogeno", "generatore",
     "piastra vibrante", "costipatore",
-    "rullo compattatore", "rullo compressore",
-    "bulldozer", "apripista",
-    "betoniera", "betonpompa",
+    "bulldozer", "apripista",          # non elencato esplicitamente nell'Accordo 2012
+    "betoniera",                        # ≠ pompa calcestruzzo (quest'ultima è coperta)
     "saldatrice", "saldatrice mig", "saldatrice tig",
     "pressa", "pressa idraulica", "pressa piegatrice", "piegatrice",
     "punzonatrice", "cesoie", "tranciatrice",
@@ -61,24 +61,33 @@ _NO_PATENTINO = {
 }
 
 _SHOULD_HAVE_VERIFICHE = {
+    # D.Lgs. 81/08 Allegato VII — solo apparecchi di sollevamento
     "carrello elevatore", "carrello elevatore telescopico", "carrello elevatore a contrappeso",
     "muletto", "sollevatore telescopico", "telehandler",
     "gru", "gru mobile", "gru a torre", "gru su autocarro", "camion gru", "gru su camion",
     "argano", "verricello", "paranco", "paranchi",
     "piattaforma aerea", "ple", "piattaforma elevabile", "piattaforma a forbice",
     "piattaforma a braccio", "ascensore di cantiere", "montacarichi", "elevatore a bandiera",
-    "terna", "terne", "retroescavatore",
-    "pompa calcestruzzo", "autobetonpompa",
+    # terna/retroescavatore escluse: macchine movimento terra, non in Allegato VII
+    "pompa calcestruzzo", "autobetonpompa",  # braccio autopompa = apparecchio sollevamento
 }
 
 _NO_VERIFICHE = {
-    "piastra vibrante", "costipatore",
-    "rullo compattatore", "rullo compressore",
+    # Macchine movimento terra: non sono apparecchi di sollevamento, non in Allegato VII
+    "escavatore", "escavatore idraulico", "escavatori",
+    "pala caricatrice", "pala meccanica", "pala gommata", "pala cingolata",
+    "terna", "terne", "retroescavatore",
+    "minipala", "mini pala", "skid steer",
+    "rullo compattatore", "rullo compressore", "rullo vibrante", "rullo",
+    "livellatrice", "grader",
+    "finitrice", "finitrice stradale",
+    "dumper", "autoribaltabile",
     "bulldozer", "apripista",
+    "trattore agricolo", "trattore",
+    # Altre attrezzature non soggette a Allegato VII
+    "piastra vibrante", "costipatore",
     "compressore", "motocompressore",
     "saldatrice", "betoniera",
-    "escavatore", "escavatore idraulico",
-    "dumper", "finitrice", "rullo",
 }
 
 
