@@ -173,6 +173,19 @@ def _ensure_tables() -> None:
                     created_at            TIMESTAMP DEFAULT NOW()
                 )
             """)
+        # Migration: nuove colonne e tabelle
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE machine_types ADD COLUMN IF NOT EXISTS vita_utile_anni INT DEFAULT NULL")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS machine_type_hazard (
+                    id                  SERIAL PRIMARY KEY,
+                    machine_type_id     INT UNIQUE NOT NULL REFERENCES machine_types(id) ON DELETE CASCADE,
+                    categoria_inail     TEXT,
+                    focus_testo         TEXT,
+                    aggiornato_da       TEXT NOT NULL DEFAULT 'ai',
+                    last_updated        TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+            """)
         conn.commit()
         # Popola seed se tabella vuota
         with conn.cursor() as cur:
@@ -349,7 +362,7 @@ def get_all_types() -> list[dict]:
         conn = _get_conn()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, name, requires_patentino, requires_verifiche, inail_search_hint, usage_count "
+                "SELECT id, name, requires_patentino, requires_verifiche, inail_search_hint, usage_count, vita_utile_anni "
                 "FROM machine_types WHERE is_verified = true ORDER BY name"
             )
             rows = cur.fetchall()
@@ -359,6 +372,7 @@ def get_all_types() -> list[dict]:
                 "id": r[0], "name": r[1],
                 "requires_patentino": r[2], "requires_verifiche": r[3],
                 "inail_search_hint": r[4], "usage_count": r[5],
+                "vita_utile_anni": r[6],
             }
             for r in rows
         ]
@@ -800,28 +814,28 @@ def admin_delete_alias(alias_id: int) -> dict:
 def admin_update_flags(machine_type_id: int,
                        requires_patentino: bool,
                        requires_verifiche: bool,
-                       inail_search_hint: Optional[str] = None) -> dict:
-    """Aggiorna i flag normativi e l'hint INAIL di un tipo macchina."""
+                       inail_search_hint: Optional[str] = None,
+                       vita_utile_anni: Optional[int] = None) -> dict:
+    """Aggiorna i flag normativi, l'hint INAIL e la vita utile di un tipo macchina."""
     if not settings.database_url:
         return {"status": "no_db"}
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            if inail_search_hint is not None:
-                cur.execute("""
-                    UPDATE machine_types
-                    SET requires_patentino = %s,
-                        requires_verifiche = %s,
-                        inail_search_hint  = %s
-                    WHERE id = %s
-                """, (requires_patentino, requires_verifiche, inail_search_hint.strip() or None, machine_type_id))
-            else:
-                cur.execute("""
-                    UPDATE machine_types
-                    SET requires_patentino = %s,
-                        requires_verifiche = %s
-                    WHERE id = %s
-                """, (requires_patentino, requires_verifiche, machine_type_id))
+            cur.execute("""
+                UPDATE machine_types
+                SET requires_patentino = %s,
+                    requires_verifiche = %s,
+                    inail_search_hint  = %s,
+                    vita_utile_anni    = %s
+                WHERE id = %s
+            """, (
+                requires_patentino,
+                requires_verifiche,
+                inail_search_hint.strip() if inail_search_hint else None,
+                vita_utile_anni,
+                machine_type_id,
+            ))
         conn.commit()
         conn.close()
         invalidate_cache()
@@ -877,3 +891,179 @@ def admin_get_stats() -> dict:
     except Exception as e:
         logger.error("admin_get_stats: %s", e)
         return {"error": str(e)}
+
+
+# ── Vita utile ────────────────────────────────────────────────────────────────
+
+async def admin_populate_vita_utile(provider: str) -> dict:
+    """
+    Usa l'AI per popolare vita_utile_anni per tutti i machine_types con valore NULL.
+    Ritorna {populated: N, skipped: M, errors: K}.
+    """
+    if not settings.database_url:
+        return {"error": "no_db"}
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name FROM machine_types WHERE is_verified = true AND vita_utile_anni IS NULL ORDER BY name")
+            rows = cur.fetchall()
+        conn.close()
+    except Exception as e:
+        return {"error": str(e)}
+
+    populated = 0
+    skipped = 0
+    errors = 0
+
+    from app.services.analysis_service import _call_ai_with_text
+
+    for (mt_id, name) in rows:
+        prompt = (
+            f"Quanti anni è la vita utile tipica di una '{name}' secondo normativa italiana e best practice industriale?\n"
+            f"Considera standard come ISO, EN, D.Lgs 81/08 e prassi manutentiva del settore.\n"
+            f"Rispondi SOLO con un numero intero (es. 10). Nessun testo aggiuntivo."
+        )
+        try:
+            result_text = await _call_ai_with_text("", prompt, provider, is_fallback=True)
+            # La funzione ritorna un dict; se l'AI ha risposto con testo puro, prova a parsare
+            anni = None
+            if isinstance(result_text, dict):
+                # In caso l'AI risponda in JSON per errore
+                for v in result_text.values():
+                    try:
+                        anni = int(str(v).strip())
+                        break
+                    except Exception:
+                        pass
+            elif isinstance(result_text, (int, float)):
+                anni = int(result_text)
+            else:
+                # Stringa: estrai il primo numero
+                import re as _re
+                m = _re.search(r'\d+', str(result_text))
+                if m:
+                    anni = int(m.group())
+            if anni and 1 <= anni <= 100:
+                conn = _get_conn()
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE machine_types SET vita_utile_anni = %s WHERE id = %s", (anni, mt_id))
+                conn.commit()
+                conn.close()
+                populated += 1
+            else:
+                skipped += 1
+        except Exception as ex:
+            logger.warning("populate_vita_utile: errore per '%s': %s", name, ex)
+            errors += 1
+
+    invalidate_cache()
+    return {"populated": populated, "skipped": skipped, "errors": errors}
+
+
+# ── Hazard Intelligence ───────────────────────────────────────────────────────
+
+def get_hazard(machine_type_id: int) -> Optional[dict]:
+    """Restituisce i dati hazard per un tipo macchina, o None se non presenti."""
+    if not settings.database_url:
+        return None
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, categoria_inail, focus_testo, aggiornato_da, last_updated "
+                "FROM machine_type_hazard WHERE machine_type_id = %s",
+                (machine_type_id,),
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "categoria_inail": row[1],
+            "focus_testo": row[2],
+            "aggiornato_da": row[3],
+            "last_updated": row[4].isoformat() if row[4] else None,
+        }
+    except Exception as e:
+        logger.warning("get_hazard: %s", e)
+        return None
+
+
+def admin_upsert_hazard(machine_type_id: int, categoria_inail: str, focus_testo: str, by: str = "admin") -> None:
+    """Inserisce o aggiorna i dati hazard per un tipo macchina."""
+    if not settings.database_url:
+        return
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO machine_type_hazard (machine_type_id, categoria_inail, focus_testo, aggiornato_da, last_updated)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (machine_type_id) DO UPDATE
+                    SET categoria_inail = EXCLUDED.categoria_inail,
+                        focus_testo     = EXCLUDED.focus_testo,
+                        aggiornato_da   = EXCLUDED.aggiornato_da,
+                        last_updated    = NOW()
+            """, (machine_type_id, categoria_inail, focus_testo, by))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning("admin_upsert_hazard: %s", e)
+
+
+async def admin_populate_hazard(provider: str) -> dict:
+    """
+    Usa l'AI per generare i dati hazard per tutti i machine_types
+    senza hazard o con hazard più vecchio di 90 giorni.
+    """
+    if not settings.database_url:
+        return {"error": "no_db"}
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT mt.id, mt.name
+                FROM machine_types mt
+                LEFT JOIN machine_type_hazard h ON h.machine_type_id = mt.id
+                WHERE mt.is_verified = true
+                  AND (h.id IS NULL OR h.last_updated < NOW() - INTERVAL '90 days')
+                ORDER BY mt.name
+            """)
+            rows = cur.fetchall()
+        conn.close()
+    except Exception as e:
+        return {"error": str(e)}
+
+    populated = 0
+    skipped = 0
+    errors = 0
+
+    from app.services.analysis_service import _call_ai_with_text
+
+    for (mt_id, name) in rows:
+        prompt = (
+            f"Sei un esperto di sicurezza sul lavoro italiano con conoscenza delle statistiche INAIL.\n\n"
+            f"Per la categoria macchina: '{name}'\n\n"
+            f"Fornisci un JSON con:\n"
+            f'{{\n'
+            f'  "categoria_inail": "nome della categoria agente materiale INAIL più corrispondente (es. \'Macchine per la lavorazione del legno\', \'Apparecchi di sollevamento\', \'Macchine agricole\')",\n'
+            f'  "focus_testo": "2-3 frasi per l\'ispettore sui rischi statisticamente più frequenti in questa categoria secondo i dati INAIL. Cita percentuali o dati se noti. Es: \'Il contatto con organi in movimento rappresenta il 60% degli infortuni gravi in questa categoria. Verificare con priorità assoluta la protezione della lama e i ripari fissi degli organi di trasmissione.\' Usa un tono tecnico-operativo."\n'
+            f'}}\n\n'
+            f"Basati sulla tua conoscenza delle statistiche INAIL e delle norme italiane.\n"
+            f"Rispondi SOLO con il JSON valido."
+        )
+        try:
+            result = await _call_ai_with_text("", prompt, provider, is_fallback=True)
+            categoria = result.get("categoria_inail", "").strip() if isinstance(result, dict) else ""
+            focus = result.get("focus_testo", "").strip() if isinstance(result, dict) else ""
+            if categoria and focus:
+                admin_upsert_hazard(mt_id, categoria, focus, "ai")
+                populated += 1
+            else:
+                skipped += 1
+        except Exception as ex:
+            logger.warning("populate_hazard: errore per '%s': %s", name, ex)
+            errors += 1
+
+    return {"populated": populated, "skipped": skipped, "errors": errors}

@@ -326,6 +326,7 @@ def get_admin_scans(
     limit: int = 100,
     fonte_filter: Optional[str] = None,
     include_dismissed: bool = False,
+    exclude_exact: bool = False,
 ) -> list[dict]:
     """
     Lista scansioni per il pannello admin.
@@ -341,6 +342,8 @@ def get_admin_scans(
         if fonte_filter:
             conditions.append("fonte_tipo = %s")
             params.append(fonte_filter)
+        if exclude_exact:
+            conditions.append("fonte_tipo != 'inail+produttore'")
         if not include_dismissed:
             conditions.append("dismissed = false")
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""

@@ -74,10 +74,11 @@ class SafetyCard(BaseModel):
     fonte_raccomandazioni: Optional[str] = None
     fonte_residui: Optional[str] = None
     # Checklist ispettiva — voci spuntabili durante il sopralluogo
-    checklist: List[str] = []
+    # Ogni voce: {testo, livello (1|2), norma?} oppure stringa plain (compat. retroattiva)
+    checklist: List[Any] = []
     # Nuovi campi ispettivi
     abilitazione_operatore: Optional[str] = None     # Patentino/formazione obbligatoria (Accordo S-R 2012)
-    documenti_da_richiedere: List[str] = []          # Documenti che l'ispettore deve richiedere al DL
+    documenti_da_richiedere: List[Any] = []          # [{documento, smart_hint}] — o stringa (compat. retroattiva)
     verifiche_periodiche: Optional[str] = None       # Obbligo verifica periodica INAIL ex Art. 71 c.11
     procedure_emergenza: List[dict] = []             # [{testo, fonte}] — procedure specifiche del modello
     limiti_operativi: List[dict] = []                # [{testo, fonte}] — portate, pressioni, pendenze
@@ -96,6 +97,11 @@ class SafetyCard(BaseModel):
     tabella_ce_ante: List[dict] = []             # confronto Allegato V vs Direttiva CE
     gap_ce_ante: Optional[str] = None           # gap analysis: cosa mancherebbe se fosse nuova
     bozze_prescrizioni: List[dict] = []         # bozze prescrizione per requisiti Allegato V non conformi
+    # Nuovi campi miglioramento scheda
+    attrezzature_intercambiabili: Optional[str] = None  # testo AI su attrezzature intercambiabili
+    vita_utile_anni: Optional[int] = None               # vita utile stimata dalla tabella machine_types
+    focus_rischi_categoria: Optional[str] = None        # testo hazard intelligence da machine_type_hazard
+    categoria_inail: Optional[str] = None               # categoria "agente materiale" INAIL
 
     def __init__(self, **data):
         if not data.get("generated_at"):

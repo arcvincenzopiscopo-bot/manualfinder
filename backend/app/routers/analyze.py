@@ -497,7 +497,7 @@ async def _pipeline(request: FullAnalysisRequest):
         #      sezioni sicurezza esplicite
         # Viene scartato SOLO se è corto E non ha contenuto sicurezza rilevante.
         LOW_QUALITY_THRESHOLD = 8   # score minimo per PDF corti (< 30 pag.)
-        MIN_MANUAL_PAGES = 8        # sotto questa soglia serve score >= 40
+        MIN_MANUAL_PAGES = 5        # sotto questa soglia serve score >= 40; schede tecniche 5-7pp già validate dall'AI ora accettate
         SCANNED_PAGES_THRESHOLD = 30  # PDF lungo anche senza testo → probabilmente scansionato
 
         if producer_scored:
@@ -674,6 +674,18 @@ async def _pipeline(request: FullAnalysisRequest):
     # Aggiungi alert Safety Gate alla scheda
     if safety_alerts_data:
         safety_card.safety_alerts = safety_alerts_data
+
+    # ── Inietta vita utile e hazard intelligence dal catalogo machine_types ──
+    if machine_type_id:
+        from app.services import machine_type_service as _mt_svc
+        _all_types = {t["id"]: t for t in _mt_svc.get_all_types()}
+        _mt = _all_types.get(machine_type_id)
+        if _mt:
+            safety_card.vita_utile_anni = _mt.get("vita_utile_anni")
+        _hazard = _mt_svc.get_hazard(machine_type_id)
+        if _hazard:
+            safety_card.focus_rischi_categoria = _hazard.get("focus_testo")
+            safety_card.categoria_inail = _hazard.get("categoria_inail")
 
     # ── Quality logging (non-blocking, non solleva eccezioni) ─────────────
     quality_service.log_analysis(

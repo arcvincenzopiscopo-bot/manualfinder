@@ -22,6 +22,19 @@ export interface MachineType {
   requires_verifiche: boolean
   inail_search_hint: string | null
   usage_count: number
+  vita_utile_anni: number | null
+}
+
+export interface ChecklistItem {
+  testo: string
+  livello: 1 | 2      // 1 = blocco immediato; 2 = prescrizione
+  norma?: string      // es. "All. V D.Lgs 81/08 punto 6.1"
+  prescrizione_precompilata?: string  // testo verbale ispettivo pronto per copia
+}
+
+export interface DocumentoRichiesto {
+  documento: string      // "Manuale d'uso e manutenzione in italiano"
+  smart_hint: string     // "Verificare che il numero di serie coincida con l'etichetta"
 }
 
 export interface ManualSearchResult {
@@ -92,10 +105,10 @@ export interface SafetyCard {
   fonte_protezione: string | null
   fonte_raccomandazioni: string | null
   fonte_residui: string | null
-  checklist: string[]
+  checklist: (ChecklistItem | string)[]
   // Nuovi campi ispettivi
   abilitazione_operatore: string | null        // Patentino/formazione obbligatoria (Accordo S-R 2012)
-  documenti_da_richiedere: string[]            // Documenti da richiedere al datore di lavoro
+  documenti_da_richiedere: (DocumentoRichiesto | string)[]  // Documenti da richiedere al datore di lavoro
   verifiche_periodiche: string | null          // Obbligo verifica periodica INAIL ex Art. 71 c.11
   procedure_emergenza: SafetyItem[]            // Procedure specifiche del modello [{testo, fonte}]
   limiti_operativi: SafetyItem[]               // Portate, pressioni, pendenze con valori numerici
@@ -121,6 +134,11 @@ export interface SafetyCard {
   tabella_ce_ante?: TabellaCEAnte[]
   gap_ce_ante?: string | null
   bozze_prescrizioni?: BozzaPrescrizione[]
+  // Miglioramenti scheda
+  attrezzature_intercambiabili?: string | null
+  vita_utile_anni?: number | null
+  focus_rischi_categoria?: string | null
+  categoria_inail?: string | null
 }
 
 export interface SSEEvent {

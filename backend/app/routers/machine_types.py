@@ -52,6 +52,12 @@ class UpdateFlagsRequest(BaseModel):
     requires_patentino: bool
     requires_verifiche: bool
     inail_search_hint: Optional[str] = None
+    vita_utile_anni: Optional[int] = None
+
+
+class HazardUpdateRequest(BaseModel):
+    categoria_inail: str = Field(..., min_length=2, max_length=200)
+    focus_testo: str = Field(..., min_length=10)
 
 
 # ── Endpoint pubblici ─────────────────────────────────────────────────────────
@@ -147,24 +153,57 @@ def admin_delete_alias(alias_id: int):
 
 @router.patch("/{machine_type_id}/flags")
 def admin_update_flags(machine_type_id: int, req: UpdateFlagsRequest):
-    """Aggiorna requires_patentino, requires_verifiche e inail_search_hint di un tipo."""
+    """Aggiorna requires_patentino, requires_verifiche, inail_search_hint e vita_utile_anni di un tipo."""
     return machine_type_service.admin_update_flags(
         machine_type_id=machine_type_id,
         requires_patentino=req.requires_patentino,
         requires_verifiche=req.requires_verifiche,
         inail_search_hint=req.inail_search_hint,
+        vita_utile_anni=req.vita_utile_anni,
     )
+
+
+# ── Vita utile ────────────────────────────────────────────────────────────────
+
+@router.post("/admin/populate-vita-utile")
+async def admin_populate_vita_utile():
+    """Chiama AI per popolare vita_utile_anni per tutti i tipi con valore NULL."""
+    provider = settings.get_analysis_provider()
+    return await machine_type_service.admin_populate_vita_utile(provider)
+
+
+# ── Hazard Intelligence ───────────────────────────────────────────────────────
+
+@router.get("/{machine_type_id}/hazard")
+def get_hazard(machine_type_id: int):
+    """Restituisce i dati hazard di un tipo macchina."""
+    return machine_type_service.get_hazard(machine_type_id) or {}
+
+
+@router.post("/{machine_type_id}/hazard")
+def update_hazard(machine_type_id: int, req: HazardUpdateRequest):
+    """Inserisce o aggiorna manualmente i dati hazard di un tipo macchina."""
+    machine_type_service.admin_upsert_hazard(machine_type_id, req.categoria_inail, req.focus_testo, "admin")
+    return {"ok": True}
+
+
+@router.post("/admin/populate-hazard")
+async def admin_populate_hazard():
+    """Chiama AI per generare i dati hazard per tutti i tipi senza dati o dati > 90 giorni."""
+    provider = settings.get_analysis_provider()
+    return await machine_type_service.admin_populate_hazard(provider)
 
 
 # ── Admin: scan log (storico analisi) ────────────────────────────────────────
 
 @router.get("/admin/scan-log")
-def admin_scan_log(limit: int = 100, fonte: Optional[str] = None):
+def admin_scan_log(limit: int = 100, fonte: Optional[str] = None, exclude_exact: bool = False):
     """
     Lista scansioni per il pannello admin (escluse le dismissed).
     fonte='fallback_ai' per mostrare solo quelle senza manuale trovato.
+    exclude_exact=true per escludere le scansioni con manuale esatto (inail+produttore).
     """
-    return scan_log_service.get_admin_scans(limit=limit, fonte_filter=fonte)
+    return scan_log_service.get_admin_scans(limit=limit, fonte_filter=fonte, exclude_exact=exclude_exact)
 
 
 @router.post("/admin/scan-log/{scan_id}/dismiss")

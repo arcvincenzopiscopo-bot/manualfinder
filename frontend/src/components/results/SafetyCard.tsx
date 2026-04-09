@@ -1,10 +1,11 @@
 import { useState, useCallback } from 'react'
-import type { SafetyCard as SafetyCardType, SafetyItem, DispositivoSicurezza, PlateOCRResult } from '../../types'
+import type { SafetyCard as SafetyCardType, SafetyItem, DispositivoSicurezza, PlateOCRResult, ChecklistItem, DocumentoRichiesto } from '../../types'
 import React from 'react'
 import { RiskBadge } from './RiskBadge'
 import { ManualLink } from './ManualLink'
 import { ExportButton } from './ExportButton'
 import { AllegatoVSection } from './AllegatoVSection'
+import { ClipboardButton } from './ClipboardButton'
 
 interface Props {
   card: SafetyCardType
@@ -17,6 +18,7 @@ interface SectionProps {
   items: SafetyItem[]
   variant: 'risk' | 'protection' | 'recommendation' | 'residual'
   icon: string
+  sourceLabel?: string
 }
 
 const SOURCE_BADGE_COLORS: Record<string, { bg: string; color: string }> = {
@@ -82,7 +84,7 @@ function SourceBadge({ label, size = 10 }: { label: string; size?: number }) {
   )
 }
 
-function Section({ title, items, variant, icon }: SectionProps) {
+function Section({ title, items, variant, icon, sourceLabel }: SectionProps) {
   const [open, setOpen] = useState(true)
 
   if (!items.length) return null
@@ -112,6 +114,7 @@ function Section({ title, items, variant, icon }: SectionProps) {
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {icon} {title}
+          {sourceLabel && fontiUniche.length === 0 && <SourceBadge label={sourceLabel} />}
           {fontiUniche.map(f => <SourceBadge key={f} label={f} />)}
         </span>
         <span style={{ fontSize: 12, color: '#94a3b8', flexShrink: 0 }}>
@@ -276,12 +279,23 @@ function AbilitazioneBanner({ testo }: { testo: string }) {
   )
 }
 
-// Sezione documenti da richiedere — spuntabili come checklist
-function DocumentiSection({ items }: { items: string[] }) {
+// Sezione documenti da richiedere — spuntabili come checklist con smart hint
+function DocumentiSection({ items }: { items: (DocumentoRichiesto | string)[] }) {
   const [checked, setChecked] = useState<Set<number>>(new Set())
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
   if (!items.length) return null
 
+  const parsed = items.map(i =>
+    typeof i === 'string' ? { documento: i, smart_hint: '' } : i
+  )
+
   const toggle = (i: number) => setChecked(prev => {
+    const next = new Set(prev)
+    next.has(i) ? next.delete(i) : next.add(i)
+    return next
+  })
+
+  const toggleHint = (i: number) => setExpanded(prev => {
     const next = new Set(prev)
     next.has(i) ? next.delete(i) : next.add(i)
     return next
@@ -306,36 +320,86 @@ function DocumentiSection({ items }: { items: string[] }) {
         borderRadius: '0 0 8px 8px',
         background: '#fff',
       }}>
-        {items.map((item, i) => (
-          <label
-            key={i}
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 12,
-              padding: '10px 14px',
-              borderBottom: i < items.length - 1 ? '1px solid #f3f0ff' : 'none',
-              cursor: 'pointer',
-              background: checked.has(i) ? '#f3f0ff' : '#fff',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={checked.has(i)}
-              onChange={() => toggle(i)}
-              style={{ marginTop: 2, width: 16, height: 16, accentColor: '#7c3aed', flexShrink: 0 }}
-            />
-            <span style={{
-              fontSize: 13,
-              color: checked.has(i) ? '#a78bfa' : '#334155',
-              textDecoration: checked.has(i) ? 'line-through' : 'none',
-              lineHeight: 1.5,
-            }}>
-              {item}
-            </span>
-          </label>
+        {parsed.map((item, i) => (
+          <div key={i} style={{
+            borderBottom: i < parsed.length - 1 ? '1px solid #f3f0ff' : 'none',
+            background: checked.has(i) ? '#f3f0ff' : '#fff',
+          }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 14px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={checked.has(i)}
+                onChange={() => toggle(i)}
+                style={{ marginTop: 2, width: 16, height: 16, accentColor: '#7c3aed', flexShrink: 0 }}
+              />
+              <span style={{
+                flex: 1,
+                fontSize: 13,
+                color: checked.has(i) ? '#a78bfa' : '#334155',
+                textDecoration: checked.has(i) ? 'line-through' : 'none',
+                lineHeight: 1.5,
+              }}>
+                {item.documento}
+              </span>
+              {item.smart_hint && (
+                <button
+                  onClick={e => { e.preventDefault(); toggleHint(i) }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: '#7c3aed', flexShrink: 0, padding: '2px 4px' }}
+                  title="Mostra suggerimento"
+                >
+                  {expanded.has(i) ? '▾ Suggerimento' : '▸ Suggerimento'}
+                </button>
+              )}
+            </label>
+            {item.smart_hint && expanded.has(i) && (
+              <div style={{ padding: '0 14px 10px 42px', fontSize: 12, color: '#6b21a8', fontStyle: 'italic', lineHeight: 1.5 }}>
+                💡 {item.smart_hint}
+              </div>
+            )}
+          </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// Sezione attrezzature intercambiabili
+function AttrezzatureSection({ testo }: { testo: string }) {
+  return (
+    <div style={{
+      background: '#f8fafc',
+      border: '1px solid #cbd5e1',
+      borderRadius: 8,
+      padding: '12px 14px',
+      marginBottom: 16,
+    }}>
+      <div style={{ fontWeight: 700, fontSize: 14, color: '#334155', marginBottom: 6 }}>
+        🔩 Interfaccia attrezzature intercambiabili
+      </div>
+      <p style={{ margin: 0, fontSize: 13, color: '#475569', lineHeight: 1.6 }}>{testo}</p>
+    </div>
+  )
+}
+
+// Focus rischi di categoria INAIL
+function FocusRischiSection({ testo, categoria }: { testo: string; categoria?: string }) {
+  return (
+    <div style={{
+      background: '#eff6ff',
+      border: '1px solid #bfdbfe',
+      borderRadius: 8,
+      padding: '12px 14px',
+      marginBottom: 16,
+    }}>
+      <div style={{ fontWeight: 700, fontSize: 14, color: '#1e40af', marginBottom: categoria ? 2 : 6 }}>
+        📊 Focus Rischi di Categoria INAIL
+      </div>
+      {categoria && (
+        <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6, fontWeight: 600 }}>
+          Categoria: {categoria}
+        </div>
+      )}
+      <p style={{ margin: 0, fontSize: 13, color: '#1e3a8a', lineHeight: 1.6 }}>{testo}</p>
     </div>
   )
 }
@@ -464,14 +528,24 @@ function NormativeSection({ items }: { items: string[] }) {
   )
 }
 
-function ChecklistSection({ items }: { items: string[] }) {
-  const [checked, setChecked] = useState<Set<number>>(new Set())
+function ChecklistSection({ items }: { items: (ChecklistItem | string)[] }) {
+  const [checked, setChecked] = useState<Set<string>>(new Set())
   const [open, setOpen] = useState(true)
 
-  const toggle = useCallback((i: number) => {
+  // Normalizza a oggetti; fallback stringa → livello 2
+  const parsed: ChecklistItem[] = items.map((item, i) =>
+    typeof item === 'string'
+      ? { testo: item, livello: 2 as const, _idx: i } as any
+      : { ...item, _idx: i }
+  )
+  const l1 = parsed.filter(it => it.livello === 1)
+  const l2 = parsed.filter(it => it.livello === 2)
+  const allItems = [...l1, ...l2]
+
+  const toggle = useCallback((key: string) => {
     setChecked(prev => {
       const next = new Set(prev)
-      next.has(i) ? next.delete(i) : next.add(i)
+      next.has(key) ? next.delete(key) : next.add(key)
       return next
     })
   }, [])
@@ -479,7 +553,61 @@ function ChecklistSection({ items }: { items: string[] }) {
   if (!items.length) return null
 
   const done = checked.size
-  const total = items.length
+  const total = allItems.length
+
+  const renderItem = (item: ChecklistItem & { _idx: number }, globalIdx: number) => {
+    const key = `${item._idx}`
+    const isL1 = item.livello === 1
+    const isDone = checked.has(key)
+    return (
+      <label
+        key={key}
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 12,
+          padding: '10px 14px',
+          borderBottom: globalIdx < allItems.length - 1 ? `1px solid ${isL1 ? '#fee2e2' : '#f1f5f9'}` : 'none',
+          borderLeft: `3px solid ${isL1 ? '#dc2626' : '#ea580c'}`,
+          cursor: 'pointer',
+          background: isDone ? '#f0fdf4' : (isL1 ? '#fff5f5' : '#fff'),
+          transition: 'background 0.15s',
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={isDone}
+          onChange={() => toggle(key)}
+          style={{ marginTop: 2, width: 16, height: 16, accentColor: isL1 ? '#dc2626' : '#ea580c', flexShrink: 0 }}
+        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, flexWrap: 'wrap' }}>
+            <span style={{
+              fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 4,
+              background: isL1 ? '#fef2f2' : '#fff7ed',
+              color: isL1 ? '#dc2626' : '#ea580c',
+              letterSpacing: '0.03em',
+              flexShrink: 0,
+            }}>
+              {isL1 ? 'STOP' : 'PRESCRIZIONE'}
+            </span>
+            {item.norma && (
+              <span style={{ fontSize: 9, color: '#94a3b8', fontFamily: 'monospace' }}>{item.norma}</span>
+            )}
+          </div>
+          <span style={{
+            fontSize: 13,
+            color: isDone ? '#86efac' : '#334155',
+            textDecoration: isDone ? 'line-through' : 'none',
+            lineHeight: 1.5,
+          }}>
+            {item.testo}
+          </span>
+        </div>
+        <ClipboardButton text={item.prescrizione_precompilata} />
+      </label>
+    )
+  }
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -501,7 +629,19 @@ function ChecklistSection({ items }: { items: string[] }) {
           gap: 8,
         }}
       >
-        <span>✅ Checklist sopralluogo</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          ✅ Checklist sopralluogo
+          {l1.length > 0 && (
+            <span style={{ fontSize: 10, fontWeight: 800, padding: '1px 6px', borderRadius: 4, background: '#fef2f2', color: '#dc2626' }}>
+              {l1.length} STOP
+            </span>
+          )}
+          {l2.length > 0 && (
+            <span style={{ fontSize: 10, fontWeight: 800, padding: '1px 6px', borderRadius: 4, background: '#fff7ed', color: '#ea580c' }}>
+              {l2.length} prescrizioni
+            </span>
+          )}
+        </span>
         <span style={{ fontSize: 12, color: done === total ? '#16a34a' : '#94a3b8', fontWeight: 700 }}>
           {done}/{total} {open ? '▲' : '▼'}
         </span>
@@ -515,36 +655,7 @@ function ChecklistSection({ items }: { items: string[] }) {
           background: '#fff',
           overflow: 'hidden',
         }}>
-          {items.map((item, i) => (
-            <label
-              key={i}
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 12,
-                padding: '10px 14px',
-                borderBottom: i < items.length - 1 ? '1px solid #f1f5f9' : 'none',
-                cursor: 'pointer',
-                background: checked.has(i) ? '#f0fdf4' : '#fff',
-                transition: 'background 0.15s',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={checked.has(i)}
-                onChange={() => toggle(i)}
-                style={{ marginTop: 2, width: 16, height: 16, accentColor: '#16a34a', flexShrink: 0 }}
-              />
-              <span style={{
-                fontSize: 13,
-                color: checked.has(i) ? '#86efac' : '#334155',
-                textDecoration: checked.has(i) ? 'line-through' : 'none',
-                lineHeight: 1.5,
-              }}>
-                {item}
-              </span>
-            </label>
-          ))}
+          {allItems.map((item, globalIdx) => renderItem(item as any, globalIdx))}
           {done > 0 && (
             <div style={{ padding: '8px 14px', background: '#f8fafc', fontSize: 12, color: '#64748b', textAlign: 'right' }}>
               <button
@@ -582,6 +693,29 @@ function ConfidenceBadge({ confidence }: { confidence: PlateOCRResult['confidenc
   )
 }
 
+function EmptySection({ title, icon }: { title: string; icon: string }) {
+  return (
+    <div style={{
+      border: '1px dashed #cbd5e1',
+      borderRadius: 8,
+      padding: '12px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      opacity: 0.6,
+      marginBottom: 16,
+    }}>
+      <span style={{ fontSize: 18 }}>{icon}</span>
+      <div>
+        <span style={{ fontWeight: 600, fontSize: 13, color: '#64748b' }}>{title}</span>
+        <span style={{ fontSize: 12, color: '#94a3b8', marginLeft: 8 }}>
+          ⚪ Nessun dato disponibile per questa sezione
+        </span>
+      </div>
+    </div>
+  )
+}
+
 const _API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '/api') as string
 
 function buildEmailDraft(card: SafetyCardType, ocr: PlateOCRResult | null, toEmail?: string): string {
@@ -609,9 +743,23 @@ In attesa di cortese riscontro, si porgono distinti saluti.`
   return `mailto:${to}?subject=${subject}&body=${body}`
 }
 
+const STORAGE_KEY = 'safetycard_view_mode'
+
 export function SafetyCard({ card, ocr, onNewSearch }: Props) {
   const isFallback = card.fonte_tipo === 'fallback_ai'
   const [fetchingEmail, setFetchingEmail] = useState(false)
+  const [viewMode, setViewMode] = useState<'cantiere' | 'ufficio'>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      return saved === 'ufficio' ? 'ufficio' : 'cantiere'
+    } catch { return 'cantiere' }
+  })
+  const [isPrinting, setIsPrinting] = useState(false)
+
+  const switchMode = (mode: 'cantiere' | 'ufficio') => {
+    setViewMode(mode)
+    try { localStorage.setItem(STORAGE_KEY, mode) } catch {}
+  }
 
   async function handleEmailRequest() {
     setFetchingEmail(true)
@@ -651,7 +799,57 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
           {ocr?.year && (
             <span style={{ fontSize: 12, opacity: 0.85 }}>Anno: {ocr.year}</span>
           )}
+          {card.vita_utile_anni != null && (
+            <span style={{ fontSize: 12, opacity: 0.85, background: 'rgba(255,255,255,0.2)', padding: '1px 7px', borderRadius: 8 }}>
+              ⏳ Vita utile stimata: {card.vita_utile_anni} anni
+            </span>
+          )}
           {ocr && <ConfidenceBadge confidence={ocr.confidence} />}
+        </div>
+
+        {/* Banner Fine Vita */}
+        {(() => {
+          if (!card.vita_utile_anni || !card.machine_year) return null
+          const endYear = parseInt(card.machine_year) + card.vita_utile_anni
+          if (endYear > new Date().getFullYear()) return null
+          return (
+            <div style={{
+              background: 'rgba(254,242,242,0.95)', border: '1px solid #fca5a5',
+              borderRadius: 8, padding: '10px 14px', marginTop: 12,
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <span style={{ fontSize: 18 }}>⚠️</span>
+              <div>
+                <span style={{ fontWeight: 700, color: '#dc2626', fontSize: 13 }}>
+                  POTENZIALE FINE VITA
+                </span>
+                <span style={{ color: '#7f1d1d', fontSize: 12, marginLeft: 8 }}>
+                  Costruzione {card.machine_year} · Vita utile stimata {card.vita_utile_anni} anni · Scadenza presunta {endYear}
+                </span>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* Toggle Cantiere / Ufficio */}
+        <div style={{
+          display: 'flex', borderRadius: 8, overflow: 'hidden',
+          border: '1px solid rgba(255,255,255,0.3)', width: 'fit-content', marginTop: 12,
+        }}>
+          {(['cantiere', 'ufficio'] as const).map(mode => (
+            <button
+              key={mode}
+              onClick={() => switchMode(mode)}
+              style={{
+                padding: '6px 18px', fontWeight: 600, fontSize: 13,
+                border: 'none', cursor: 'pointer',
+                background: viewMode === mode ? 'rgba(255,255,255,0.25)' : 'transparent',
+                color: '#fff',
+              }}
+            >
+              {mode === 'cantiere' ? '🏗️ Cantiere' : '🏢 Ufficio'}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -751,61 +949,75 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
         <VerifichePeriodicheBanner testo={card.verifiche_periodiche} />
       )}
 
-      {/* Normative applicabili per il tipo macchina (collapsed di default) */}
-      <NormativeSection items={card.normative_applicabili ?? []} />
-
-      {/* Sezioni sicurezza */}
-      <Section
-        title="Rischi principali"
-        items={card.rischi_principali}
-        variant="risk"
-        icon="⚠️"
-      />
-      <Section
-        title="Dispositivi di protezione (DPI)"
-        items={card.dispositivi_protezione}
-        variant="protection"
-        icon="🛡️"
-      />
-      <DispositiviSicurezzaSection items={card.dispositivi_sicurezza ?? []} />
-      <Section
-        title="Raccomandazioni del produttore"
-        items={card.raccomandazioni_produttore}
-        variant="recommendation"
-        icon="📋"
-      />
-      {/* Limiti operativi — portate, pressioni, pendenze con valori numerici */}
-      {(card.limiti_operativi ?? []).length > 0 && (
-        <Section
-          title="Limiti operativi"
-          items={card.limiti_operativi ?? []}
-          variant="recommendation"
-          icon="⚙️"
-        />
+      {/* ── VISTA CANTIERE ─────────────────────────────────────────── */}
+      {(viewMode === 'cantiere' || isPrinting) && (
+        <div data-section="cantiere">
+          {(card.checklist ?? []).length > 0
+            ? <ChecklistSection items={card.checklist ?? []} />
+            : <EmptySection title="Checklist sopralluogo" icon="✅" />}
+          {(card.documenti_da_richiedere ?? []).length > 0
+            ? <DocumentiSection items={card.documenti_da_richiedere ?? []} />
+            : <EmptySection title="Documenti da richiedere" icon="📄" />}
+        </div>
       )}
-      {/* Procedure di emergenza specifiche del modello */}
-      {(card.procedure_emergenza ?? []).length > 0 && (
-        <Section
-          title="Procedure di emergenza"
-          items={card.procedure_emergenza ?? []}
-          variant="residual"
-          icon="🚨"
-        />
+
+      {/* ── VISTA UFFICIO ──────────────────────────────────────────── */}
+      {(viewMode === 'ufficio' || isPrinting) && (
+        <div data-section="ufficio">
+          {/* Normative applicabili (collapsed di default) */}
+          <NormativeSection items={card.normative_applicabili ?? []} />
+
+          {/* Focus rischi di categoria INAIL — null = non ancora popolato, non EmptySection */}
+          {card.focus_rischi_categoria && (
+            <FocusRischiSection testo={card.focus_rischi_categoria} categoria={card.categoria_inail ?? undefined} />
+          )}
+
+          {/* Rischi principali */}
+          {card.rischi_principali?.length > 0
+            ? <Section title="Rischi principali" items={card.rischi_principali} variant="risk" icon="⚠️" sourceLabel={card.fonte_rischi ?? undefined} />
+            : <EmptySection title="Rischi principali" icon="⚠️" />}
+
+          {/* Dispositivi di protezione */}
+          {card.dispositivi_protezione?.length > 0
+            ? <Section title="Dispositivi di protezione (DPI)" items={card.dispositivi_protezione} variant="protection" icon="🛡️" sourceLabel={card.fonte_protezione ?? undefined} />
+            : <EmptySection title="Dispositivi di protezione" icon="🛡️" />}
+
+          {/* Dispositivi di sicurezza */}
+          {(card.dispositivi_sicurezza ?? []).length > 0 && (
+            <DispositiviSicurezzaSection items={card.dispositivi_sicurezza ?? []} />
+          )}
+
+          {/* Raccomandazioni produttore */}
+          {card.raccomandazioni_produttore?.length > 0
+            ? <Section title="Raccomandazioni del produttore" items={card.raccomandazioni_produttore} variant="recommendation" icon="📋" sourceLabel={card.fonte_raccomandazioni ?? undefined} />
+            : <EmptySection title="Raccomandazioni del produttore" icon="📋" />}
+
+          {/* Limiti operativi */}
+          {(card.limiti_operativi ?? []).length > 0 && (
+            <Section title="Limiti operativi" items={card.limiti_operativi ?? []} variant="recommendation" icon="⚙️" />
+          )}
+
+          {/* Attrezzature intercambiabili: null = non applicabile, "" = cercato ma non trovato */}
+          {card.attrezzature_intercambiabili !== null && card.attrezzature_intercambiabili !== undefined && (
+            card.attrezzature_intercambiabili
+              ? <AttrezzatureSection testo={card.attrezzature_intercambiabili} />
+              : <EmptySection title="Attrezzature intercambiabili" icon="🔩" />
+          )}
+
+          {/* Procedure di emergenza */}
+          {(card.procedure_emergenza ?? []).length > 0 && (
+            <Section title="Procedure di emergenza" items={card.procedure_emergenza ?? []} variant="residual" icon="🚨" />
+          )}
+
+          {/* Rischi residui */}
+          {card.rischi_residui?.length > 0
+            ? <Section title="Rischi residui" items={card.rischi_residui} variant="residual" icon="🔶" sourceLabel={card.fonte_residui ?? undefined} />
+            : <EmptySection title="Rischi residui" icon="🔶" />}
+
+          {/* Pittogrammi da verificare fisicamente sulla macchina */}
+          <PittogrammiSection items={card.pittogrammi_sicurezza ?? []} />
+        </div>
       )}
-      <Section
-        title="Rischi residui"
-        items={card.rischi_residui}
-        variant="residual"
-        icon="🔶"
-      />
-
-      {/* Pittogrammi da verificare fisicamente sulla macchina */}
-      <PittogrammiSection items={card.pittogrammi_sicurezza ?? []} />
-
-      <ChecklistSection items={card.checklist ?? []} />
-
-      {/* Documenti da richiedere al datore di lavoro */}
-      <DocumentiSection items={card.documenti_da_richiedere ?? []} />
 
       {/* Note aggiuntive */}
       {card.note && !isFallback && (
@@ -837,7 +1049,11 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
 
       {/* Azioni */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
-        <ExportButton card={card} />
+        <ExportButton
+          card={card}
+          onBeforeExport={() => setIsPrinting(true)}
+          onAfterExport={() => setIsPrinting(false)}
+        />
         <button
           onClick={handleEmailRequest}
           disabled={fetchingEmail}

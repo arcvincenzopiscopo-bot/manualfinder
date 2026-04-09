@@ -623,23 +623,48 @@ function TabFlags() {
   const [pat, setPat]               = useState(true)
   const [ver, setVer]               = useState(true)
   const [hint, setHint]             = useState('')
+  const [vitaUtile, setVitaUtile]   = useState<string>('')
   const [saving, setSaving]         = useState(false)
   const [msg, setMsg]               = useState<string | null>(null)
   const [error, setError]           = useState<string | null>(null)
   const [searchQ, setSearchQ]       = useState('')
   const [inailFiles, setInailFiles] = useState<InailFile[]>([])
+  // Hazard state
+  const [hazardCat, setHazardCat]   = useState('')
+  const [hazardTesto, setHazardTesto] = useState('')
+  const [hazardLastUpdated, setHazardLastUpdated] = useState<string | null>(null)
+  const [hazardBy, setHazardBy]     = useState<string | null>(null)
+  const [savingHazard, setSavingHazard] = useState(false)
+  const [hazardMsg, setHazardMsg]   = useState<string | null>(null)
+  const [populatingVita, setPopulatingVita] = useState(false)
+  const [populatingHazard, setPopulatingHazard] = useState(false)
 
-  useEffect(() => {
+  const loadTypes = useCallback(() => {
     apiFetch('').then(setTypes).catch(e => setError(e.message))
     apiFetch('/inail-local-files').then(setInailFiles).catch(() => {})
   }, [])
+
+  useEffect(() => { loadTypes() }, [loadTypes])
 
   const handleSelect = (t: MachineType) => {
     setSelected(t)
     setPat(t.requires_patentino)
     setVer(t.requires_verifiche)
     setHint((t as any).inail_search_hint ?? '')
+    setVitaUtile(t.vita_utile_anni != null ? String(t.vita_utile_anni) : '')
     setMsg(null)
+    setHazardCat('')
+    setHazardTesto('')
+    setHazardLastUpdated(null)
+    setHazardBy(null)
+    setHazardMsg(null)
+    // Carica hazard
+    apiFetch(`/${t.id}/hazard`).then((h: any) => {
+      setHazardCat(h.categoria_inail ?? '')
+      setHazardTesto(h.focus_testo ?? '')
+      setHazardLastUpdated(h.last_updated ?? null)
+      setHazardBy(h.aggiornato_da ?? null)
+    }).catch(() => {})
   }
 
   const handleSave = async () => {
@@ -653,20 +678,69 @@ function TabFlags() {
           requires_patentino: pat,
           requires_verifiche: ver,
           inail_search_hint: hint || null,
+          vita_utile_anni: vitaUtile ? parseInt(vitaUtile, 10) : null,
         }),
       })
-      // Aggiorna la lista locale
-      setTypes(prev => prev.map(t =>
-        t.id === selected.id
-          ? { ...t, requires_patentino: pat, requires_verifiche: ver }
-          : t
-      ))
-      setSelected(prev => prev ? { ...prev, requires_patentino: pat, requires_verifiche: ver } : prev)
+      const updated = { ...selected, requires_patentino: pat, requires_verifiche: ver, vita_utile_anni: vitaUtile ? parseInt(vitaUtile, 10) : null }
+      setTypes(prev => prev.map(t => t.id === selected.id ? updated as MachineType : t))
+      setSelected(updated as MachineType)
       setMsg('✅ Salvato.')
     } catch (e: any) {
       setError(e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleSaveHazard = async () => {
+    if (!selected) return
+    setSavingHazard(true)
+    setHazardMsg(null)
+    try {
+      await apiFetch(`/${selected.id}/hazard`, {
+        method: 'POST',
+        body: JSON.stringify({ categoria_inail: hazardCat, focus_testo: hazardTesto }),
+      })
+      setHazardBy('admin')
+      setHazardLastUpdated(new Date().toISOString())
+      setHazardMsg('✅ Hazard salvato.')
+    } catch (e: any) {
+      setHazardMsg(`Errore: ${e.message}`)
+    } finally {
+      setSavingHazard(false)
+    }
+  }
+
+  const handlePopulateVita = async () => {
+    setPopulatingVita(true)
+    try {
+      const res = await apiFetch('/admin/populate-vita-utile', { method: 'POST' })
+      setMsg(`✅ Vita utile: ${res.populated} tipi aggiornati, ${res.skipped} saltati.`)
+      loadTypes()
+    } catch (e: any) {
+      setMsg(`Errore: ${e.message}`)
+    } finally {
+      setPopulatingVita(false)
+    }
+  }
+
+  const handlePopulateHazard = async () => {
+    setPopulatingHazard(true)
+    try {
+      const res = await apiFetch('/admin/populate-hazard', { method: 'POST' })
+      setMsg(`✅ Hazard: ${res.populated} tipi aggiornati, ${res.skipped} saltati.`)
+      if (selected) {
+        apiFetch(`/${selected.id}/hazard`).then((h: any) => {
+          setHazardCat(h.categoria_inail ?? '')
+          setHazardTesto(h.focus_testo ?? '')
+          setHazardLastUpdated(h.last_updated ?? null)
+          setHazardBy(h.aggiornato_da ?? null)
+        }).catch(() => {})
+      }
+    } catch (e: any) {
+      setMsg(`Errore: ${e.message}`)
+    } finally {
+      setPopulatingHazard(false)
     }
   }
 
@@ -677,6 +751,17 @@ function TabFlags() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
       {error && <div style={{ gridColumn: '1/-1' }}><ErrorBox message={error} onRetry={() => setError(null)} /></div>}
+
+      {/* Bottoni AI globali */}
+      <div style={{ gridColumn: '1/-1', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button onClick={handlePopulateVita} disabled={populatingVita} style={btn('ghost')}>
+          {populatingVita ? '⏳ Popolo vita utile...' : '🤖 Popola vita utile (AI, solo NULL)'}
+        </button>
+        <button onClick={handlePopulateHazard} disabled={populatingHazard} style={btn('ghost')}>
+          {populatingHazard ? '⏳ Popolo hazard...' : '🤖 Popola hazard INAIL (AI, solo mancanti/old)'}
+        </button>
+        {msg && <span style={{ fontSize: 13, color: COLORS.success, alignSelf: 'center' }}>{msg}</span>}
+      </div>
 
       {/* Lista tipi */}
       <div style={{ ...card, maxHeight: '70vh', overflowY: 'auto' }}>
@@ -701,7 +786,7 @@ function TabFlags() {
             }}
           >
             <div style={{ fontWeight: 600, fontSize: 13, color: COLORS.text }}>{t.name}</div>
-            <div style={{ display: 'flex', gap: 6, marginTop: 3 }}>
+            <div style={{ display: 'flex', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
               <span style={badge(t.requires_patentino ? COLORS.success : COLORS.muted,
                                   t.requires_patentino ? '#f0fdf4' : '#f1f5f9')}>
                 {t.requires_patentino ? '✓ patentino' : '— no patentino'}
@@ -710,68 +795,51 @@ function TabFlags() {
                                   t.requires_verifiche ? '#eff6ff' : '#f1f5f9')}>
                 {t.requires_verifiche ? '✓ verifiche' : '— no verifiche'}
               </span>
+              {t.vita_utile_anni != null && (
+                <span style={badge('#6b7280', '#f9fafb')}>⏳ {t.vita_utile_anni}aa</span>
+              )}
             </div>
           </div>
         ))}
       </div>
 
       {/* Editor */}
-      <div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {!selected ? (
           <div style={card}>
             <EmptyState>Seleziona un tipo dalla lista per modificarne i flag.</EmptyState>
           </div>
         ) : (
-          <div style={card}>
-            <SectionTitle>Modifica: {selected.name}</SectionTitle>
+          <>
+            {/* --- Flag normativi + vita utile --- */}
+            <div style={card}>
+              <SectionTitle>Modifica: {selected.name}</SectionTitle>
 
-            <div style={{ marginBottom: 16 }}>
               <p style={{ fontSize: 12, color: COLORS.muted, marginBottom: 8 }}>
-                Questi flag determinano se la scheda di sicurezza riporta l'obbligo di patentino operatore e le verifiche periodiche INAIL.
+                Questi flag determinano se la scheda riporta l'obbligo di patentino e verifiche periodiche.
               </p>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={pat}
-                    onChange={e => setPat(e.target.checked)}
-                    style={{ width: 16, height: 16 }}
-                  />
+                  <input type="checkbox" checked={pat} onChange={e => setPat(e.target.checked)} style={{ width: 16, height: 16 }} />
                   <span>
                     <strong>Patentino / abilitazione obbligatoria</strong>
                     <br />
-                    <span style={{ fontSize: 12, color: COLORS.muted }}>
-                      Accordo Stato-Regioni 22/02/2012 — PLE, carrelli, gru, ecc.
-                    </span>
+                    <span style={{ fontSize: 12, color: COLORS.muted }}>Accordo Stato-Regioni 22/02/2012 — PLE, carrelli, gru, ecc.</span>
                   </span>
                 </label>
-
                 <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={ver}
-                    onChange={e => setVer(e.target.checked)}
-                    style={{ width: 16, height: 16 }}
-                  />
+                  <input type="checkbox" checked={ver} onChange={e => setVer(e.target.checked)} style={{ width: 16, height: 16 }} />
                   <span>
                     <strong>Verifiche periodiche INAIL</strong>
                     <br />
-                    <span style={{ fontSize: 12, color: COLORS.muted }}>
-                      Art. 71 c.11 D.Lgs. 81/08 — Allegato VII (apparecchi di sollevamento, recipienti in pressione)
-                    </span>
+                    <span style={{ fontSize: 12, color: COLORS.muted }}>Art. 71 c.11 D.Lgs. 81/08 — Allegato VII</span>
                   </span>
                 </label>
               </div>
 
-              <label style={{ ...labelStyle, marginBottom: 4 }}>
-                Quaderno INAIL locale associato (opzionale)
-              </label>
-              <select
-                style={{ ...input, marginBottom: 4, background: '#fff' }}
-                value={hint}
-                onChange={e => setHint(e.target.value)}
-              >
+              <label style={{ ...labelStyle, marginBottom: 4 }}>Quaderno INAIL locale associato (opzionale)</label>
+              <select style={{ ...input, marginBottom: 12, background: '#fff' }} value={hint} onChange={e => setHint(e.target.value)}>
                 <option value="">— Nessun file associato</option>
                 {inailFiles.map(f => (
                   <option key={f.filename} value={f.filename} disabled={!f.exists}>
@@ -779,22 +847,55 @@ function TabFlags() {
                   </option>
                 ))}
               </select>
+
+              <label style={{ ...labelStyle, marginBottom: 4 }}>Vita utile stimata (anni)</label>
+              <input
+                type="number"
+                min="1" max="100"
+                style={{ ...input, marginBottom: 4, width: 100 }}
+                placeholder="es. 15"
+                value={vitaUtile}
+                onChange={e => setVitaUtile(e.target.value)}
+              />
               <p style={{ fontSize: 11, color: COLORS.muted, margin: '0 0 14px' }}>
-                Seleziona il quaderno INAIL da usare come fonte primaria per questo tipo di macchina.
-                I file sono letti dalla cartella <code>pdf manuali/</code> del backend.
+                Verrà mostrata nella scheda di sicurezza come indicazione per l'ispettore.
               </p>
+
+              {msg && <div style={{ fontSize: 13, color: COLORS.success, marginBottom: 10 }}>{msg}</div>}
+              <button onClick={handleSave} disabled={saving} style={btn('primary')}>
+                {saving ? 'Salvataggio...' : '💾 Salva modifiche'}
+              </button>
             </div>
 
-            {msg && <div style={{ fontSize: 13, color: COLORS.success, marginBottom: 10 }}>{msg}</div>}
-
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              style={btn('primary')}
-            >
-              {saving ? 'Salvataggio...' : '💾 Salva modifiche'}
-            </button>
-          </div>
+            {/* --- Hazard Intelligence --- */}
+            <div style={card}>
+              <SectionTitle>📊 Hazard Intelligence</SectionTitle>
+              {hazardLastUpdated && (
+                <p style={{ fontSize: 11, color: COLORS.muted, marginBottom: 8 }}>
+                  Ultimo aggiornamento: {new Date(hazardLastUpdated).toLocaleDateString('it-IT')}
+                  {hazardBy && ` — da ${hazardBy}`}
+                </p>
+              )}
+              <label style={{ ...labelStyle, marginBottom: 4 }}>Categoria INAIL (agente materiale)</label>
+              <input
+                style={{ ...input, marginBottom: 10 }}
+                placeholder="es. Apparecchi di sollevamento"
+                value={hazardCat}
+                onChange={e => setHazardCat(e.target.value)}
+              />
+              <label style={{ ...labelStyle, marginBottom: 4 }}>Focus rischi di categoria</label>
+              <textarea
+                style={{ ...input, height: 90, resize: 'vertical', marginBottom: 10 }}
+                placeholder="2-3 frasi sui rischi statisticamente più frequenti secondo INAIL..."
+                value={hazardTesto}
+                onChange={e => setHazardTesto(e.target.value)}
+              />
+              {hazardMsg && <div style={{ fontSize: 13, color: COLORS.success, marginBottom: 8 }}>{hazardMsg}</div>}
+              <button onClick={handleSaveHazard} disabled={savingHazard} style={btn('primary')}>
+                {savingHazard ? 'Salvataggio...' : '💾 Salva hazard'}
+              </button>
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -852,7 +953,7 @@ function TabScans() {
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
-    apiFetch('/admin/scan-log?fonte=fallback_ai&limit=100')
+    apiFetch('/admin/scan-log?exclude_exact=1&limit=200')
       .then(rows => setScans(rows))
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
@@ -890,16 +991,16 @@ function TabScans() {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <SectionTitle>Ricerche senza manuale trovato</SectionTitle>
+        <SectionTitle>Ricerche da inviare al produttore</SectionTitle>
         <button onClick={load} style={btn('ghost', true)}>↺ Aggiorna</button>
       </div>
       <p style={{ fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
-        Macchine per cui non è stato trovato alcun manuale (fallback AI). Clicca <strong>✉ Invia ricerca</strong> per
+        Ricerche per cui non è disponibile il manuale specifico della marca e modello cercati. Clicca <strong>✉ Invia ricerca</strong> per
         aprire il client email con il messaggio precompilato e l'indirizzo del produttore scoperto automaticamente.
         Clicca <strong>✗</strong> per nascondere la riga senza cancellarla.
       </p>
       {scans.length === 0
-        ? <EmptyState>Nessuna ricerca senza manuale. Ottimo!</EmptyState>
+        ? <EmptyState>Nessuna ricerca da inviare.</EmptyState>
         : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -912,6 +1013,7 @@ function TabScans() {
                   <Th>Tipo macchina</Th>
                   <Th>Matricola</Th>
                   <Th>Anno</Th>
+                  <Th>Fonte</Th>
                   <Th right>Azioni</Th>
                 </tr>
               </thead>
@@ -942,6 +1044,7 @@ function TabScans() {
                     <Td>{row.machine_type ?? <span style={{ color: COLORS.muted }}>—</span>}</Td>
                     <Td>{row.serial_number ?? <span style={{ color: COLORS.muted }}>—</span>}</Td>
                     <Td>{row.machine_year ?? <span style={{ color: COLORS.muted }}>—</span>}</Td>
+                    <Td><FonteBadge fonte={row.fonte_tipo} /></Td>
                     <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button
                         onClick={() => handleSend(row)}

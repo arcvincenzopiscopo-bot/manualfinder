@@ -113,11 +113,19 @@ def _build_inail_prompt(machine_rules: Optional[dict] = None) -> str:
   ],
   "abilitazione_operatore": "Formazione e/o patentino obbligatorio per l'operatore secondo normativa italiana VIGENTE. Cita la norma più aggiornata in vigore (es. Accordo Stato-Regioni nella versione attuale, non necessariamente quella del 22/02/2012 se aggiornata). Indica: tipo corso, durata minima, soggetti formatori. Null se non previsto per questa categoria.",
   "documenti_da_richiedere": [
-    "Documento che l'ispettore deve richiedere al datore di lavoro, con riferimento normativo che ne impone la tenuta (es. 'Dichiarazione di conformità CE [Dir. 2006/42/CE Art. 7]', 'Registro verifiche periodiche [Art. 71 c.11 D.Lgs. 81/08]', 'Attestato formazione operatore [Art. 37 D.Lgs. 81/08 + Accordo S-R 22/02/2012]')"
+    {
+      "documento": "Nome documento con riferimento normativo che ne impone la tenuta (es. 'Dichiarazione di conformità CE [Dir. 2006/42/CE Art. 7]', 'Registro verifiche periodiche [Art. 71 c.11 D.Lgs. 81/08]')",
+      "smart_hint": "Suggerimento pratico per l'ispettore: cosa verificare specificamente su questo documento (es. 'Controllare che la lingua sia l'italiano e che il numero di serie coincida con l'etichetta')"
+    }
   ],
   "verifiche_periodiche": "Obblighi di verifica periodica. Se applicabile: 1) categoria di appartenenza secondo Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma; 2) cadenza; 3) soggetto abilitato; 4) riferimento normativo VIGENTE aggiornato. Null se non previsti per questa categoria.",
   "checklist": [
-    "Verifica [componente/elemento specifico] — [dove trovarlo fisicamente sulla macchina] — [criterio di conformità: cosa rende la verifica positiva o negativa] [Art. X D.Lgs. 81/08 o Allegato Y punto Z]"
+    {
+      "testo": "Verifica [componente/elemento specifico] — [dove trovarlo fisicamente sulla macchina] — [criterio di conformità] [Art. X D.Lgs. 81/08 o Allegato Y punto Z]",
+      "livello": 1,
+      "norma": "All. V D.Lgs. 81/08 punto X.X",
+      "prescrizione_precompilata": "Si rileva [il problema specifico]. In violazione di [norma]. Si prescrive [azione correttiva] [entro termine se livello=2]."
+    }
   ],
   "note": "requisiti normativi aggiuntivi, riferimenti specifici D.Lgs. 81/08, norme armonizzate applicabili, registri obbligatori"
 }
@@ -126,8 +134,8 @@ VINCOLI:
 - rischi_principali: 3-8 rischi come oggetti JSON con campi "testo", "probabilita", "gravita". ORDINATI da gravità S3→S1, a parità P3→P1. Il campo "testo" deve contenere [ALTA/MEDIA/BASSA] e riferimento normativo. Classificazione ISO 12100: probabilita = P1 (raro), P2 (possibile), P3 (probabile); gravita = S1 (lieve reversibile), S2 (grave/invalidante), S3 (morte/invalidante permanente).
 - dispositivi_protezione: distingui tra DPI (cosa INDOSSA l'operatore) e protezioni collettive (dispositivi sulla macchina o nell'area). 3-8 elementi SPECIFICI per questa categoria.
 - dispositivi_sicurezza: 2-5 dispositivi di sicurezza richiesti dalla normativa per questa categoria di macchina.
-- checklist: 4-6 voci azionabili IMMEDIATAMENTE in sopralluogo. Ogni voce DEVE rispondere a tre domande: COSA verificare, DOVE trovarlo, COME stabilire la conformità. Includi il riferimento normativo tra parentesi quadre.
-- documenti_da_richiedere: 3-6 documenti con il riferimento normativo che ne impone la tenuta/esibizione. ESSENZIALE per l'attività ispettiva.
+- checklist: 4-6 oggetti {testo, livello, norma, prescrizione_precompilata}. livello=1 (STOP immediato: ripari fissi/mobili, pulsanti emergenza, freni, ROPS/FOPS); livello=2 (PRESCRIZIONE: segnalatori, illuminazione, targhette, estintori). Ordina L1 prima. Ogni testo risponde a: COSA verificare, DOVE trovarlo, COME valutare la conformità. Il campo "norma" è opzionale ma aggiungilo se disponibile. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
+- documenti_da_richiedere: 3-6 oggetti {documento, smart_hint} con il riferimento normativo nel campo "documento". ESSENZIALE per l'attività ispettiva. Lo smart_hint deve essere pratico e specifico (cosa guardare/verificare su quel documento).
 - abilitazione_operatore: se prevista da normativa vigente (Accordo Stato-Regioni nella versione più aggiornata in vigore, o norma settoriale specifica), descrivila in dettaglio (tipo corso, durata minima, ente formatore). Cita sempre la versione normativa attualmente in vigore, non necessariamente quella del 22/02/2012 se aggiornata.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo documento. Non integrare con conoscenze generali.
 - Usa terminologia precisa del D.Lgs. 81/2008.
@@ -202,7 +210,12 @@ def _build_producer_prompt(brand: str, model: str, machine_rules: Optional[dict]
     "pittogramma o avvertenza obbligatoria che deve essere presente e leggibile sulla macchina — specifica posizione (es. 'Pittogramma PERICOLO SCHIACCIAMENTO — pannello laterale sinistro cabina [pag. 12 manuale]')"
   ],
   "checklist": [
-    "Verifica [componente fisico specifico di {brand} {model}] — [dove trovarlo sulla macchina] — [criterio di conformità] [Sez. X.X o pag. YY manuale]"
+    {{
+      "testo": "Verifica [componente fisico specifico di {brand} {model}] — [dove trovarlo sulla macchina] — [criterio di conformità] [Sez. X.X o pag. YY manuale]",
+      "livello": 1,
+      "norma": "Sez. X.X manuale",
+      "prescrizione_precompilata": "Si rileva [il problema specifico su {brand} {model}]. In violazione di [norma]. Si prescrive [azione correttiva] [entro termine se livello=2]."
+    }}
   ],
   "note": "avvertenze particolari del costruttore, condizioni d'uso, limitazioni ambientali o operative"
 }}
@@ -213,7 +226,7 @@ VINCOLI:
 - limiti_operativi: {"lascia la lista vuota [] — i valori numerici si riferiscono al modello del manuale, non a " + brand + " " + model if is_category_match else "includi SOLO valori ESPLICITAMENTE riportati nel manuale. NON generare valori ipotetici anche se plausibili per la categoria. Se non presenti, lascia la lista vuota []."}.
 - procedure_emergenza: 2-5 procedure SOLO per emergenze che mettono a rischio PERSONE (incendio, ribaltamento, cedimento freni, investimento, folgorazione). NON includere: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio per persone, call to service. Se il manuale descrive solo procedure di manutenzione, lascia la lista vuota [].
 - pittogrammi_sicurezza: {"lascia la lista vuota [] — le posizioni fisiche sono specifiche del modello del manuale" if is_category_match else "segnala SOLO i pittogrammi esplicitamente citati nel manuale con la loro posizione sulla macchina."}.
-- checklist: 5-8 voci azionabili in sopralluogo SPECIFICHE per {brand} {model}. Ogni voce: verbo imperativo + cosa guardare/toccare + dove + criterio di conformità + riferimento sezione/pagina manuale.
+- checklist: 5-8 oggetti {{testo, livello, norma, prescrizione_precompilata}} SPECIFICI per {brand} {model}. livello=1 (STOP: ripari, emergenza, freni, ROPS); livello=2 (PRESCRIZIONE: segnalatori, pittogrammi, luci). Ogni testo: verbo imperativo + cosa + dove + criterio di conformità + riferimento sezione/pagina manuale. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo manuale. Per elementi non presenti, lascia la lista vuota — NON integrare con conoscenze generali sul tipo di macchina.
 - CITAZIONI OBBLIGATORIE: ogni voce deve contenere il riferimento alla pagina o sezione del manuale in formato [pag. X] o [Sez. X.X] DENTRO il campo "testo". Se non trovi il riferimento esatto, ometti la voce piuttosto che inventare un numero di pagina.
 - Se il manuale è in altra lingua: TRADUCI tutto in italiano. Non lasciare termini stranieri.
@@ -260,7 +273,10 @@ def _build_analysis_prompt(brand: str, model: str, is_category_match: bool = Fal
   ],
   "abilitazione_operatore": "Formazione obbligatoria richiesta dalla normativa italiana VIGENTE per questo tipo di macchina (cita la versione aggiornata dell'Accordo Stato-Regioni in vigore, o normativa settoriale specifica). Null se non obbligatoria.",
   "documenti_da_richiedere": [
-    "documento che l'ispettore deve richiedere al datore di lavoro [riferimento normativo che lo impone]"
+    {{
+      "documento": "Nome documento [riferimento normativo che ne impone la tenuta]",
+      "smart_hint": "Cosa verificare specificamente su questo documento durante l'ispezione"
+    }}
   ],
   "verifiche_periodiche": "Obblighi di verifica periodica. Se applicabile: 1) categoria di appartenenza secondo Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma; 2) cadenza; 3) soggetto abilitato; 4) riferimento normativo VIGENTE aggiornato. Null se non previsti.",
   "limiti_operativi": [
@@ -273,8 +289,14 @@ def _build_analysis_prompt(brand: str, model: str, is_category_match: bool = Fal
     "pittogramma o avvertenza che deve essere presente e leggibile sulla macchina — con posizione [rif. documento]"
   ],
   "checklist": [
-    "Verifica [elemento concreto fisico] — [dove trovarlo sulla macchina] — [come stabilire se conforme] [rif. normativo o sezione documento]"
+    {{
+      "testo": "Verifica [elemento concreto fisico] — [dove trovarlo sulla macchina] — [come stabilire se conforme] [rif. normativo o sezione documento]",
+      "livello": 1,
+      "norma": "All. V D.Lgs. 81/08",
+      "prescrizione_precompilata": "Si rileva [il problema specifico]. In violazione di [norma]. Si prescrive [azione correttiva] [entro termine se livello=2]."
+    }}
   ],
+  "attrezzature_intercambiabili": "Se la macchina può montare attrezzature intercambiabili (pinze, bracci, forche, utensili da taglio, benne speciali ecc.), descrivi in 2-3 frasi: quali attrezzature sono compatibili, se richiedono marcatura CE propria, come verificare la compatibilità. Null se la macchina non prevede attrezzature intercambiabili.",
   "note": "osservazioni aggiuntive di sicurezza, limiti d'uso, condizioni ambientali"
 }}
 
@@ -283,7 +305,7 @@ VINCOLI:
 - raccomandazioni_produttore: SOLO raccomandazioni che proteggono persone. NON manutenzione, fluidi, filtri DPF, preriscaldamento, avvisi motore.
 - procedure_emergenza: SOLO per emergenze che minacciano persone (incendio, ribaltamento, cedimento freni, investimento, folgorazione). NON rigenerazione DPF, avarie meccaniche, call to service. Lista vuota [] se il documento non ne contiene.
 - dispositivi_sicurezza: {"lascia la lista vuota [] — questo documento appartiene a un modello diverso" if is_category_match else "3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI sulla macchina dal costruttore (interblocchi, sensori, ripari, pulsanti emergenza, limitatori, valvole di sicurezza). Sii specifico sulla posizione fisica."}.
-- checklist: 5-10 voci azionabili IMMEDIATAMENTE in sopralluogo. Ogni voce deve rispondere a: COSA verificare, DOVE trovarlo, COME stabilire la conformità. Includi riferimento sezione o articolo normativo tra parentesi quadre.
+- checklist: 5-10 voci azionabili IMMEDIATAMENTE in sopralluogo. Ogni voce deve rispondere a: COSA verificare, DOVE trovarlo, COME stabilire la conformità. Includi riferimento sezione o articolo normativo tra parentesi quadre. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
 - limiti_operativi: {"lascia la lista vuota [] — i valori numerici si riferiscono al modello del documento, non a " + brand + " " + model if is_category_match else "includi SOLO valori ESPLICITAMENTE presenti nel documento — NON generare valori ipotetici."}.
 - documenti_da_richiedere: 3-5 documenti essenziali per l'accesso ispettivo con riferimento normativo che ne impone la tenuta.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto nel documento fornito.
@@ -326,19 +348,28 @@ Genera una scheda di sicurezza INDICATIVA:
   ],
   "abilitazione_operatore": "Formazione obbligatoria prevista dalla normativa italiana VIGENTE per questa categoria di macchina (cita la versione aggiornata dell'Accordo Stato-Regioni in vigore, o norma settoriale specifica). Null se non prevista.",
   "documenti_da_richiedere": [
-    "documento essenziale per l'ispettore con riferimento normativo che ne impone la tenuta"
+    {{
+      "documento": "Nome documento con riferimento normativo che ne impone la tenuta",
+      "smart_hint": "Cosa verificare specificamente su questo documento (es. lingua italiana, numero di serie, data ultima verifica)"
+    }}
   ],
   "verifiche_periodiche": "Obblighi di verifica periodica. Se applicabile: 1) categoria di appartenenza secondo Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma; 2) cadenza; 3) soggetto abilitato; 4) riferimento normativo VIGENTE aggiornato. Null se non previsti.",
   "limiti_operativi": [],
   "procedure_emergenza": [
-    "Procedura di emergenza PER SALVAGUARDARE PERSONE tipica per {brand} {model}: Passo 1 — [azione]. Passo 2 — [azione]. SOLO: incendio, ribaltamento, cedimento freni, investimento, folgorazione. ESCLUDI avarie meccaniche senza rischio per persone."
+    "Procedura di emergenza PER SALVAGUARDARE PERSONE tipica per {{brand}} {{model}}: Passo 1 — [azione]. Passo 2 — [azione]. SOLO: incendio, ribaltamento, cedimento freni, investimento, folgorazione. ESCLUDI avarie meccaniche senza rischio per persone."
   ],
   "pittogrammi_sicurezza": [
     "pittogramma di avvertenza tipicamente presente su questa categoria di macchina"
   ],
   "checklist": [
-    "Verifica [elemento concreto fisico] — [dove trovarlo] — [come valutare la conformità]"
+    {{
+      "testo": "Verifica [elemento concreto fisico] — [dove trovarlo] — [come valutare la conformità]",
+      "livello": 1,
+      "norma": "All. V D.Lgs. 81/08",
+      "prescrizione_precompilata": "Si rileva [il problema specifico]. In violazione di [norma]. Si prescrive [azione correttiva] [entro termine se livello=2]."
+    }}
   ],
+  "attrezzature_intercambiabili": "Se la macchina può montare attrezzature intercambiabili, descrivi in 2-3 frasi quali sono, se richiedono marcatura CE propria, come verificare la compatibilità. Null se non applicabile.",
   "confidence_ai": "high | medium | low",
   "note": "ATTENZIONE: Scheda generata da AI senza consultazione della documentazione ufficiale del costruttore. Non utilizzare come unica fonte di riferimento per prescrizioni ispettive."
 }}
@@ -348,8 +379,8 @@ VINCOLI:
 - raccomandazioni_produttore: SOLO raccomandazioni che proteggono persone (operatore, bystander). NON manutenzione, fluidi, DPF, call to service.
 - procedure_emergenza: SOLO per emergenze che minacciano persone. Lista vuota [] se non applicabile.
 - dispositivi_sicurezza: 2-5 dispositivi tipici per questa categoria — specifica posizione fisica sulla macchina
-- checklist: 5-8 voci azionabili in sopralluogo con verbo imperativo + COSA + DOVE + COME. NON aggiungere riferimenti a articoli specifici del D.Lgs. 81/2008.
-- documenti_da_richiedere: 3-5 documenti essenziali con riferimento normativo
+- checklist: 5-8 oggetti {{testo, livello, norma, prescrizione_precompilata}}. livello=1 (STOP: ripari, emergenza, freni, ROPS); livello=2 (PRESCRIZIONE: segnalatori, luci, targhette). Ogni testo: verbo imperativo + COSA + DOVE + COME. NON aggiungere riferimenti a articoli specifici del D.Lgs. 81/2008. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
+- documenti_da_richiedere: 3-5 oggetti {{documento, smart_hint}} essenziali con riferimento normativo nel campo "documento". Lo smart_hint deve essere concreto e operativo.
 - limiti_operativi: lascia SEMPRE [] — NON inventare valori numerici senza documentazione ufficiale
 - confidence_ai: scegli onestamente (high/medium/low) in base alla strategia usata
 - note: inizia SEMPRE con "ATTENZIONE: Scheda generata da AI senza...". Se hai usato modelli simili per l'analisi, aggiungilo DOPO il disclaimer.
@@ -405,8 +436,20 @@ Restituisci UN SOLO JSON con la struttura completa:
   "procedure_emergenza": ["Procedura PER SALVAGUARDARE PERSONE: Passo 1 — ... Passo 2 — ... SOLO: incendio, ribaltamento, cedimento freni, investimento, folgorazione. ESCLUDI avarie meccaniche senza rischio per persone."],
   "pittogrammi_sicurezza": ["avvertenza/pittogramma obbligatorio sulla macchina"],
   "checklist": [
-    "Verifica [elemento fisico] — [dove trovarlo] — [criterio di conformità] [rif. normativo o sezione manuale]"
+    {{
+      "testo": "Verifica [elemento fisico] — [dove trovarlo] — [criterio di conformità] [rif. normativo o sezione manuale]",
+      "livello": 1,
+      "norma": "All. V D.Lgs. 81/08",
+      "prescrizione_precompilata": "Si rileva [il problema specifico]. In violazione di [norma]. Si prescrive [azione correttiva] [entro termine se livello=2]."
+    }}
   ],
+  "documenti_da_richiedere": [
+    {{
+      "documento": "Nome documento [riferimento normativo]",
+      "smart_hint": "Cosa verificare specificamente su questo documento"
+    }}
+  ],
+  "attrezzature_intercambiabili": "Se la macchina può montare attrezzature intercambiabili, descrivi brevemente. Null se non applicabile.",
   "note": "avvertenze residue importanti"
 }}
 
@@ -415,7 +458,8 @@ ISTRUZIONI DI CONSOLIDAMENTO:
 - raccomandazioni_produttore: SCARTA istruzioni di manutenzione, gestione fluidi, DPF, preriscaldamento, istruzioni per officina. Mantieni SOLO raccomandazioni che proteggono l'incolumità di operatori e persone vicine.
 - procedure_emergenza: SCARTA qualsiasi procedura di manutenzione o gestione avaria meccanica. Mantieni SOLO procedure per incendio, ribaltamento, cedimento freni/idraulico, investimento persone, folgorazione, seppellimento. Se nessuna è pertinente, lascia la lista vuota [].
 - dispositivi_sicurezza: deduplica per nome (case-insensitive); mantieni la descrizione più completa tra i duplicati
-- checklist: unisci tutte le voci, rimuovi i duplicati semantici, mantieni 5-10 voci ordinate per priorità ispettiva
+- checklist: unisci tutte le voci, rimuovi i duplicati semantici, mantieni 5-10 oggetti {testo, livello, norma, prescrizione_precompilata} ordinati per priorità ispettiva (livello=1 STOP prima). REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
+- documenti_da_richiedere: unisci e deduplica; mantieni oggetti {documento, smart_hint}
 - limiti_operativi: includi SOLO valori esplicitamente presenti nel manuale — non generare valori ipotetici
 - Per ogni sezione lista: 3-8 elementi totali, preferendo i più specifici e verificabili
 - Rispondi SOLO con il JSON valido."""
@@ -1360,4 +1404,5 @@ def _build_safety_card(
         fonte_protezione=label,
         fonte_raccomandazioni=label,
         fonte_residui=label,
+        attrezzature_intercambiabili=_nullable_str(data.get("attrezzature_intercambiabili")),
     )

@@ -358,7 +358,7 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
       marginBottom: 12,
     }}>
       <p style={{ margin: '0 0 8px', fontSize: 12, color: '#64748b', fontWeight: 600 }}>FONTE</p>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <p style={{ margin: 0, fontSize: 13, color: isFallback ? '#92400e' : '#166534', fontWeight: 600 }}>
           {label}
         </p>
