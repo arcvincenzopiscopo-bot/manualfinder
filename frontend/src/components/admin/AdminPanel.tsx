@@ -638,6 +638,7 @@ function TabFlags() {
   const [hazardMsg, setHazardMsg]   = useState<string | null>(null)
   const [populatingVita, setPopulatingVita] = useState(false)
   const [populatingHazard, setPopulatingHazard] = useState(false)
+  const [populatingInailHint, setPopulatingInailHint] = useState(false)
 
   const loadTypes = useCallback(() => {
     apiFetch('').then(setTypes).catch(e => setError(e.message))
@@ -744,6 +745,19 @@ function TabFlags() {
     }
   }
 
+  const handlePopulateInailHint = async () => {
+    setPopulatingInailHint(true)
+    try {
+      const res = await apiFetch('/admin/populate-inail-hint', { method: 'POST' })
+      setMsg(`✅ Quaderni INAIL: ${res.populated} associati, ${res.skipped} senza corrispondenza.`)
+      loadTypes()
+    } catch (e: any) {
+      setMsg(`Errore: ${e.message}`)
+    } finally {
+      setPopulatingInailHint(false)
+    }
+  }
+
   const filtered = searchQ.trim()
     ? types.filter(t => t.name.toLowerCase().includes(searchQ.toLowerCase()))
     : types
@@ -759,6 +773,9 @@ function TabFlags() {
         </button>
         <button onClick={handlePopulateHazard} disabled={populatingHazard} style={btn('ghost')}>
           {populatingHazard ? '⏳ Popolo hazard...' : '🤖 Popola hazard INAIL (AI, solo mancanti/old)'}
+        </button>
+        <button onClick={handlePopulateInailHint} disabled={populatingInailHint} style={btn('ghost')}>
+          {populatingInailHint ? '⏳ Associo quaderni...' : '🤖 Associa quaderni INAIL (AI, solo NULL)'}
         </button>
         {msg && <span style={{ fontSize: 13, color: COLORS.success, alignSelf: 'center' }}>{msg}</span>}
       </div>

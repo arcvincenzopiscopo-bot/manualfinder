@@ -194,6 +194,13 @@ async def admin_populate_hazard():
     return await machine_type_service.admin_populate_hazard(provider)
 
 
+@router.post("/admin/populate-inail-hint")
+async def admin_populate_inail_hint():
+    """Chiama AI per associare il quaderno INAIL locale a tutti i tipi con inail_search_hint NULL."""
+    provider = settings.get_analysis_provider()
+    return await machine_type_service.admin_populate_inail_hint(provider)
+
+
 # ── Admin: scan log (storico analisi) ────────────────────────────────────────
 
 @router.get("/admin/scan-log")

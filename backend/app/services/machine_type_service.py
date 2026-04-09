@@ -1067,3 +1067,84 @@ async def admin_populate_hazard(provider: str) -> dict:
             errors += 1
 
     return {"populated": populated, "skipped": skipped, "errors": errors}
+
+
+# ── Quaderno INAIL locale ─────────────────────────────────────────────────────
+
+async def admin_populate_inail_hint(provider: str) -> dict:
+    """
+    Usa l'AI per associare automaticamente il quaderno INAIL locale (inail_search_hint)
+    ai machine_types che hanno il campo NULL.
+    Ritorna {populated: N, skipped: M, errors: K}.
+    """
+    if not settings.database_url:
+        return {"error": "no_db"}
+
+    # Carica i file disponibili su disco
+    from app.services.local_manuals_service import PDF_MANUALS_DIR, LOCAL_MANUALS_MAP
+    available_files: list[dict] = []
+    seen_files: set = set()
+    for filename in LOCAL_MANUALS_MAP.values():
+        if filename not in seen_files:
+            seen_files.add(filename)
+            available_files.append({"filename": filename, "title": filename.replace(".pdf", "").strip()})
+    if PDF_MANUALS_DIR.exists():
+        for f in sorted(PDF_MANUALS_DIR.glob("*.pdf")):
+            if f.name not in seen_files:
+                seen_files.add(f.name)
+                available_files.append({"filename": f.name, "title": f.name.replace(".pdf", "").strip()})
+
+    if not available_files:
+        return {"error": "no_files", "message": "Nessun quaderno INAIL trovato nella cartella 'pdf manuali'."}
+
+    # Recupera machine_types senza inail_search_hint
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name FROM machine_types WHERE is_verified = true AND inail_search_hint IS NULL ORDER BY name"
+            )
+            rows = cur.fetchall()
+        conn.close()
+    except Exception as e:
+        return {"error": str(e)}
+
+    populated = 0
+    skipped = 0
+    errors = 0
+
+    from app.services.analysis_service import _call_ai_with_text
+    valid_filenames = {f["filename"] for f in available_files}
+    files_list = "\n".join(f'  - "{f["filename"]}"' for f in available_files)
+
+    for (mt_id, name) in rows:
+        prompt = (
+            f"Sei un esperto di sicurezza sul lavoro italiano con conoscenza delle schede INAIL.\n\n"
+            f"Categoria macchina: '{name}'\n\n"
+            f"Quaderni INAIL disponibili:\n{files_list}\n\n"
+            f"Indica il quaderno più pertinente per questa categoria. Se nessuno è adatto, rispondi null.\n\n"
+            f"Rispondi SOLO con questo JSON (senza testo aggiuntivo):\n"
+            f'{{"filename": "nome-file-esatto.pdf"}}\n'
+            f"oppure: {{\"filename\": null}}\n\n"
+            f"Il valore di 'filename' deve essere identico a uno dei nomi elencati sopra."
+        )
+        try:
+            result = await _call_ai_with_text("", prompt, provider, is_fallback=True)
+            filename = result.get("filename") if isinstance(result, dict) else None
+            if filename and filename in valid_filenames:
+                conn = _get_conn()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE machine_types SET inail_search_hint = %s WHERE id = %s",
+                        (filename, mt_id),
+                    )
+                conn.commit()
+                conn.close()
+                populated += 1
+            else:
+                skipped += 1
+        except Exception as ex:
+            logger.warning("populate_inail_hint: errore per '%s': %s", name, ex)
+            errors += 1
+
+    return {"populated": populated, "skipped": skipped, "errors": errors}

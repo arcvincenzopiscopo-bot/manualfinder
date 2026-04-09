@@ -864,21 +864,32 @@ async def _analyze_dual_source(
             dispositivi_merged.append(d)
 
     # Checklist: INAIL prima, poi produttore con dedup semantica
-    checklist_inail_raw = [i for i in (inail_json.get("checklist") or []) if isinstance(i, str)]
-    checklist_prod_raw  = [i for i in (producer_json.get("checklist") or []) if isinstance(i, str)]
-    # Dedup esatta su INAIL stesso
+    # Normalizza: accetta sia stringhe (compat. retroattiva) sia oggetti {testo, livello, norma, ...}
+    def _norm_cl(items: list) -> list[dict]:
+        result = []
+        for i in items:
+            if isinstance(i, str):
+                result.append({"testo": i, "livello": 2})
+            elif isinstance(i, dict) and i.get("testo"):
+                result.append(i)
+        return result
+
+    checklist_inail_raw = _norm_cl(inail_json.get("checklist") or [])
+    checklist_prod_raw  = _norm_cl(producer_json.get("checklist") or [])
+    # Dedup esatta su INAIL stesso (su campo testo)
     seen_cl: set[str] = set()
-    checklist_inail_deduped: list[str] = []
+    checklist_inail_deduped: list[dict] = []
     for item in checklist_inail_raw:
-        key = item.lower().strip()
+        key = item["testo"].lower().strip()
         if key not in seen_cl:
             seen_cl.add(key)
             checklist_inail_deduped.append(item)
     # Dedup semantica: aggiunge dal produttore solo voci non già coperte da INAIL
-    cl_inail_dicts = [{"testo": i} for i in checklist_inail_deduped]
-    cl_prod_dicts  = [{"testo": i} for i in checklist_prod_raw]
-    nuove_cl = _semantic_dedup(cl_prod_dicts, cl_inail_dicts)
-    checklist_merged = checklist_inail_deduped + [d["testo"] for d in nuove_cl]
+    cl_inail_for_dedup = [{"testo": i["testo"]} for i in checklist_inail_deduped]
+    cl_prod_for_dedup  = [{"testo": i["testo"]} for i in checklist_prod_raw]
+    nuove_cl_keys = {d["testo"] for d in _semantic_dedup(cl_prod_for_dedup, cl_inail_for_dedup)}
+    nuove_cl = [i for i in checklist_prod_raw if i["testo"] in nuove_cl_keys]
+    checklist_merged = checklist_inail_deduped + nuove_cl
 
     # Nuovi campi ispettivi da fonti distinte
     procedure_emergenza = _tag_items(
@@ -916,17 +927,22 @@ async def _analyze_dual_source(
         verifiche_periodiche = _verifiche_inail or _verifiche_prod
 
     # documenti_da_richiedere: merge liste, deduplicati (INAIL prima, poi aggiunte del produttore)
+    # Normalizza: accetta sia stringhe (compat.) sia oggetti {documento, smart_hint}
     _docs_inail = inail_json.get("documenti_da_richiedere") or []
     _docs_prod  = producer_json.get("documenti_da_richiedere") or []
     _docs_seen: set[str] = set()
     documenti_da_richiedere = []
     for doc in _docs_inail + _docs_prod:
-        if not isinstance(doc, str):
-            continue
-        key = doc.lower().strip()
-        if key not in _docs_seen:
-            _docs_seen.add(key)
-            documenti_da_richiedere.append(doc)
+        if isinstance(doc, str):
+            key = doc.lower().strip()
+            if key not in _docs_seen:
+                _docs_seen.add(key)
+                documenti_da_richiedere.append({"documento": doc, "smart_hint": ""})
+        elif isinstance(doc, dict) and doc.get("documento"):
+            key = doc["documento"].lower().strip()
+            if key not in _docs_seen:
+                _docs_seen.add(key)
+                documenti_da_richiedere.append(doc)
 
     # Nota combinata
     notes = []
