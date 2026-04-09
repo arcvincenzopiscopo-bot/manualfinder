@@ -17,7 +17,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from app.services import machine_type_service
+from app.services import machine_type_service, scan_log_service
+from app.config import settings
 
 router = APIRouter(prefix="/machine-types", tags=["machine-types"])
 
@@ -153,3 +154,87 @@ def admin_update_flags(machine_type_id: int, req: UpdateFlagsRequest):
         requires_verifiche=req.requires_verifiche,
         inail_search_hint=req.inail_search_hint,
     )
+
+
+# ── Admin: scan log (storico analisi) ────────────────────────────────────────
+
+@router.get("/admin/scan-log")
+def admin_scan_log(limit: int = 100, fonte: Optional[str] = None):
+    """
+    Lista scansioni per il pannello admin (escluse le dismissed).
+    fonte='fallback_ai' per mostrare solo quelle senza manuale trovato.
+    """
+    return scan_log_service.get_admin_scans(limit=limit, fonte_filter=fonte)
+
+
+@router.post("/admin/scan-log/{scan_id}/dismiss")
+def admin_dismiss_scan(scan_id: int):
+    """Nasconde una scansione dal pannello admin (non la cancella dal DB)."""
+    ok = scan_log_service.dismiss_scan(scan_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Scansione non trovata o DB non disponibile")
+    return {"ok": True}
+
+
+@router.get("/admin/scan-log/{scan_id}/image")
+def admin_scan_image(scan_id: int):
+    """
+    Restituisce la foto dell'etichetta compressa (JPEG) per una scansione.
+    Conservata per 30 giorni dal momento della scansione.
+    """
+    from fastapi.responses import Response
+    img = scan_log_service.get_scan_image(scan_id)
+    if img is None:
+        raise HTTPException(status_code=404, detail="Immagine non disponibile")
+    return Response(content=img, media_type="image/jpeg")
+
+
+# ── Lista file INAIL locali ───────────────────────────────────────────────────
+
+@router.get("/inail-local-files")
+def list_inail_local_files():
+    """
+    Restituisce la lista dei PDF INAIL presenti nella cartella locale.
+    Usato dal pannello admin (tab Flags) per il dropdown di associazione file.
+    Risposta: [{ filename, title, exists }]
+    """
+    from app.services.local_manuals_service import PDF_MANUALS_DIR, LOCAL_MANUALS_MAP
+    result = []
+    seen = set()
+    # Prima elenca i file noti dalla mappa (anche se non presenti su disco)
+    for canonical, filename in LOCAL_MANUALS_MAP.items():
+        if filename in seen:
+            continue
+        seen.add(filename)
+        filepath = PDF_MANUALS_DIR / filename
+        result.append({
+            "filename": filename,
+            "title": filename.replace(".pdf", "").strip(),
+            "exists": filepath.exists(),
+        })
+    # Poi aggiunge eventuali file extra trovati su disco non nella mappa
+    if PDF_MANUALS_DIR.exists():
+        for f in sorted(PDF_MANUALS_DIR.glob("*.pdf")):
+            if f.name not in seen:
+                result.append({
+                    "filename": f.name,
+                    "title": f.name.replace(".pdf", "").strip(),
+                    "exists": True,
+                })
+    result.sort(key=lambda x: x["filename"])
+    return result
+
+
+# ── Ricerca email produttore ──────────────────────────────────────────────────
+
+@router.get("/manufacturer-email")
+async def get_manufacturer_email(brand: str, model: str = ""):
+    """
+    Cerca l'email del servizio assistenza tecnica italiano del produttore.
+    Usato da: pannello admin (tab Ricerche) e SafetyCard (bottone email).
+    Risposta: { email: "italy.service@brand.com" | null }
+    """
+    from app.services.manufacturer_email_service import find_manufacturer_email
+    provider = settings.get_analysis_provider()
+    email = await find_manufacturer_email(brand.strip(), provider)
+    return {"email": email}

@@ -10,8 +10,19 @@ export async function ocrPlate(imageBase64: string): Promise<PlateOCRResult & { 
     body: JSON.stringify({ image_base64: imageBase64, image_mime: 'image/jpeg' }),
   })
   if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`OCR fallito (HTTP ${response.status}): ${text}`)
+    let msg = `OCR fallito (HTTP ${response.status})`
+    try {
+      const body = await response.json()
+      // Errore strutturato con code + message (es. not_a_plate)
+      if (body?.detail?.message) {
+        msg = body.detail.message
+      } else if (typeof body?.detail === 'string') {
+        msg = body.detail
+      }
+    } catch {
+      msg = `OCR fallito (HTTP ${response.status})`
+    }
+    throw new Error(msg)
   }
   return response.json()
 }

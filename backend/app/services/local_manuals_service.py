@@ -274,7 +274,25 @@ def _normalize_machine_type(machine_type: str) -> str:
     return machine_type.lower().strip()
 
 
-def find_local_manual(machine_type: str) -> Optional[Dict[str, str]]:
+def find_local_manual_by_filename(filename: str) -> Optional[Dict[str, str]]:
+    """
+    Cerca un manuale locale direttamente per nome file.
+    Usato quando l'admin ha associato esplicitamente un file a un tipo macchina.
+    """
+    if not filename:
+        return None
+    filepath = PDF_MANUALS_DIR / filename
+    if not filepath.exists():
+        return None
+    return {
+        "filename": filename,
+        "filepath": str(filepath),
+        "title": filename.replace(".pdf", "").strip(),
+        "source": "local_inail",
+    }
+
+
+def find_local_manual(machine_type: str, db_filename: Optional[str] = None) -> Optional[Dict[str, str]]:
     """
     Cerca il manuale INAIL locale per il tipo di macchina.
 
@@ -285,6 +303,12 @@ def find_local_manual(machine_type: str) -> Optional[Dict[str, str]]:
     """
     if not machine_type:
         return None
+
+    # Associazione esplicita dell'admin ha priorità assoluta
+    if db_filename:
+        result = find_local_manual_by_filename(db_filename)
+        if result:
+            return result
 
     mt = _normalize_machine_type(machine_type)
 

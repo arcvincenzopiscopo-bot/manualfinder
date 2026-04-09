@@ -1025,7 +1025,19 @@ async def _generate_fallback(
     # Sanitizza brand/model da caratteri che rompono .format() (es. '{', '}' da OCR errato)
     safe_brand = brand.replace("{", "{{").replace("}", "}}")
     safe_model = model.replace("{", "{{").replace("}", "}}")
-    prompt = FALLBACK_PROMPT_TEMPLATE.format(brand=safe_brand, model=safe_model) + norme_context + av_context
+    # Inietta il tipo macchina confermato dall'utente: essenziale per evitare che l'AI
+    # generi la scheda per la categoria sbagliata quando brand+model sono sconosciuti.
+    machine_type_context = ""
+    if machine_type and machine_type.strip():
+        safe_mt = machine_type.strip()
+        machine_type_context = (
+            f"\n\nTIPO MACCHINA CONFERMATO DALL'UTENTE: {safe_mt}\n"
+            f"⚠ CRITICO: Genera la scheda di sicurezza ESCLUSIVAMENTE per una '{safe_mt}'. "
+            f"NON generare contenuti per altri tipi di macchina (es. PLE, escavatore, carrello elevatore) "
+            f"anche se il brand+modello non ti sono noti. "
+            f"Usa questa classificazione per tutti i rischi, dispositivi, normative e procedure."
+        )
+    prompt = FALLBACK_PROMPT_TEMPLATE.format(brand=safe_brand, model=safe_model) + machine_type_context + norme_context + av_context
     result_json = await _call_ai_with_text("", prompt, provider, is_fallback=True)
     card = _build_safety_card(brand, model, result_json, None, "fallback_ai")
     card.gap_ce_ante = result_json.get("gap_ce_ante")

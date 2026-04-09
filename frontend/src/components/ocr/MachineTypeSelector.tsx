@@ -14,7 +14,6 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
   const [types, setTypes] = useState<MachineType[]>([])
   const [query, setQuery] = useState(value)
   const [showList, setShowList] = useState(false)
-  const [showSuggest, setShowSuggest] = useState(false)
   const [suggestionSent, setSuggestionSent] = useState(false)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -41,8 +40,17 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
         t.name.toLowerCase().includes(query.toLowerCase().trim())
       )
 
+  // Reset "proposta inviata" se l'utente cambia il testo
+  useEffect(() => {
+    setSuggestionSent(false)
+  }, [query])
+
   // Calcola badge confidenza da valueId
   const matchedType = valueId != null ? types.find(t => t.id === valueId) : null
+
+  // Mostra il suggerimento "Non trovi?" ogni volta che c'è testo libero non nel catalogo,
+  // incluso quando il valore è pre-compilato dall'OCR (senza bisogno di focus)
+  const showSuggest = !matchedType && !loadingCatalog && query.trim().length > 2 && !showList
   const confidenceColor = matchedType
     ? '#166534'   // verde — match DB confermato
     : value.trim()
@@ -56,7 +64,6 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
   const handleSelect = (type: MachineType) => {
     setQuery(type.name)
     setShowList(false)
-    setShowSuggest(false)
     onChange(type.name, type.id)
   }
 
@@ -64,7 +71,6 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
     const v = e.target.value
     setQuery(v)
     setShowList(true)
-    setShowSuggest(false)
     // Se l'utente cancella o scrive qualcosa che non è nel catalogo, resetta l'ID
     const exact = types.find(t => t.name.toLowerCase() === v.toLowerCase().trim())
     if (exact) {
@@ -76,21 +82,13 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
 
   const handleBlur = () => {
     // Piccolo delay per permettere il click sulla lista prima di chiuderla
-    setTimeout(() => {
-      setShowList(false)
-      // Se il testo non corrisponde a nessun tipo, mostra "Non trovi?"
-      const exact = types.find(t => t.name.toLowerCase() === query.toLowerCase().trim())
-      if (!exact && query.trim().length > 2) {
-        setShowSuggest(true)
-      }
-    }, 150)
+    setTimeout(() => setShowList(false), 150)
   }
 
   const handleSuggest = async () => {
     if (!query.trim()) return
     await suggestMachineType(query.trim())
     setSuggestionSent(true)
-    setShowSuggest(false)
   }
 
   return (

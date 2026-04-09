@@ -916,6 +916,7 @@ async def search_manual(
     lang: str = "it",
     machine_year: Optional[str] = None,
     serial_number: Optional[str] = None,
+    machine_type_id: Optional[int] = None,
 ) -> List[ManualSearchResult]:
     """
     Cerca il manuale con strategia a più livelli.
@@ -979,8 +980,20 @@ async def search_manual(
         pass  # Non interrompere la ricerca se Supabase non è raggiungibile
 
     # LIVELLO 1: Cerca nel database locale PDF INAIL
+    # Se l'admin ha associato esplicitamente un file al tipo (inail_search_hint = filename),
+    # quel file viene usato come fonte primaria senza passare per MACHINE_ALIASES.
     if machine_type:
-        local_manual = local_manuals_service.find_local_manual(machine_type)
+        db_filename: Optional[str] = None
+        if machine_type_id:
+            try:
+                from app.services.machine_type_service import get_type_by_id
+                mt_info = get_type_by_id(machine_type_id)
+                hint_val = (mt_info or {}).get("inail_search_hint") or ""
+                if hint_val.lower().endswith(".pdf"):
+                    db_filename = hint_val
+            except Exception:
+                pass
+        local_manual = local_manuals_service.find_local_manual(machine_type, db_filename=db_filename)
         if local_manual:
             # Crea un risultato per il PDF locale
             local_result = ManualSearchResult(

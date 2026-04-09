@@ -159,6 +159,84 @@ def _normalize_machine_type(machine_type: str) -> str:
     mt = machine_type.lower().strip()
     return _EN_TO_IT_MACHINE_TYPE.get(mt, machine_type)
 
+
+_VALIDATE_PROMPT = (
+    "Guarda questa immagine. È una targa identificativa o etichetta di un macchinario/attrezzatura industriale "
+    "(es: targa costruttore, targhetta dati, placca matricola di macchina da cantiere, industriale o agricola)?\n"
+    "Rispondi SOLO con: SI oppure NO.\n"
+    "Esempi SI: targa macchina con brand/modello/matricola, etichetta CE con dati tecnici, placca seriale.\n"
+    "Esempi NO: selfie, paesaggio, documento cartaceo, schermo computer, ricevuta, cibo, auto privata, "
+    "edificio, QR isolato senza contesto macchina, immagine vuota o irriconoscibile."
+)
+
+
+async def validate_plate_image(image_base64: str) -> bool:
+    """
+    Verifica rapidamente che l'immagine sia una targa/etichetta di macchinario.
+    Richiesta leggera (max_tokens=5) — usata come guard prima dell'OCR completo.
+    Ritorna True se valida, False se non è una targa macchina.
+    """
+    provider = settings.get_vision_provider()
+    try:
+        if provider == "anthropic":
+            import anthropic
+            # Estrai mime type e dati base64
+            media_type = "image/jpeg"
+            b64_data = image_base64
+            if image_base64.startswith("data:"):
+                header, b64_data = image_base64.split(",", 1)
+                if "png" in header:
+                    media_type = "image/png"
+                elif "webp" in header:
+                    media_type = "image/webp"
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            resp = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=5,
+                temperature=0,
+                messages=[{
+                    "role": "user",
+                    "content": [{
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": b64_data},
+                    }, {
+                        "type": "text",
+                        "text": _VALIDATE_PROMPT,
+                    }],
+                }],
+            )
+            answer = resp.content[0].text.strip().upper()
+            return answer.startswith("S")   # "SI" o "SÌ"
+
+        elif provider == "gemini":
+            import base64 as _b64
+            from google import genai
+            from google.genai import types
+            b64_data = image_base64
+            if image_base64.startswith("data:"):
+                b64_data = image_base64.split(",", 1)[1]
+            img_bytes = _b64.b64decode(b64_data)
+            client = genai.Client(api_key=settings.gemini_api_key)
+            resp = await client.aio.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[
+                    types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+                    _VALIDATE_PROMPT,
+                ],
+                config=types.GenerateContentConfig(
+                    max_output_tokens=5,
+                    temperature=0.0,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            answer = (resp.text or "").strip().upper()
+            return answer.startswith("S")
+    except Exception:
+        pass
+    # Se la validazione fallisce (errore rete, provider disattivato), lascia passare
+    return True
+
+
 async def extract_plate_info(image_base64: str) -> PlateOCRResult:
     provider = settings.get_vision_provider()
 

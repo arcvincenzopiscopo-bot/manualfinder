@@ -582,7 +582,9 @@ function ConfidenceBadge({ confidence }: { confidence: PlateOCRResult['confidenc
   )
 }
 
-function buildEmailDraft(card: SafetyCardType, ocr: PlateOCRResult | null): string {
+const _API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '/api') as string
+
+function buildEmailDraft(card: SafetyCardType, ocr: PlateOCRResult | null, toEmail?: string): string {
   const serial = ocr?.serial_number ? `\nMatricola / N° serie: ${ocr.serial_number}` : ''
   const year = ocr?.year ? `\nAnno di fabbricazione: ${ocr.year}` : ''
   const subject = encodeURIComponent(`Richiesta manuale d'uso e dichiarazione CE — ${card.brand} ${card.model}`)
@@ -603,11 +605,29 @@ La documentazione può essere inviata in formato PDF al presente indirizzo.
 
 In attesa di cortese riscontro, si porgono distinti saluti.`
   )
-  return `mailto:?subject=${subject}&body=${body}`
+  const to = toEmail ?? ''
+  return `mailto:${to}?subject=${subject}&body=${body}`
 }
 
 export function SafetyCard({ card, ocr, onNewSearch }: Props) {
   const isFallback = card.fonte_tipo === 'fallback_ai'
+  const [fetchingEmail, setFetchingEmail] = useState(false)
+
+  async function handleEmailRequest() {
+    setFetchingEmail(true)
+    try {
+      const res = await fetch(
+        `${_API_BASE}/machine-types/manufacturer-email?brand=${encodeURIComponent(card.brand)}&model=${encodeURIComponent(card.model)}`
+      )
+      const data = res.ok ? await res.json() : { email: null }
+      window.open(buildEmailDraft(card, ocr, data.email ?? undefined), '_blank')
+    } catch {
+      // Fallback silenzioso: apre mailto: senza destinatario
+      window.open(buildEmailDraft(card, ocr), '_blank')
+    } finally {
+      setFetchingEmail(false)
+    }
+  }
 
   return (
     <div className="safety-card-printable" style={{ padding: '16px' }}>
@@ -818,26 +838,26 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
       {/* Azioni */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
         <ExportButton card={card} />
-        <a
-          href={buildEmailDraft(card, ocr)}
+        <button
+          onClick={handleEmailRequest}
+          disabled={fetchingEmail}
           style={{
             display: 'block',
             width: '100%',
             padding: '14px',
-            background: '#fffbeb',
+            background: fetchingEmail ? '#fef9c3' : '#fffbeb',
             color: '#92400e',
             border: '2px solid #fde68a',
             borderRadius: 8,
             fontSize: 15,
             fontWeight: 700,
-            cursor: 'pointer',
+            cursor: fetchingEmail ? 'wait' : 'pointer',
             textAlign: 'center',
-            textDecoration: 'none',
             boxSizing: 'border-box',
           }}
         >
-          ✉ Richiedi documentazione al produttore
-        </a>
+          {fetchingEmail ? '⏳ Ricerca email produttore...' : '✉ Richiedi documentazione al produttore'}
+        </button>
         <button
           onClick={onNewSearch}
           style={{

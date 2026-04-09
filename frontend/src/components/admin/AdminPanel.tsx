@@ -115,7 +115,7 @@ const badge = (color: string, bg: string): React.CSSProperties => ({
 // ── Componente principale ─────────────────────────────────────────────────────
 
 export function AdminPanel() {
-  const [tab, setTab] = useState<'stats' | 'pending' | 'aliases' | 'flags'>('stats')
+  const [tab, setTab] = useState<'stats' | 'pending' | 'aliases' | 'flags' | 'scans' | 'log'>('stats')
 
   return (
     <div style={{ background: COLORS.bg, minHeight: '100vh', padding: '0 0 40px' }}>
@@ -152,6 +152,8 @@ export function AdminPanel() {
           { id: 'pending', label: '⏳ Proposte' },
           { id: 'aliases', label: '🔗 Alias' },
           { id: 'flags',   label: '⚖️ Flags normativi' },
+          { id: 'scans',   label: '📨 Ricerche' },
+          { id: 'log',     label: '🗂 Log scansioni' },
         ] as const).map(t => (
           <button
             key={t.id}
@@ -178,6 +180,8 @@ export function AdminPanel() {
         {tab === 'pending' && <TabPending />}
         {tab === 'aliases' && <TabAliases />}
         {tab === 'flags'   && <TabFlags />}
+        {tab === 'scans'   && <TabScans />}
+        {tab === 'log'     && <TabLog />}
       </div>
     </div>
   )
@@ -611,19 +615,23 @@ function TabAliases() {
 
 // ── Tab 4: Flags normativi ────────────────────────────────────────────────────
 
+type InailFile = { filename: string; title: string; exists: boolean }
+
 function TabFlags() {
-  const [types, setTypes]         = useState<MachineType[]>([])
-  const [selected, setSelected]   = useState<MachineType | null>(null)
-  const [pat, setPat]             = useState(true)
-  const [ver, setVer]             = useState(true)
-  const [hint, setHint]           = useState('')
-  const [saving, setSaving]       = useState(false)
-  const [msg, setMsg]             = useState<string | null>(null)
-  const [error, setError]         = useState<string | null>(null)
-  const [searchQ, setSearchQ]     = useState('')
+  const [types, setTypes]           = useState<MachineType[]>([])
+  const [selected, setSelected]     = useState<MachineType | null>(null)
+  const [pat, setPat]               = useState(true)
+  const [ver, setVer]               = useState(true)
+  const [hint, setHint]             = useState('')
+  const [saving, setSaving]         = useState(false)
+  const [msg, setMsg]               = useState<string | null>(null)
+  const [error, setError]           = useState<string | null>(null)
+  const [searchQ, setSearchQ]       = useState('')
+  const [inailFiles, setInailFiles] = useState<InailFile[]>([])
 
   useEffect(() => {
     apiFetch('').then(setTypes).catch(e => setError(e.message))
+    apiFetch('/inail-local-files').then(setInailFiles).catch(() => {})
   }, [])
 
   const handleSelect = (t: MachineType) => {
@@ -757,16 +765,23 @@ function TabFlags() {
               </div>
 
               <label style={{ ...labelStyle, marginBottom: 4 }}>
-                Hint ricerca INAIL (opzionale)
+                Quaderno INAIL locale associato (opzionale)
               </label>
-              <input
-                style={{ ...input, marginBottom: 4 }}
-                placeholder="es. PLE piattaforma lavoro elevabile"
+              <select
+                style={{ ...input, marginBottom: 4, background: '#fff' }}
                 value={hint}
                 onChange={e => setHint(e.target.value)}
-              />
+              >
+                <option value="">— Nessun file associato</option>
+                {inailFiles.map(f => (
+                  <option key={f.filename} value={f.filename} disabled={!f.exists}>
+                    {f.title}{!f.exists ? ' ⚠ file mancante' : ''}
+                  </option>
+                ))}
+              </select>
               <p style={{ fontSize: 11, color: COLORS.muted, margin: '0 0 14px' }}>
-                Parole chiave usate nelle query di ricerca INAIL per questo tipo.
+                Seleziona il quaderno INAIL da usare come fonte primaria per questo tipo di macchina.
+                I file sono letti dalla cartella <code>pdf manuali/</code> del backend.
               </p>
             </div>
 
@@ -787,6 +802,326 @@ function TabFlags() {
 }
 
 // ── Componenti di supporto ────────────────────────────────────────────────────
+
+// ── Tab 5: Ricerche (scan_log) ────────────────────────────────────────────────
+
+type ScanRow = {
+  id: number
+  ts: string
+  brand: string
+  model: string
+  machine_type: string | null
+  serial_number: string | null
+  machine_year: string | null
+  fonte_tipo: string | null
+  has_image: boolean
+}
+
+function buildScanEmailDraft(row: ScanRow, toEmail?: string): string {
+  const serial = row.serial_number ? `\nMatricola / N° serie: ${row.serial_number}` : ''
+  const year = row.machine_year ? `\nAnno di fabbricazione: ${row.machine_year}` : ''
+  const type = row.machine_type ? `\nTipo macchina: ${row.machine_type}` : ''
+  const subject = encodeURIComponent(`Richiesta manuale d'uso e dichiarazione CE — ${row.brand} ${row.model}`)
+  const body = encodeURIComponent(
+`Spett.le ${row.brand},
+
+in qualità di ispettore della sicurezza sul lavoro, nell'ambito di un accesso ispettivo ai sensi del D.Lgs. 81/2008, si richiede cortesemente la trasmissione della seguente documentazione relativa al macchinario:
+
+Marca: ${row.brand}
+Modello: ${row.model}${type}${serial}${year}
+
+Documentazione richiesta:
+- Manuale d'uso e manutenzione originale
+- Dichiarazione di conformità CE (ove applicabile)
+- Libretto di istruzione per l'operatore
+
+La documentazione può essere inviata in formato PDF al presente indirizzo.
+
+In attesa di cortese riscontro, si porgono distinti saluti.`
+  )
+  const to = toEmail ?? ''
+  return `mailto:${to}?subject=${subject}&body=${body}`
+}
+
+function TabScans() {
+  const [scans, setScans] = useState<ScanRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [loadingEmail, setLoadingEmail] = useState<number | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
+    apiFetch('/admin/scan-log?fonte=fallback_ai&limit=100')
+      .then(rows => setScans(rows))
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleSend(row: ScanRow) {
+    setLoadingEmail(row.id)
+    try {
+      const res = await apiFetch(
+        `/manufacturer-email?brand=${encodeURIComponent(row.brand)}&model=${encodeURIComponent(row.model ?? '')}`
+      )
+      const mailto = buildScanEmailDraft(row, res.email ?? undefined)
+      window.open(mailto, '_blank')
+    } catch {
+      window.open(buildScanEmailDraft(row), '_blank')
+    } finally {
+      setLoadingEmail(null)
+    }
+  }
+
+  async function handleDismiss(id: number) {
+    try {
+      await apiFetch(`/admin/scan-log/${id}/dismiss`, { method: 'POST' })
+      setScans(prev => prev.filter(s => s.id !== id))
+    } catch (e: any) {
+      alert(`Errore: ${e.message}`)
+    }
+  }
+
+  if (loading) return <LoadingSpinner />
+  if (error) return <ErrorBox message={error} onRetry={load} />
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <SectionTitle>Ricerche senza manuale trovato</SectionTitle>
+        <button onClick={load} style={btn('ghost', true)}>↺ Aggiorna</button>
+      </div>
+      <p style={{ fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
+        Macchine per cui non è stato trovato alcun manuale (fallback AI). Clicca <strong>✉ Invia ricerca</strong> per
+        aprire il client email con il messaggio precompilato e l'indirizzo del produttore scoperto automaticamente.
+        Clicca <strong>✗</strong> per nascondere la riga senza cancellarla.
+      </p>
+      {scans.length === 0
+        ? <EmptyState>Nessuna ricerca senza manuale. Ottimo!</EmptyState>
+        : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: '#f8fafc' }}>
+                  <Th>Foto</Th>
+                  <Th>Data</Th>
+                  <Th>Marca</Th>
+                  <Th>Modello</Th>
+                  <Th>Tipo macchina</Th>
+                  <Th>Matricola</Th>
+                  <Th>Anno</Th>
+                  <Th right>Azioni</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {scans.map(row => (
+                  <tr key={row.id} style={{ borderBottom: `1px solid #f1f5f9` }}>
+                    <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                      {row.has_image ? (
+                        <a
+                          href={`${BASE_URL}/machine-types/admin/scan-log/${row.id}/image`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Apri foto etichetta"
+                        >
+                          <img
+                            src={`${BASE_URL}/machine-types/admin/scan-log/${row.id}/image`}
+                            alt="etichetta"
+                            style={{ width: 48, height: 36, objectFit: 'cover', borderRadius: 4, border: `1px solid ${COLORS.border}`, display: 'block' }}
+                          />
+                        </a>
+                      ) : (
+                        <span style={{ color: COLORS.muted, fontSize: 16 }}>—</span>
+                      )}
+                    </td>
+                    <Td>{fmtDate(row.ts)}</Td>
+                    <Td><strong>{row.brand}</strong></Td>
+                    <Td>{row.model}</Td>
+                    <Td>{row.machine_type ?? <span style={{ color: COLORS.muted }}>—</span>}</Td>
+                    <Td>{row.serial_number ?? <span style={{ color: COLORS.muted }}>—</span>}</Td>
+                    <Td>{row.machine_year ?? <span style={{ color: COLORS.muted }}>—</span>}</Td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button
+                        onClick={() => handleSend(row)}
+                        disabled={loadingEmail === row.id}
+                        style={btn('primary', true)}
+                        title="Cerca email produttore e apri client email"
+                      >
+                        {loadingEmail === row.id ? '⏳' : '✉ Invia ricerca'}
+                      </button>
+                      {' '}
+                      {row.has_image && (
+                        <>
+                          <a
+                            href={`${BASE_URL}/machine-types/admin/scan-log/${row.id}/image`}
+                            download={`etichetta_${row.brand}_${row.model}_${row.id}.jpg`}
+                            style={{ ...btn('ghost', true), textDecoration: 'none', display: 'inline-block' }}
+                            title="Scarica foto etichetta"
+                          >
+                            📎
+                          </a>
+                          {' '}
+                        </>
+                      )}
+                      <button
+                        onClick={() => handleDismiss(row.id)}
+                        style={btn('ghost', true)}
+                        title="Nascondi questa riga (non cancella dal log)"
+                      >
+                        ✗
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+    </div>
+  )
+}
+
+// ── Tab 6: Log scansioni (tutte) ─────────────────────────────────────────────
+
+const FONTE_COLORS: Record<string, string> = {
+  'pdf':             '#166534',
+  'inail+produttore':'#1d4ed8',
+  'inail':           '#0369a1',
+  'inail+categoria': '#7c3aed',
+  'datasheet':       '#92400e',
+  'fallback_ai':     '#dc2626',
+}
+
+function FonteBadge({ fonte }: { fonte: string | null }) {
+  if (!fonte) return <span style={{ color: COLORS.muted }}>—</span>
+  const color = FONTE_COLORS[fonte] ?? COLORS.muted
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 10,
+      background: color + '18', color, border: `1px solid ${color}40`,
+    }}>
+      {fonte}
+    </span>
+  )
+}
+
+function TabLog() {
+  const [rows, setRows] = useState<ScanRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [fonteFilter, setFonteFilter] = useState<string>('')
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
+    const params = new URLSearchParams({ limit: '200' })
+    if (fonteFilter) params.set('fonte', fonteFilter)
+    apiFetch(`/admin/scan-log?${params}`)
+      .then(setRows)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [fonteFilter])
+
+  useEffect(() => { load() }, [load])
+
+  const imgUrl = (id: number) => `${BASE_URL}/machine-types/admin/scan-log/${id}/image`
+
+  return (
+    <div>
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+            zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'zoom-out',
+          }}
+        >
+          <img
+            src={lightboxUrl}
+            alt="etichetta"
+            style={{ maxWidth: '90vw', maxHeight: '90vh', borderRadius: 8, boxShadow: '0 8px 40px rgba(0,0,0,0.5)' }}
+            onClick={e => e.stopPropagation()}
+          />
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+        <SectionTitle>Log scansioni ({rows.length})</SectionTitle>
+        <select
+          value={fonteFilter}
+          onChange={e => setFonteFilter(e.target.value)}
+          style={{ ...input, width: 'auto', minWidth: 160 }}
+        >
+          <option value="">Tutte le fonti</option>
+          <option value="fallback_ai">Solo senza manuale (fallback AI)</option>
+          <option value="pdf">PDF produttore</option>
+          <option value="inail">Solo INAIL</option>
+          <option value="inail+produttore">INAIL + produttore</option>
+        </select>
+        <button onClick={load} style={btn('ghost', true)}>↺ Aggiorna</button>
+      </div>
+
+      {loading && <LoadingSpinner />}
+      {error && <ErrorBox message={error} onRetry={load} />}
+      {!loading && !error && rows.length === 0 && (
+        <EmptyState>Nessuna scansione nel log.</EmptyState>
+      )}
+      {!loading && rows.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: '#f8fafc', borderBottom: `2px solid ${COLORS.border}` }}>
+                <Th>Foto</Th>
+                <Th>Data</Th>
+                <Th>Marca</Th>
+                <Th>Modello</Th>
+                <Th>Tipo macchina</Th>
+                <Th>Matricola</Th>
+                <Th>Anno</Th>
+                <Th>Fonte</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => (
+                <tr key={row.id} style={{ borderBottom: `1px solid #f1f5f9` }}>
+                  <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                    {row.has_image ? (
+                      <img
+                        src={imgUrl(row.id)}
+                        alt="etichetta"
+                        onClick={() => setLightboxUrl(imgUrl(row.id))}
+                        style={{
+                          width: 52, height: 38, objectFit: 'cover', borderRadius: 4,
+                          border: `1px solid ${COLORS.border}`, cursor: 'zoom-in', display: 'block',
+                        }}
+                        title="Clicca per ingrandire"
+                      />
+                    ) : (
+                      <span style={{ color: COLORS.muted, fontSize: 14 }}>—</span>
+                    )}
+                  </td>
+                  <Td><span style={{ fontSize: 11 }}>{fmtDate(row.ts)}</span></Td>
+                  <Td><strong>{row.brand}</strong></Td>
+                  <Td>{row.model}</Td>
+                  <Td>{row.machine_type ?? <span style={{ color: COLORS.muted }}>—</span>}</Td>
+                  <Td><span style={{ fontFamily: 'monospace', fontSize: 11 }}>{row.serial_number ?? '—'}</span></Td>
+                  <Td>{row.machine_year ?? '—'}</Td>
+                  <Td><FonteBadge fonte={row.fonte_tipo} /></Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function KpiCard({ value, label, color }: { value: number; label: string; color: string }) {
   return (

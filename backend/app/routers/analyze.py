@@ -42,6 +42,21 @@ async def analyze_ocr(request: Request, body: PlateAnalysisRequest):
     Esegue preprocessing + OCR sulla targa e restituisce i dati estratti.
     Il frontend mostra un form modificabile prima di procedere.
     """
+    from fastapi import HTTPException as _HTTPException
+    # Validazione preliminare: rifiuta immagini che non sono targhe/etichette macchina
+    is_plate = await vision_service.validate_plate_image(body.image_base64)
+    if not is_plate:
+        raise _HTTPException(
+            status_code=422,
+            detail={
+                "code": "not_a_plate",
+                "message": (
+                    "L'immagine caricata non sembra essere una targa o etichetta di macchinario. "
+                    "Scatta una foto ravvicinata della targa identificativa del macchinario "
+                    "(quella con marca, modello e matricola)."
+                ),
+            },
+        )
     brightness = image_service.check_image_brightness(body.image_base64)
     # Scegli il preprocessing ottimale in base alla luminosità rilevata
     if brightness["is_too_dark"]:
@@ -143,6 +158,7 @@ async def _pipeline(request: FullAnalysisRequest):
                     lang=request.preferred_language,
                     machine_year=machine_year,
                     serial_number=serial_number,
+                    machine_type_id=machine_type_id,
                 ),
                 safety_gate_service.check_safety_alerts(brand, model),
                 return_exceptions=True,
@@ -551,7 +567,7 @@ async def _pipeline(request: FullAnalysisRequest):
                     producer_source_label = f"Manuale DB {brand} {model}"
                 else:
                     # Manuale DB ma per un modello diverso — avvisa che è di categoria simile
-                    producer_source_label = f"Manuale DB cat. simile ({machine_type or 'macchina'})"
+                    producer_source_label = f"Manuale DB categoria simile ({machine_type or 'macchina'})"
                 producer_match_type = "exact"
             else:
                 producer_match_type = pdf_service.classify_pdf_match(
@@ -671,7 +687,7 @@ async def _pipeline(request: FullAnalysisRequest):
 
     # ── Scan log: storico letture targa per batch e analytics ──────────────
     from app.services import scan_log_service
-    scan_log_service.log_scan(
+    _scan_id = scan_log_service.log_scan(
         brand=brand, model=model,
         machine_type=machine_type,
         machine_type_id=machine_type_id,
@@ -688,6 +704,9 @@ async def _pipeline(request: FullAnalysisRequest):
         safety_alerts_count=len(safety_alerts_data),
         session_id=getattr(request, "session_id", None),
     )
+    # Salva foto etichetta compressa (max 800px JPEG q=65, ~60-100KB, conservata 30gg)
+    if _scan_id and request.image_base64:
+        scan_log_service.store_scan_image(_scan_id, request.image_base64)
 
     yield _sse(SSEEvent(step="analysis", status="completed", progress=90, message="Scheda generata."))
 
