@@ -39,6 +39,7 @@ export async function analyzeFullSSE(
     machineType?: string
     machineTypeId?: number | null
     year?: string | null
+    serialNumber?: string | null
     qrUrls?: string[]
   }
 ): Promise<void> {
@@ -52,6 +53,7 @@ export async function analyzeFullSSE(
       machine_type: options.machineType || null,
       machine_type_id: options.machineTypeId ?? null,
       year: options.year || null,
+      serial_number: options.serialNumber || null,
       preferred_language: options.preferredLanguage ?? 'it',
       qr_urls: options.qrUrls ?? [],
       qr_url: options.qrUrls?.[0] ?? null,

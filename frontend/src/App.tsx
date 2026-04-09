@@ -110,7 +110,7 @@ export default function App() {
       setOcrResult({ ...ocrResult, brand, model, serial_number: serial || null, year: year || null, machine_type: machineType || null, machine_type_id: machineTypeId })
     }
     setAppState('running')
-    run(imageBase64, brand, model, machineType, ocrResult?.qr_urls ?? [], machineTypeId)
+    run(imageBase64, brand, model, machineType, ocrResult?.qr_urls ?? [], machineTypeId, serial || null, year || null)
   }
 
   const handleNewSearch = () => {
