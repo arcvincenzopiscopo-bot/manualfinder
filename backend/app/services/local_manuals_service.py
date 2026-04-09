@@ -12,8 +12,13 @@ from typing import Optional, Dict, List
 from pathlib import Path
 
 # Percorso della cartella PDF manuali.
-_BACKEND_ROOT = Path(__file__).parent.parent.parent  # backend/
-PDF_MANUALS_DIR = _BACKEND_ROOT / "pdf manuali"
+# Cerca prima nella root di progetto (dove l'utente aggiunge i file),
+# poi fallback alla cartella backend/ per compatibilità.
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent  # manualfinder/
+_BACKEND_ROOT  = Path(__file__).parent.parent.parent         # backend/
+_root_dir    = _PROJECT_ROOT / "pdf manuali"
+_backend_dir = _BACKEND_ROOT / "pdf manuali"
+PDF_MANUALS_DIR = _root_dir if _root_dir.exists() else _backend_dir
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Mappa canonica: chiave → nome file PDF
@@ -40,6 +45,8 @@ LOCAL_MANUALS_MAP: Dict[str, str] = {
     "decespugliatore":                      "Scheda 18 - DECESPUGLIATORE.pdf",
     "troncatrice":                          "Scheda 19 - TRONCATRICE PORTATILE A DISCO.pdf",
     "motosega":                             "Scheda 20 - MOTOSEGA.pdf",
+    "trattore agricolo":                    "Scheda 21 - TRATTORI AGRICOLI.pdf",
+    "macchina movimento terra":             "Scheda 22 - MOVIMENTO TERRA.pdf",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -266,6 +273,29 @@ MACHINE_ALIASES: Dict[str, str] = {
     "motosega":                             "motosega",
     "chainsaw":                             "motosega",
     "chain saw":                            "motosega",
+
+    # ── TRATTORI AGRICOLI ─────────────────────────────────────────────────────
+    "trattore agricolo":                    "trattore agricolo",
+    "trattore":                             "trattore agricolo",
+    "trattrice":                            "trattore agricolo",
+    "trattore a ruote":                     "trattore agricolo",
+    "trattore a cingoli":                   "trattore agricolo",
+    "agricultural tractor":                 "trattore agricolo",
+    "tractor":                              "trattore agricolo",
+
+    # ── MACCHINE MOVIMENTO TERRA ──────────────────────────────────────────────
+    "macchina movimento terra":             "macchina movimento terra",
+    "movimento terra":                      "macchina movimento terra",
+    "dumper":                               "macchina movimento terra",
+    "apripista":                            "macchina movimento terra",
+    "bulldozer":                            "macchina movimento terra",
+    "scraper":                              "macchina movimento terra",
+    "livellatrice":                         "macchina movimento terra",
+    "grader":                               "macchina movimento terra",
+    "terna":                                "macchina movimento terra",
+    "escavatore a filo":                    "macchina movimento terra",
+    "earth moving machine":                 "macchina movimento terra",
+    "earthmover":                           "macchina movimento terra",
 }
 
 
