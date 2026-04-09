@@ -1071,31 +1071,80 @@ async def admin_populate_hazard(provider: str) -> dict:
 
 # ── Quaderno INAIL locale ─────────────────────────────────────────────────────
 
+async def _ai_classify_inail_category(machine_name: str, canonical_categories: list[str], provider: str) -> str | None:
+    """
+    Chiama l'AI con un prompt pulito (senza SYSTEM_PROMPT safety card) per identificare
+    quale categoria INAIL canonica corrisponde al tipo di macchina dato.
+    Ritorna la stringa categoria o None.
+    """
+    cats_list = "\n".join(f"  - {c}" for c in canonical_categories)
+    prompt = (
+        f"Sei un esperto di macchine da cantiere e sicurezza sul lavoro italiana (D.Lgs 81/08).\n\n"
+        f"Tipo di macchina: \"{machine_name}\"\n\n"
+        f"Categorie INAIL disponibili:\n{cats_list}\n\n"
+        f"Indica quale categoria INAIL è più pertinente per questo tipo di macchina.\n"
+        f"Considera sinonimi, varianti di nome e macchine della stessa famiglia.\n"
+        f"Se nessuna categoria è pertinente, rispondi null.\n\n"
+        f'Rispondi SOLO con JSON valido (nessun testo aggiuntivo):\n'
+        f'{{"categoria": "nome-categoria-esatta"}}\n'
+        f"oppure: {{\"categoria\": null}}\n\n"
+        f"Il valore di 'categoria' deve essere identico a una delle voci elencate sopra."
+    )
+    try:
+        if provider == "anthropic":
+            import anthropic
+            from app.config import settings as _s
+            client = anthropic.AsyncAnthropic(api_key=_s.anthropic_api_key)
+            response = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=200,
+                temperature=0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text
+        elif provider == "gemini":
+            from google import genai
+            from google.genai import types
+            from app.config import settings as _s
+            client = genai.Client(api_key=_s.gemini_api_key)
+            response = await client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=200,
+                    temperature=0.0,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            raw = response.text
+        else:
+            return None
+
+        from app.services.analysis_service import _parse_json_response
+        parsed = _parse_json_response(raw)
+        return parsed.get("categoria") if isinstance(parsed, dict) else None
+    except Exception as ex:
+        logger.warning("_ai_classify_inail_category: errore per '%s': %s", machine_name, ex)
+        return None
+
+
 async def admin_populate_inail_hint(provider: str) -> dict:
     """
-    Usa l'AI per associare automaticamente il quaderno INAIL locale (inail_search_hint)
-    ai machine_types che hanno il campo NULL.
+    Associa automaticamente il quaderno INAIL locale (inail_search_hint) ai machine_types
+    che hanno il campo NULL.
+
+    Strategia in due passi:
+    1. Lookup diretto via find_local_manual() (alias table — istantaneo)
+    2. Se non trovato: AI identifica la categoria canonica INAIL, poi lookup su quella
+
     Ritorna {populated: N, skipped: M, errors: K}.
     """
     if not settings.database_url:
         return {"error": "no_db"}
 
-    # Carica i file disponibili su disco
-    from app.services.local_manuals_service import PDF_MANUALS_DIR, LOCAL_MANUALS_MAP
-    available_files: list[dict] = []
-    seen_files: set = set()
-    for filename in LOCAL_MANUALS_MAP.values():
-        if filename not in seen_files:
-            seen_files.add(filename)
-            available_files.append({"filename": filename, "title": filename.replace(".pdf", "").strip()})
-    if PDF_MANUALS_DIR.exists():
-        for f in sorted(PDF_MANUALS_DIR.glob("*.pdf")):
-            if f.name not in seen_files:
-                seen_files.add(f.name)
-                available_files.append({"filename": f.name, "title": f.name.replace(".pdf", "").strip()})
+    from app.services.local_manuals_service import find_local_manual, LOCAL_MANUALS_MAP
 
-    if not available_files:
-        return {"error": "no_files", "message": "Nessun quaderno INAIL trovato nella cartella 'pdf manuali'."}
+    canonical_categories = list(LOCAL_MANUALS_MAP.keys())
 
     # Recupera machine_types senza inail_search_hint
     try:
@@ -1113,25 +1162,25 @@ async def admin_populate_inail_hint(provider: str) -> dict:
     skipped = 0
     errors = 0
 
-    from app.services.analysis_service import _call_ai_with_text
-    valid_filenames = {f["filename"] for f in available_files}
-    files_list = "\n".join(f'  - "{f["filename"]}"' for f in available_files)
-
     for (mt_id, name) in rows:
-        prompt = (
-            f"Sei un esperto di sicurezza sul lavoro italiano con conoscenza delle schede INAIL.\n\n"
-            f"Categoria macchina: '{name}'\n\n"
-            f"Quaderni INAIL disponibili:\n{files_list}\n\n"
-            f"Indica il quaderno più pertinente per questa categoria. Se nessuno è adatto, rispondi null.\n\n"
-            f"Rispondi SOLO con questo JSON (senza testo aggiuntivo):\n"
-            f'{{"filename": "nome-file-esatto.pdf"}}\n'
-            f"oppure: {{\"filename\": null}}\n\n"
-            f"Il valore di 'filename' deve essere identico a uno dei nomi elencati sopra."
-        )
         try:
-            result = await _call_ai_with_text("", prompt, provider, is_fallback=True)
-            filename = result.get("filename") if isinstance(result, dict) else None
-            if filename and filename in valid_filenames:
+            # Passo 1: lookup diretto (alias table)
+            manual = find_local_manual(name)
+
+            # Passo 2: AI classifica → lookup sulla categoria suggerita
+            if not manual:
+                ai_category = await _ai_classify_inail_category(name, canonical_categories, provider)
+                if ai_category:
+                    manual = find_local_manual(ai_category)
+                    if not manual:
+                        # Prova anche la corrispondenza case-insensitive nella mappa
+                        ai_cat_lower = ai_category.lower().strip()
+                        matched_key = next((k for k in LOCAL_MANUALS_MAP if k.lower() == ai_cat_lower), None)
+                        if matched_key:
+                            manual = find_local_manual(matched_key)
+
+            if manual:
+                filename = manual["filename"]
                 conn = _get_conn()
                 with conn.cursor() as cur:
                     cur.execute(
@@ -1141,8 +1190,10 @@ async def admin_populate_inail_hint(provider: str) -> dict:
                 conn.commit()
                 conn.close()
                 populated += 1
+                logger.info("populate_inail_hint: '%s' → %s", name, filename)
             else:
                 skipped += 1
+                logger.debug("populate_inail_hint: '%s' → nessuna corrispondenza", name)
         except Exception as ex:
             logger.warning("populate_inail_hint: errore per '%s': %s", name, ex)
             errors += 1
