@@ -855,7 +855,17 @@ function TabFlags() {
                 </label>
               </div>
 
-              <label style={{ ...labelStyle, marginBottom: 4 }}>Quaderno INAIL locale associato (opzionale)</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <label style={{ ...labelStyle, marginBottom: 0 }}>Quaderno INAIL locale associato (opzionale)</label>
+                <button
+                  type="button"
+                  title="Ricarica lista file dalla cartella"
+                  onClick={() => apiFetch('/inail-local-files').then(setInailFiles).catch(() => {})}
+                  style={{ background: 'none', border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer', padding: '2px 6px', fontSize: 13, color: '#64748b' }}
+                >
+                  🔄
+                </button>
+              </div>
               <select style={{ ...input, marginBottom: 12, background: '#fff' }} value={hint} onChange={e => setHint(e.target.value)}>
                 <option value="">— Nessun file associato</option>
                 {inailFiles.map(f => (
