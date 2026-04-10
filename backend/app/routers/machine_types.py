@@ -201,6 +201,33 @@ async def admin_populate_inail_hint():
     return await machine_type_service.admin_populate_inail_hint(provider)
 
 
+# ── Admin: proposte da disco ──────────────────────────────────────────────────
+
+@router.post("/admin/propose-from-disk")
+async def admin_propose_from_disk():
+    """Scansiona la cartella pdf manuali e crea proposte per i file senza categoria associata."""
+    return await machine_type_service.admin_propose_from_disk()
+
+
+@router.get("/admin/disk-proposals")
+def admin_get_disk_proposals():
+    """Ritorna le proposte pending generate dalla scansione disco."""
+    return machine_type_service.admin_get_pending_proposals()
+
+
+@router.post("/admin/disk-proposals/{proposal_id}/resolve")
+def admin_resolve_disk_proposal(proposal_id: int, body: dict):
+    """
+    Risolve una proposta.
+    body: { action: 'approve'|'reject', final_name?: string }
+    """
+    return machine_type_service.admin_resolve_proposal(
+        proposal_id,
+        body.get("action", ""),
+        body.get("final_name"),
+    )
+
+
 # ── Admin: scan log (storico analisi) ────────────────────────────────────────
 
 @router.get("/admin/scan-log")
@@ -241,32 +268,36 @@ def admin_scan_image(scan_id: int):
 def list_inail_local_files():
     """
     Restituisce la lista dei PDF INAIL presenti nella cartella locale.
-    Usato dal pannello admin (tab Flags) per il dropdown di associazione file.
+    Include sia i file in LOCAL_MANUALS_MAP sia quelli scoperti dinamicamente su disco.
     Risposta: [{ filename, title, exists }]
     """
-    from app.services.local_manuals_service import PDF_MANUALS_DIR, LOCAL_MANUALS_MAP
+    from app.services.local_manuals_service import (
+        PDF_MANUALS_DIR, LOCAL_MANUALS_MAP, _get_dynamic_files
+    )
     result = []
-    seen = set()
-    # Prima elenca i file noti dalla mappa (anche se non presenti su disco)
-    for canonical, filename in LOCAL_MANUALS_MAP.items():
+    seen: set = set()
+
+    # File noti dalla mappa statica (mostrati anche se mancanti su disco, con flag exists=False)
+    for filename in LOCAL_MANUALS_MAP.values():
         if filename in seen:
             continue
         seen.add(filename)
-        filepath = PDF_MANUALS_DIR / filename
         result.append({
             "filename": filename,
             "title": filename.replace(".pdf", "").strip(),
-            "exists": filepath.exists(),
+            "exists": (PDF_MANUALS_DIR / filename).exists(),
         })
-    # Poi aggiunge eventuali file extra trovati su disco non nella mappa
-    if PDF_MANUALS_DIR.exists():
-        for f in sorted(PDF_MANUALS_DIR.glob("*.pdf")):
-            if f.name not in seen:
-                result.append({
-                    "filename": f.name,
-                    "title": f.name.replace(".pdf", "").strip(),
-                    "exists": True,
-                })
+
+    # File extra scoperti dinamicamente su disco
+    for entry in _get_dynamic_files():
+        if entry["filename"] not in seen:
+            seen.add(entry["filename"])
+            result.append({
+                "filename": entry["filename"],
+                "title": entry["title"],
+                "exists": True,
+            })
+
     result.sort(key=lambda x: x["filename"])
     return result
 

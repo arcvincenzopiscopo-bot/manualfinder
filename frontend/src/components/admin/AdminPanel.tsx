@@ -115,7 +115,7 @@ const badge = (color: string, bg: string): React.CSSProperties => ({
 // ── Componente principale ─────────────────────────────────────────────────────
 
 export function AdminPanel() {
-  const [tab, setTab] = useState<'stats' | 'pending' | 'aliases' | 'flags' | 'scans' | 'log'>('stats')
+  const [tab, setTab] = useState<'stats' | 'pending' | 'diskproposals' | 'aliases' | 'flags' | 'scans' | 'log'>('stats')
 
   return (
     <div style={{ background: COLORS.bg, minHeight: '100vh', padding: '0 0 40px' }}>
@@ -149,8 +149,9 @@ export function AdminPanel() {
       }}>
         {([
           { id: 'stats',   label: '📊 Statistiche' },
-          { id: 'pending', label: '⏳ Proposte' },
-          { id: 'aliases', label: '🔗 Alias' },
+          { id: 'pending',       label: '⏳ Proposte' },
+          { id: 'diskproposals', label: '💾 Proposte disco' },
+          { id: 'aliases',       label: '🔗 Alias' },
           { id: 'flags',   label: '⚖️ Flags normativi' },
           { id: 'scans',   label: '📨 Ricerche' },
           { id: 'log',     label: '🗂 Log scansioni' },
@@ -177,8 +178,9 @@ export function AdminPanel() {
 
       <div style={{ padding: '16px' }}>
         {tab === 'stats'   && <TabStats />}
-        {tab === 'pending' && <TabPending />}
-        {tab === 'aliases' && <TabAliases />}
+        {tab === 'pending'       && <TabPending />}
+        {tab === 'diskproposals' && <TabDiskProposals />}
+        {tab === 'aliases'       && <TabAliases />}
         {tab === 'flags'   && <TabFlags />}
         {tab === 'scans'   && <TabScans />}
         {tab === 'log'     && <TabLog />}
@@ -343,6 +345,141 @@ function TabPending() {
     </div>
   )
 }
+
+// ── Tab: Proposte da disco ────────────────────────────────────────────────────
+
+type DiskProposal = { id: number; proposed_name: string; inail_hint: string | null; created_at: string }
+
+function TabDiskProposals() {
+  const [proposals, setProposals] = useState<DiskProposal[]>([])
+  const [loading, setLoading]     = useState(true)
+  const [scanning, setScanning]   = useState(false)
+  const [working, setWorking]     = useState<number | null>(null)
+  const [editNames, setEditNames] = useState<Record<number, string>>({})
+  const [msg, setMsg]             = useState<string | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    apiFetch('/admin/disk-proposals')
+      .then(setProposals)
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const scan = async () => {
+    setScanning(true)
+    setMsg(null)
+    try {
+      const res = await apiFetch('/admin/propose-from-disk', { method: 'POST' })
+      setMsg(`✅ ${res.proposed} nuove proposte create, ${res.already_exists ?? 0} già presenti.`)
+      load()
+    } catch (e: any) {
+      setMsg(`❌ ${e.message}`)
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  const resolve = async (id: number, action: 'approve' | 'reject') => {
+    setWorking(id)
+    try {
+      const final_name = editNames[id]?.trim() || undefined
+      await apiFetch(`/admin/disk-proposals/${id}/resolve`, {
+        method: 'POST',
+        body: JSON.stringify({ action, final_name }),
+      })
+      load()
+    } catch (e: any) {
+      alert(`Errore: ${e.message}`)
+    } finally {
+      setWorking(null)
+    }
+  }
+
+  return (
+    <div>
+      {/* Azioni globali */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+        <button
+          onClick={scan}
+          disabled={scanning}
+          style={{ background: COLORS.primary, color: '#fff', border: 'none', borderRadius: 6,
+            padding: '8px 16px', fontWeight: 700, cursor: scanning ? 'default' : 'pointer', fontSize: 13 }}
+        >
+          {scanning ? '⏳ Scansiono...' : '🔍 Scansiona nuovi file su disco'}
+        </button>
+        <button onClick={load} style={{ background: 'none', border: `1px solid ${COLORS.border}`,
+          borderRadius: 6, padding: '7px 12px', cursor: 'pointer', fontSize: 13, color: COLORS.muted }}>
+          🔄 Ricarica
+        </button>
+        {msg && <span style={{ fontSize: 13, color: msg.startsWith('✅') ? '#16a34a' : '#dc2626' }}>{msg}</span>}
+      </div>
+
+      {loading ? <LoadingSpinner /> : proposals.length === 0 ? (
+        <div style={card}>
+          <EmptyState>
+            Nessuna proposta in attesa.<br />
+            <span style={{ fontSize: 12, color: COLORS.muted }}>
+              Aggiungi file PDF nella cartella <code>pdf manuali</code> e clicca "Scansiona".
+            </span>
+          </EmptyState>
+        </div>
+      ) : (
+        <div>
+          <p style={{ fontSize: 13, color: COLORS.muted, marginBottom: 12 }}>
+            {proposals.length} proposta{proposals.length !== 1 ? 'e' : ''} da file rilevati su disco.
+            Approva per creare una nuova categoria, rifiuta per ignorare il file.
+          </p>
+          {proposals.map(p => (
+            <div key={p.id} style={{ ...card, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>
+                    {p.proposed_name}
+                  </div>
+                  {p.inail_hint && (
+                    <div style={{ fontSize: 12, color: COLORS.muted }}>
+                      📄 {p.inail_hint}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2 }}>
+                    Rilevato il {fmtDate(p.created_at)}
+                  </div>
+                </div>
+                {/* Nome editabile */}
+                <input
+                  value={editNames[p.id] ?? p.proposed_name}
+                  onChange={e => setEditNames(n => ({ ...n, [p.id]: e.target.value }))}
+                  placeholder="Nome categoria finale..."
+                  style={{ ...input, width: 220, marginBottom: 0 }}
+                />
+                <button
+                  disabled={working === p.id}
+                  onClick={() => resolve(p.id, 'approve')}
+                  style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6,
+                    padding: '7px 14px', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
+                >
+                  ✅ Approva
+                </button>
+                <button
+                  disabled={working === p.id}
+                  onClick={() => resolve(p.id, 'reject')}
+                  style={{ background: 'none', border: `1px solid #dc2626`, color: '#dc2626',
+                    borderRadius: 6, padding: '7px 14px', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}
+                >
+                  ✗ Rifiuta
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 
 function PendingCard({ pending, types, working, onAlias, onPromote, onReject }: {
   pending: Pending
@@ -682,7 +819,7 @@ function TabFlags() {
           vita_utile_anni: vitaUtile ? parseInt(vitaUtile, 10) : null,
         }),
       })
-      const updated = { ...selected, requires_patentino: pat, requires_verifiche: ver, vita_utile_anni: vitaUtile ? parseInt(vitaUtile, 10) : null }
+      const updated = { ...selected, requires_patentino: pat, requires_verifiche: ver, vita_utile_anni: vitaUtile ? parseInt(vitaUtile, 10) : null, inail_search_hint: hint || null }
       setTypes(prev => prev.map(t => t.id === selected.id ? updated as MachineType : t))
       setSelected(updated as MachineType)
       setMsg('✅ Salvato.')

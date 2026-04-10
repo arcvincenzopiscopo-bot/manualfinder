@@ -176,6 +176,7 @@ def _ensure_tables() -> None:
         # Migration: nuove colonne e tabelle
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE machine_types ADD COLUMN IF NOT EXISTS vita_utile_anni INT DEFAULT NULL")
+            cur.execute("ALTER TABLE pending_machine_types ADD COLUMN IF NOT EXISTS inail_hint TEXT DEFAULT NULL")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS machine_type_hazard (
                     id                  SERIAL PRIMARY KEY,
@@ -1199,3 +1200,150 @@ async def admin_populate_inail_hint(provider: str) -> dict:
             errors += 1
 
     return {"populated": populated, "skipped": skipped, "errors": errors}
+
+
+# ── Proposte da disco ─────────────────────────────────────────────────────────
+
+async def admin_propose_from_disk() -> dict:
+    """
+    Scansiona 'pdf manuali' alla ricerca di file non ancora associati ad alcun
+    machine_type e non già in pending_machine_types.
+    Crea una proposta per ognuno (resolution='pending').
+    Ritorna {proposed: N, already_exists: M}.
+    """
+    if not settings.database_url:
+        return {"error": "no_db"}
+
+    from app.services.local_manuals_service import _get_dynamic_files
+
+    dynamic = _get_dynamic_files()
+    if not dynamic:
+        return {"proposed": 0, "already_exists": 0, "message": "Nessun file nuovo trovato su disco."}
+
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT inail_search_hint FROM machine_types WHERE inail_search_hint IS NOT NULL")
+            associated = {row[0] for row in cur.fetchall()}
+            cur.execute("SELECT inail_hint FROM pending_machine_types WHERE inail_hint IS NOT NULL AND resolution = 'pending'")
+            pending_hints = {row[0] for row in cur.fetchall() if row[0]}
+        conn.close()
+    except Exception as e:
+        return {"error": str(e)}
+
+    proposed = 0
+    already_exists = 0
+
+    for entry in dynamic:
+        fname = entry["filename"]
+        if fname in associated or fname in pending_hints:
+            already_exists += 1
+            continue
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO pending_machine_types (proposed_name, proposed_by, inail_hint, resolution) "
+                    "VALUES (%s, %s, %s, 'pending')",
+                    (entry["canonical"], "disk_scan", fname),
+                )
+            conn.commit()
+            conn.close()
+            proposed += 1
+            logger.info("propose_from_disk: nuova proposta '%s' ← %s", entry["canonical"], fname)
+        except Exception as ex:
+            logger.warning("propose_from_disk: errore per '%s': %s", fname, ex)
+
+    return {"proposed": proposed, "already_exists": already_exists}
+
+
+def admin_get_pending_proposals() -> list:
+    """Ritorna tutte le proposte pending."""
+    if not settings.database_url:
+        return []
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, proposed_name, inail_hint, created_at "
+                "FROM pending_machine_types WHERE resolution = 'pending' ORDER BY created_at DESC"
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return [
+            {"id": r[0], "proposed_name": r[1], "inail_hint": r[2], "created_at": str(r[3])}
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("get_pending_proposals: %s", e)
+        return []
+
+
+def admin_resolve_proposal(proposal_id: int, action: str, final_name: str | None = None) -> dict:
+    """
+    Risolve una proposta pending.
+    action='approve': crea machine_type con is_verified=True e inail_search_hint
+    action='reject':  segna resolution='rejected'
+    """
+    if not settings.database_url:
+        return {"error": "no_db"}
+    if action not in ("approve", "reject"):
+        return {"error": "action must be 'approve' or 'reject'"}
+
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT proposed_name, inail_hint FROM pending_machine_types WHERE id = %s AND resolution = 'pending'",
+                (proposal_id,),
+            )
+            row = cur.fetchone()
+        conn.close()
+    except Exception as e:
+        return {"error": str(e)}
+
+    if not row:
+        return {"error": "proposta non trovata o già risolta"}
+
+    proposed_name, inail_hint = row
+    name = (final_name or proposed_name).strip()
+    normalized = name.lower().strip()
+
+    if action == "reject":
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE pending_machine_types SET resolution='rejected', resolved_at=NOW() WHERE id=%s",
+                    (proposal_id,),
+                )
+            conn.commit()
+            conn.close()
+            return {"ok": True, "action": "rejected"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # approve → crea machine_type verificato
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO machine_types (name, normalized_name, inail_search_hint, "
+                "requires_patentino, requires_verifiche, is_verified) "
+                "VALUES (%s, %s, %s, true, true, true) "
+                "ON CONFLICT (normalized_name) DO UPDATE SET inail_search_hint = EXCLUDED.inail_search_hint "
+                "RETURNING id",
+                (name, normalized, inail_hint),
+            )
+            mt_id = cur.fetchone()[0]
+            cur.execute(
+                "UPDATE pending_machine_types SET resolution='approved', resolved_at=NOW() WHERE id=%s",
+                (proposal_id,),
+            )
+        conn.commit()
+        conn.close()
+        _rebuild_alias_map()
+        logger.info("resolve_proposal: approvata '%s' (id=%s), hint=%s", name, mt_id, inail_hint)
+        return {"ok": True, "action": "approved", "machine_type_id": mt_id, "name": name}
+    except Exception as e:
+        return {"error": str(e)}

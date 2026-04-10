@@ -3,13 +3,16 @@ Servizio per la gestione dei manuali locali INAIL.
 Mappa i tipi di macchina ai PDF locali nella cartella 'pdf manuali'.
 
 Design:
-  - LOCAL_MANUALS_MAP  : chiave canonica → nome file PDF
+  - LOCAL_MANUALS_MAP  : chiave canonica → nome file PDF (file noti, con alias espliciti)
   - MACHINE_ALIASES    : qualsiasi variante (it/en/brand-specific) → chiave canonica
-  - find_local_manual(): normalizza → cerca in MACHINE_ALIASES → lookup canonico
-    NESSUN partial-match fuzzy: ogni associazione è esplicita e verificata.
+  - find_local_manual(): normalizza → alias → mappa → discovery dinamica da disco
+  - Discovery dinamica: qualsiasi PDF aggiunto alla cartella viene rilevato
+    automaticamente estraendo il nome canonico dal filename
+    (es. "Scheda 23 - POMPE IDRAULICHE.pdf" → canonical "pompe idrauliche").
 """
 from typing import Optional, Dict, List
 from pathlib import Path
+import re as _re
 
 # Percorso della cartella PDF manuali.
 # Cerca prima nella root di progetto (dove l'utente aggiunge i file),
@@ -304,6 +307,44 @@ def _normalize_machine_type(machine_type: str) -> str:
     return machine_type.lower().strip()
 
 
+def _extract_canonical_from_filename(filename: str) -> str:
+    """
+    Estrae il nome canonico dal filename del quaderno INAIL.
+    Es. "Scheda 21 - TRATTORI AGRICOLI.pdf"  → "trattori agricoli"
+        "Scheda 22 - MOVIMENTO TERRA.pdf"    → "movimento terra"
+        "Qualcosa - POMPE IDRAULICHE.pdf"    → "pompe idrauliche"
+        "POMPE IDRAULICHE.pdf"               → "pompe idrauliche"
+    """
+    stem = Path(filename).stem
+    # Rimuove prefisso tipo "Scheda N -" o "N -" o "Scheda N–"
+    name = _re.sub(r'^(?:scheda\s+)?\d+\s*[-–]\s*', '', stem, flags=_re.IGNORECASE)
+    return name.lower().strip()
+
+
+def _get_dynamic_files() -> List[Dict[str, str]]:
+    """
+    Scansiona PDF_MANUALS_DIR e ritorna i file NON già presenti in LOCAL_MANUALS_MAP,
+    con il canonical estratto automaticamente dal filename.
+    Chiamato a runtime: rileva i nuovi file senza riavvio né modifica al codice.
+    """
+    if not PDF_MANUALS_DIR.exists():
+        return []
+    known_files = set(LOCAL_MANUALS_MAP.values())
+    result = []
+    for f in sorted(PDF_MANUALS_DIR.glob("*.pdf")):
+        if f.name in known_files:
+            continue
+        canonical = _extract_canonical_from_filename(f.name)
+        if canonical:
+            result.append({
+                "filename": f.name,
+                "canonical": canonical,
+                "filepath": str(f),
+                "title": f.stem.strip(),
+            })
+    return result
+
+
 def find_local_manual_by_filename(filename: str) -> Optional[Dict[str, str]]:
     """
     Cerca un manuale locale direttamente per nome file.
@@ -326,15 +367,19 @@ def find_local_manual(machine_type: str, db_filename: Optional[str] = None) -> O
     """
     Cerca il manuale INAIL locale per il tipo di macchina.
 
-    Algoritmo (senza fuzzy-match):
+    Algoritmo:
+    0. Se admin ha associato un file esplicito → lo usa direttamente
     1. Normalizza → lowercase strip
     2. Cerca in MACHINE_ALIASES → ottieni la chiave canonica
-    3. Cerca la chiave canonica in LOCAL_MANUALS_MAP → ottieni il file
+    3. Cerca se mt è già chiave in LOCAL_MANUALS_MAP
+    4. Substring match su alias lunghi (>= 12 chars)
+    5. Discovery dinamica: cerca nei PDF su disco non presenti in LOCAL_MANUALS_MAP,
+       usando il canonical estratto dal filename
     """
     if not machine_type:
         return None
 
-    # Associazione esplicita dell'admin ha priorità assoluta
+    # Passo 0: associazione esplicita dell'admin — priorità assoluta
     if db_filename:
         result = find_local_manual_by_filename(db_filename)
         if result:
@@ -342,16 +387,14 @@ def find_local_manual(machine_type: str, db_filename: Optional[str] = None) -> O
 
     mt = _normalize_machine_type(machine_type)
 
-    # 1) Cerca alias esatto
+    # Passo 1: alias esatto
     canonical = MACHINE_ALIASES.get(mt)
 
-    # 2) Nessun alias esatto: cerca se mt è già una chiave canonica
+    # Passo 2: mt è già una chiave canonica
     if not canonical and mt in LOCAL_MANUALS_MAP:
         canonical = mt
 
-    # 3) Nessun match esatto: cerca se mt contiene uno dei termini alias
-    #    (es. "carrello elevatore a contrappeso laterale" non è in alias ma contiene "carrello elevatore")
-    #    Solo se il match è su un alias abbastanza specifico (>= 12 caratteri) per evitare falsi positivi
+    # Passo 3: mt contiene un alias lungo (>= 12 chars)
     if not canonical:
         best_match_len = 0
         for alias, canon in MACHINE_ALIASES.items():
@@ -360,35 +403,37 @@ def find_local_manual(machine_type: str, db_filename: Optional[str] = None) -> O
                     canonical = canon
                     best_match_len = len(alias)
 
-    if not canonical:
-        return None
+    # Passo 4: lookup in LOCAL_MANUALS_MAP via canonical trovato
+    if canonical:
+        filename = LOCAL_MANUALS_MAP.get(canonical)
+        if filename:
+            filepath = PDF_MANUALS_DIR / filename
+            if filepath.exists():
+                return {
+                    "filename": filename,
+                    "filepath": str(filepath),
+                    "title": filename.replace(".pdf", "").strip(),
+                    "source": "local_inail",
+                }
 
-    filename = LOCAL_MANUALS_MAP.get(canonical)
-    if not filename:
-        return None
-
-    filepath = PDF_MANUALS_DIR / filename
-    if not filepath.exists():
-        return None
-
-    return {
-        "filename": filename,
-        "filepath": str(filepath),
-        "title": filename.replace(".pdf", "").strip(),
-        "source": "local_inail",
-    }
+    # Passo 5: file extra su disco non in LOCAL_MANUALS_MAP — solo se già validati
+    # (raggiungibili solo tramite db_filename al passo 0, dopo che l'admin ha approvato la proposta)
+    return None
 
 
 def list_local_manuals() -> List[Dict[str, str]]:
-    """Restituisce la lista di tutti i manuali locali disponibili."""
+    """
+    Restituisce la lista di tutti i manuali locali disponibili:
+    quelli in LOCAL_MANUALS_MAP + quelli scoperti dinamicamente su disco.
+    """
     manuals = []
     seen_files: set = set()
 
+    # File noti dalla mappa statica
     for filename in LOCAL_MANUALS_MAP.values():
         if filename in seen_files:
             continue
         seen_files.add(filename)
-
         filepath = PDF_MANUALS_DIR / filename
         if filepath.exists():
             manuals.append({
@@ -397,6 +442,15 @@ def list_local_manuals() -> List[Dict[str, str]]:
                 "title": filename.replace(".pdf", "").strip(),
                 "source": "local_inail",
             })
+
+    # File extra scoperti dinamicamente su disco
+    for entry in _get_dynamic_files():
+        manuals.append({
+            "filename": entry["filename"],
+            "filepath": entry["filepath"],
+            "title": entry["title"],
+            "source": "local_inail",
+        })
 
     return sorted(manuals, key=lambda x: x["title"])
 
