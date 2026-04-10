@@ -1003,14 +1003,28 @@ function TabFlags() {
                   🔄
                 </button>
               </div>
-              <select style={{ ...input, marginBottom: 12, background: '#fff' }} value={hint} onChange={e => setHint(e.target.value)}>
-                <option value="">— Nessun file associato</option>
-                {inailFiles.map(f => (
-                  <option key={f.filename} value={f.filename} disabled={!f.exists}>
-                    {f.title}{!f.exists ? ' ⚠ file mancante' : ''}
-                  </option>
-                ))}
-              </select>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12 }}>
+                <select style={{ ...input, marginBottom: 0, background: '#fff', flex: 1 }} value={hint} onChange={e => setHint(e.target.value)}>
+                  <option value="">— Nessun file associato</option>
+                  {inailFiles.map(f => (
+                    <option key={f.filename} value={f.filename} disabled={!f.exists}>
+                      {f.title}{!f.exists ? ' ⚠ file mancante' : ''}
+                    </option>
+                  ))}
+                </select>
+                {hint && (
+                  <button
+                    type="button"
+                    title="Rimuovi associazione quaderno INAIL"
+                    onClick={() => setHint('')}
+                    style={{ background: 'none', border: '1px solid #dc2626', borderRadius: 4,
+                      cursor: 'pointer', padding: '6px 10px', fontSize: 13, color: '#dc2626',
+                      whiteSpace: 'nowrap', flexShrink: 0 }}
+                  >
+                    ✕ Rimuovi
+                  </button>
+                )}
+              </div>
 
               <label style={{ ...labelStyle, marginBottom: 4 }}>Vita utile stimata (anni)</label>
               <input
