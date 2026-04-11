@@ -8,7 +8,7 @@ Cartelle corpus:
   - Primaria:    corpus/raw/   (normativa EU + quaderni extra)
   - Secondaria:  pdf manuali/  (le 22 schede INAIL esistenti — scansionate automaticamente)
   - ChromaDB:    corpus/chroma_db/
-  - Su Render:   /opt/render/project/data/corpus_raw/ + /opt/render/project/data/chroma_db/
+  - Su Render:   corpus/raw/ + corpus/chroma_db/ (git-tracked, path identico al locale)
 
 La cartella "pdf manuali/" è già presente nel progetto con le 22 schede INAIL.
 Viene inclusa automaticamente nel corpus — l'utente non deve copiare i PDF.
@@ -26,11 +26,12 @@ logger = logging.getLogger(__name__)
 _IS_RENDER = bool(os.environ.get("RENDER"))
 
 if _IS_RENDER:
-    CHROMA_PATH = "/opt/render/project/data/chroma_db"
-    CORPUS_PATH = "/opt/render/project/data/corpus_raw"
-    # Su Render i PDF INAIL sono inclusi nel deploy (gittracked)
+    # ChromaDB e corpus raw sono dentro il repo (git-tracked) per sopravvivere ai deploy.
+    # Il piano free di Render non supporta Persistent Disk → unica opzione è il repo.
     _HERE_RENDER = Path(__file__).parent  # backend/app/services/
     _PROJECT_ROOT_RENDER = _HERE_RENDER.parent.parent.parent  # manualfinder/
+    CHROMA_PATH = str(_PROJECT_ROOT_RENDER / "corpus" / "chroma_db")
+    CORPUS_PATH = str(_PROJECT_ROOT_RENDER / "corpus" / "raw")
     PDF_MANUALI_PATH = str(_PROJECT_ROOT_RENDER / "pdf manuali")
 else:
     _HERE = Path(__file__).parent  # backend/app/services/
