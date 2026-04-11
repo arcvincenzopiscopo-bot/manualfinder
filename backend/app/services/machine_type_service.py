@@ -1173,21 +1173,30 @@ async def admin_populate_inail_hint(provider: str) -> dict:
         try:
             # Passo 1: lookup diretto (alias table)
             manual = find_local_manual(name)
+            filename = manual["filename"] if manual else None
 
-            # Passo 2: AI classifica → lookup sulla categoria suggerita
-            if not manual:
+            # Passo 2: RAG semantico su ChromaDB (locale, nessun costo API)
+            if not filename:
+                from app.services.rag_service import rag_find_inail_filename
+                filename = rag_find_inail_filename(name)
+                if filename:
+                    logger.info("populate_inail_hint [RAG]: '%s' → %s", name, filename)
+
+            # Passo 3: AI → classifica categoria → lookup sulla categoria suggerita
+            if not filename:
                 ai_category = await _ai_classify_inail_category(name, canonical_categories, provider)
                 if ai_category:
-                    manual = find_local_manual(ai_category)
-                    if not manual:
+                    manual2 = find_local_manual(ai_category)
+                    if not manual2:
                         # Prova anche la corrispondenza case-insensitive nella mappa
                         ai_cat_lower = ai_category.lower().strip()
                         matched_key = next((k for k in LOCAL_MANUALS_MAP if k.lower() == ai_cat_lower), None)
                         if matched_key:
-                            manual = find_local_manual(matched_key)
+                            manual2 = find_local_manual(matched_key)
+                    if manual2:
+                        filename = manual2["filename"]
 
-            if manual:
-                filename = manual["filename"]
+            if filename:
                 conn = _get_conn()
                 with conn.cursor() as cur:
                     cur.execute(

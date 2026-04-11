@@ -158,6 +158,80 @@ def retrieve_for_machine(machine_type: str) -> str:
         return ""  # analisi procede senza RAG
 
 
+def rag_find_inail_filename(machine_name: str, distance_threshold: float = 0.55) -> str | None:
+    """
+    Cerca nel corpus ChromaDB il quaderno INAIL semanticamente più simile
+    al nome della macchina. Ritorna il filename esatto del PDF o None.
+
+    Usato nell'associazione automatica dei quaderni INAIL come passo intermedio
+    tra l'alias table (esatta ma limitata) e la chiamata AI (costosa).
+    Vantaggi rispetto all'AI:
+    - Nessun costo API — puro calcolo locale MiniLM
+    - Ritorna direttamente il filename, nessun doppio lookup
+    - Capisce sinonimi e famiglie di macchine grazie agli embeddings
+
+    Args:
+        machine_name: nome del tipo macchina (es. "escavatore cingolato")
+        distance_threshold: distanza coseno massima accettabile (< 1.0; default 0.55)
+
+    Returns:
+        Filename del quaderno INAIL (es. "Scheda 6 - ESCAVATORE IDRAULICO.pdf") o None.
+    """
+    collection = _get_collection()
+    if collection is None:
+        return None
+
+    try:
+        count = collection.count()
+        if count == 0:
+            return None
+
+        queries = [
+            f"attrezzatura da lavoro {machine_name}",
+            f"sicurezza {machine_name} cantiere",
+        ]
+
+        best_filename: str | None = None
+        best_dist = float("inf")
+
+        for query_text in queries:
+            try:
+                results = collection.query(
+                    query_texts=[query_text],
+                    n_results=min(5, count),
+                    where={"tipo": "quaderno_inail"},
+                    include=["metadatas", "distances"],
+                )
+            except Exception as e:
+                logger.warning("rag_find_inail_filename query fallita ('%s'): %s", query_text, e)
+                continue
+
+            metas = results.get("metadatas", [[]])[0]
+            dists = results.get("distances", [[]])[0]
+
+            for meta, dist in zip(metas, dists):
+                if dist < best_dist:
+                    best_dist = dist
+                    best_filename = meta.get("filename")
+
+        if best_filename and best_dist < distance_threshold:
+            logger.debug(
+                "rag_find_inail_filename: '%s' → '%s' (dist=%.3f)",
+                machine_name, best_filename, best_dist,
+            )
+            return best_filename
+
+        logger.debug(
+            "rag_find_inail_filename: '%s' → nessuna corrispondenza (best_dist=%.3f)",
+            machine_name, best_dist if best_dist < float("inf") else -1,
+        )
+        return None
+
+    except Exception as e:
+        logger.warning("rag_find_inail_filename fallback silenzioso: %s", e)
+        return None
+
+
 def get_retrieval_metadata(machine_type: str) -> dict:
     """
     Metadati del retrieval per logging/osservabilità.
