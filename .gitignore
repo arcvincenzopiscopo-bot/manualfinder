@@ -83,9 +83,11 @@ coverage/
 !backend/pdf manuali/*.pdf
 
 # ── Corpus RAG ───────────────────────────────────────────────
-# corpus/raw/ (PDF grezzi) non serve su Render → escluso.
-# corpus/chroma_db/ è git-tracked: sopravvive ai deploy free-tier senza Persistent Disk.
+# corpus/raw/      — PDF grezzi, non committare (grandi, si caricano via admin panel)
+# corpus/chroma_db — i file HNSW binari non sono portabili Windows→Linux;
+#                    la Docker build li rigenera su Linux da pdf manuali/ (git-tracked).
 corpus/raw/
+corpus/chroma_db/
 corpus/chroma_db_backup/
 
 # ── Indicizzatore locale — file non necessari nel repo ───────

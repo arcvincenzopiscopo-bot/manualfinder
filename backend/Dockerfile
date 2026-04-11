@@ -27,10 +27,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY . .
 
-# Pre-scarica il modello ONNX di chromadb nell'immagine durante la build.
-# DefaultEmbeddingFunction scarica all-MiniLM-L6-v2 (~22MB) al primo uso.
-# Baking nell'immagine evita il download al cold start su Render.
-RUN python -c "from chromadb.utils.embedding_functions import DefaultEmbeddingFunction; DefaultEmbeddingFunction()(['test'])"
+# Genera il ChromaDB su Linux direttamente durante la build.
+# Motivo: i file binari HNSW di chroma-hnswlib non sono portabili tra Windows e Linux —
+# se committassimo i .bin generati su Windows, Render li rifiuterebbe e vedrebbe 0 chunk.
+# Soluzione: ignoriamo corpus/chroma_db/ in git e lo ricostruiamo qui su Linux,
+# indicizzando i PDF di "pdf manuali/" (git-tracked, le 22 schede INAIL).
+# Il modello ONNX viene scaricato al primo uso e rimane nell'immagine.
+RUN cd /app/backend && python -c "\
+import sys; sys.path.insert(0, '/app/backend'); \
+from app.services.corpus_indexer import index_all_corpus; \
+results = index_all_corpus(); \
+total = sum(r.get('chunks', 0) for r in results.values() if not r.get('skipped')); \
+skipped = sum(1 for r in results.values() if r.get('skipped')); \
+print(f'ChromaDB build: {len(results)-skipped} file, {total} chunk ({skipped} saltati)') \
+"
 
 # Render fornisce $PORT automaticamente (default 10000)
 # uvicorn legge la porta dalla variabile d'ambiente
