@@ -228,7 +228,7 @@ RIFERIMENTI: dict = {
                      "INAIL prima verifica", "organismo notificato"],
         "tipo_macchina": ["gru", "gru a torre", "gru su autocarro",
                           "piattaforma aerea", "carrello elevatore",
-                          "ascensore di cantiere", "terna"],
+                          "ascensore da cantiere", "terna"],
     },
 
     "uso_corretto_attrezzature": {

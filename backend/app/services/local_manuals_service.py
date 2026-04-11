@@ -31,7 +31,7 @@ LOCAL_MANUALS_MAP: Dict[str, str] = {
     "gru a torre":                          "Scheda 1 - GRU A TORRE.pdf",
     "gru su autocarro":                     "Scheda 2 - GRU SU AUTOCARRO.pdf",
     "piattaforma aerea":                    "Scheda 3 - PIATTAFORME MOBILI DI LAVORO ELEVABILI.pdf",
-    "ascensore di cantiere":                "Scheda 4 - ASCENSORE DI CANTIERE.pdf",
+    "ascensore da cantiere":                "Scheda 4 - ASCENSORE DI CANTIERE.pdf",
     "carrello elevatore telescopico":       "Scheda 5 - CARRELLO ELEVATORE TELESCOPICO.pdf",
     "escavatore idraulico":                 "Scheda 6 - ESCAVATORE IDRAULICO.pdf",
     "pala caricatrice frontale":            "Scheda 7 - PALA CARICATRICE FRONTALE.pdf",
@@ -100,17 +100,23 @@ MACHINE_ALIASES: Dict[str, str] = {
     "awp":                                  "piattaforma aerea",
     "platform":                             "piattaforma aerea",
 
-    # ── ASCENSORE DI CANTIERE ─────────────────────────────────────────────────
+    # ── ASCENSORE DA CANTIERE ─────────────────────────────────────────────────
     # ATTENZIONE: "elevatore" da solo NON mappa qui — troppo generico.
     # Solo termini che identificano univocamente l'ascensore da cantiere.
-    "ascensore di cantiere":                "ascensore di cantiere",
-    "ascensore cantiere":                   "ascensore di cantiere",
-    "montacarichi da cantiere":             "ascensore di cantiere",
-    "montacarichi":                         "ascensore di cantiere",
-    "hoist":                                "ascensore di cantiere",
-    "construction hoist":                   "ascensore di cantiere",
-    "builder's hoist":                      "ascensore di cantiere",
-    "personnel hoist":                      "ascensore di cantiere",
+    "ascensore da cantiere":                "ascensore da cantiere",
+    "ascensore di cantiere":                "ascensore da cantiere",
+    "ascensori da cantiere":                "ascensore da cantiere",
+    "ascensori di cantiere":                "ascensore da cantiere",
+    "ascensore cantiere":                   "ascensore da cantiere",
+    "elevatore da cantiere":                "ascensore da cantiere",
+    "elevatore di cantiere":                "ascensore da cantiere",
+    "montacarichi da cantiere":             "ascensore da cantiere",
+    "montacarichi":                         "ascensore da cantiere",
+    "ponteggio elevatore":                  "ascensore da cantiere",
+    "hoist":                                "ascensore da cantiere",
+    "construction hoist":                   "ascensore da cantiere",
+    "builder's hoist":                      "ascensore da cantiere",
+    "personnel hoist":                      "ascensore da cantiere",
 
     # ── ELEVATORE A BANDIERA ─────────────────────────────────────────────────
     # Separato dall'ascensore di cantiere — strumento diverso

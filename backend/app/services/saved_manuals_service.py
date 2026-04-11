@@ -14,6 +14,19 @@ def _get_conn():
     return psycopg2.connect(settings.database_url)
 
 
+def _canonical_machine_type(mt: str) -> str:
+    """
+    Normalizza un machine_type alla chiave canonica via MACHINE_ALIASES.
+    Import lazy per evitare cicli. Ritorna la stringa normalizzata se non mappata.
+    """
+    try:
+        from app.services.local_manuals_service import MACHINE_ALIASES, _normalize_machine_type
+        norm = _normalize_machine_type(mt or "")
+        return MACHINE_ALIASES.get(norm, norm)
+    except Exception:
+        return (mt or "").lower().strip()
+
+
 import time as _time
 
 # ── Cache URL bloccati ────────────────────────────────────────────────────────
@@ -266,21 +279,33 @@ def find_for_search(
                     specific_ids.append(str(r["id"]))
                     results.append(r)
 
-                # 2) Generici per categoria o machine_type match (escludi già trovati)
+                # 2) Generici per categoria o machine_type match (escludi già trovati).
+                # Cerca su entrambi manual_machine_type E search_machine_type, e usa sia
+                # la forma originale che quella canonicalizzata via MACHINE_ALIASES — così
+                # varianti come "ascensore da/di cantiere" matchano record inseriti con
+                # l'altra preposizione.
                 if machine_type:
                     exclude = tuple(specific_ids) if specific_ids else ("__none__",)
+                    canonical = _canonical_machine_type(machine_type)
                     cur.execute(
                         """
                         SELECT *, 'generic' AS _match_type
                         FROM saved_manuals
-                        WHERE manual_machine_type ILIKE %s
+                        WHERE (manual_machine_type ILIKE %s
+                               OR manual_machine_type ILIKE %s
+                               OR search_machine_type ILIKE %s
+                               OR search_machine_type ILIKE %s)
                           AND id::text NOT IN %s
                         ORDER BY
                             CASE WHEN manual_brand ILIKE 'GENERICO' THEN 0 ELSE 1 END,
                             created_at DESC
                         LIMIT 5
                         """,
-                        (f"%{machine_type}%", exclude),
+                        (
+                            f"%{machine_type}%", f"%{canonical}%",
+                            f"%{machine_type}%", f"%{canonical}%",
+                            exclude,
+                        ),
                     )
                     results.extend(dict(r) for r in cur.fetchall())
 

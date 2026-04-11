@@ -67,7 +67,7 @@ _SHOULD_HAVE_VERIFICHE = {
     "gru", "gru mobile", "gru a torre", "gru su autocarro", "camion gru", "gru su camion",
     "argano", "verricello", "paranco", "paranchi",
     "piattaforma aerea", "ple", "piattaforma elevabile", "piattaforma a forbice",
-    "piattaforma a braccio", "ascensore di cantiere", "montacarichi", "elevatore a bandiera",
+    "piattaforma a braccio", "ascensore da cantiere", "montacarichi", "elevatore a bandiera",
     # terna/retroescavatore escluse: macchine movimento terra, non in Allegato VII
     "pompa calcestruzzo", "autobetonpompa",  # braccio autopompa = apparecchio sollevamento
 }

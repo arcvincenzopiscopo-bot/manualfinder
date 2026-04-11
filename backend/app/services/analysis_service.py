@@ -319,18 +319,33 @@ def _build_producer_prompt(brand: str, model: str, machine_rules: Optional[dict]
     Se is_category_match=True il manuale è di un modello simile, non esatto: omette dispositivi
     e limiti specifici del modello del manuale per non attribuirli alla macchina cercata.
     """
-    category_warning = (
-        f"\n⚠ ATTENZIONE: Questo manuale NON appartiene a {brand} {model} ma a una macchina "
-        f"della stessa categoria.\n"
-        f"Estrai SOLO informazioni valide per TUTTA la categoria, non specifiche del modello del manuale.\n"
-        f"Ometti completamente: dispositivi_sicurezza (specifici del modello del manuale), "
-        f"limiti_operativi con valori numerici (si riferiscono al modello del manuale, non a {brand} {model}), "
-        f"pittogrammi_sicurezza (posizioni fisiche specifiche di quel modello).\n\n"
-        if is_category_match else ""
-    )
-    base = f"""{category_warning}Analizza il manuale del macchinario {brand} {model} ed estrai le informazioni di sicurezza specifiche del costruttore nel seguente formato JSON:
+    if is_category_match:
+        category_warning = (
+            f"\n⚠ ATTENZIONE: Questo manuale NON appartiene a {brand} {model} ma a una macchina "
+            f"della stessa categoria.\n"
+            f"Estrai SOLO informazioni valide per TUTTA la categoria, non specifiche del modello del manuale.\n"
+            f"Ometti completamente: dispositivi_sicurezza (specifici del modello del manuale), "
+            f"limiti_operativi con valori numerici (si riferiscono al modello del manuale, non a {brand} {model}), "
+            f"pittogrammi_sicurezza (posizioni fisiche specifiche di quel modello).\n\n"
+        )
+    else:
+        category_warning = ""
 
-{{
+    if is_category_match:
+        dispositivi_vincolo = "lascia la lista vuota [] — questo manuale appartiene a un modello diverso"
+        limiti_vincolo = f"lascia la lista vuota [] — i valori numerici si riferiscono al modello del manuale, non a {brand} {model}"
+        pittogrammi_vincolo = "lascia la lista vuota [] — le posizioni fisiche sono specifiche del modello del manuale"
+    else:
+        dispositivi_vincolo = f"3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI su {brand} {model} dal costruttore (interblocchi, sensori, ripari fissi/mobili, pulsanti emergenza, limitatori, valvole). Sii specifico sulla posizione fisica."
+        limiti_vincolo = "includi SOLO valori ESPLICITAMENTE riportati nel manuale. NON generare valori ipotetici anche se plausibili per la categoria. Se non presenti, lascia la lista vuota []."
+        pittogrammi_vincolo = "segnala SOLO i pittogrammi esplicitamente citati nel manuale con la loro posizione sulla macchina."
+
+    # NOTA: stringa NORMALE (non f-string) — i placeholder {brand}, {model}, ecc. vengono
+    # sostituiti manualmente via .replace() sotto. Così le graffe JSON non passano per il
+    # format engine di Python e non possono rompere il template (bug storico sul JSON literal).
+    template = """{category_warning}Analizza il manuale del macchinario {brand} {model} ed estrai le informazioni di sicurezza specifiche del costruttore nel seguente formato JSON:
+
+{
   "raccomandazioni_produttore": [
     "prescrizione OPERATIVA DI SICUREZZA del costruttore {brand} per il modello {model} — SOLO quelle che proteggono l'incolumità di operatori e persone vicine (es. 'Non salire sul tetto cabina senza imbracatura', 'Abbassare il carico prima di scendere dal mezzo'). ESCLUDI istruzioni di manutenzione motore, gestione filtri, sostituzioni componenti, avvisi guasto. [sezione o pag. manuale]"
   ],
@@ -341,12 +356,12 @@ def _build_producer_prompt(brand: str, model: str, machine_rules: Optional[dict]
     "rischio di INFORTUNIO specifico di questo modello {model} non coperto dalla normativa generale — con spiegazione tecnica. ESCLUDI rischi di guasto meccanico o danneggiamento della macchina senza conseguenze per persone."
   ],
   "dispositivi_sicurezza": [
-    {{
+    {
       "nome": "Nome esatto del dispositivo come indicato nel manuale {brand} {model} (es. 'Sensore pressione circuito frenante', 'Limitatore di carico elettronico')",
       "tipo": "interblocco | sensore | riparo | arresto_emergenza | segnalazione | limitatore",
       "descrizione": "Funzione del dispositivo e POSIZIONE FISICA sulla macchina {model} (es. 'Posizionato sul circuito frenante posteriore, accessibile dal vano motore lato destro')",
       "verifica_ispezione": "Verifica/Controlla/Accertati [dove trovarlo fisicamente su questa macchina] — [come verificare che funzioni] [sezione manuale di riferimento]"
-    }}
+    }
   ],
   "limiti_operativi": [
     "limite con VALORE NUMERICO e unità di misura come indicato nel manuale (es. 'Portata massima: 3.500 kg [Sez. 2.4]', 'Pendenza massima operativa: 30% [pag. 18]', 'Pressione idraulica max: 350 bar [Sez. 5.1]')"
@@ -361,50 +376,67 @@ def _build_producer_prompt(brand: str, model: str, machine_rules: Optional[dict]
     "pittogramma o avvertenza obbligatoria che deve essere presente e leggibile sulla macchina — specifica posizione (es. 'Pittogramma PERICOLO SCHIACCIAMENTO — pannello laterale sinistro cabina [pag. 12 manuale]')"
   ],
   "checklist": [
-    {{
+    {
       "testo": "Verifica [componente fisico specifico di {brand} {model}] — [dove trovarlo sulla macchina] — [criterio di conformità] [Sez. X.X o pag. YY manuale]",
       "livello": 1,
       "norma": "Sez. X.X manuale",
       "prescrizione_precompilata": "Si rileva [il problema specifico su {brand} {model}]. In violazione di [norma]. Si prescrive [azione correttiva] [entro termine se livello=2]."
-    }}
+    }
   ],
   "note": "avvertenze particolari del costruttore, condizioni d'uso, limitazioni ambientali o operative"
-}}
+}
 
 VINCOLI:
 - raccomandazioni_produttore: 2-6 elementi SPECIFICI per {brand} {model} che riguardano esclusivamente la SICUREZZA DELLE PERSONE. NON includere: manutenzione motore/filtri/fluidi, gestione DPF, preriscaldamento, istruzioni per officina, avvisi di degradazione prestazioni. Ogni voce: sezione o pagina del manuale tra parentesi quadre.
-- dispositivi_sicurezza: {"lascia la lista vuota [] — questo manuale appartiene a un modello diverso" if is_category_match else f"3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI su {brand} {model} dal costruttore (interblocchi, sensori, ripari fissi/mobili, pulsanti emergenza, limitatori, valvole). Sii specifico sulla posizione fisica."}.
-- limiti_operativi: {"lascia la lista vuota [] — i valori numerici si riferiscono al modello del manuale, non a " + brand + " " + model if is_category_match else "includi SOLO valori ESPLICITAMENTE riportati nel manuale. NON generare valori ipotetici anche se plausibili per la categoria. Se non presenti, lascia la lista vuota []."}.
-- procedure_emergenza: 2-5 oggetti {{testo, source_tier}} SOLO per emergenze che mettono a rischio PERSONE (incendio, ribaltamento, cedimento freni, investimento, folgorazione). Il campo source_tier deve essere sempre "manuale". NON includere: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio per persone, call to service. Se il manuale descrive solo procedure di manutenzione, lascia la lista vuota [].
-- pittogrammi_sicurezza: {"lascia la lista vuota [] — le posizioni fisiche sono specifiche del modello del manuale" if is_category_match else "segnala SOLO i pittogrammi esplicitamente citati nel manuale con la loro posizione sulla macchina."}.
-- checklist: 5-8 oggetti {{testo, livello, norma, prescrizione_precompilata}} SPECIFICI per {brand} {model}. livello=1 (STOP: ripari, emergenza, freni, ROPS); livello=2 (PRESCRIZIONE: segnalatori, pittogrammi, luci). Ogni testo: verbo imperativo + cosa + dove + criterio di conformità + riferimento sezione/pagina manuale. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
+- dispositivi_sicurezza: {dispositivi_vincolo}.
+- limiti_operativi: {limiti_vincolo}.
+- procedure_emergenza: 2-5 oggetti {testo, source_tier} SOLO per emergenze che mettono a rischio PERSONE (incendio, ribaltamento, cedimento freni, investimento, folgorazione). Il campo source_tier deve essere sempre "manuale". NON includere: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio per persone, call to service. Se il manuale descrive solo procedure di manutenzione, lascia la lista vuota [].
+- pittogrammi_sicurezza: {pittogrammi_vincolo}.
+- checklist: 5-8 oggetti {testo, livello, norma, prescrizione_precompilata} SPECIFICI per {brand} {model}. livello=1 (STOP: ripari, emergenza, freni, ROPS); livello=2 (PRESCRIZIONE: segnalatori, pittogrammi, luci). Ogni testo: verbo imperativo + cosa + dove + criterio di conformità + riferimento sezione/pagina manuale. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo manuale. Per elementi non presenti, lascia la lista vuota — NON integrare con conoscenze generali sul tipo di macchina.
 - CITAZIONI OBBLIGATORIE: ogni voce deve contenere il riferimento alla pagina o sezione del manuale in formato [pag. X] o [Sez. X.X] DENTRO il campo "testo". Se non trovi il riferimento esatto, ometti la voce piuttosto che inventare un numero di pagina.
 - Se il manuale è in altra lingua: TRADUCI tutto in italiano. Non lasciare termini stranieri.
 - Rispondi SOLO con il JSON valido."""
+
+    base = (template
+            .replace("{category_warning}", category_warning)
+            .replace("{brand}", brand)
+            .replace("{model}", model)
+            .replace("{dispositivi_vincolo}", dispositivi_vincolo)
+            .replace("{limiti_vincolo}", limiti_vincolo)
+            .replace("{pittogrammi_vincolo}", pittogrammi_vincolo))
     return _append_machine_rules(base, machine_rules)
 
 
 def _build_analysis_prompt(brand: str, model: str, is_category_match: bool = False,
                            workplace_context: Optional[dict] = None) -> str:
     """Prompt generico per analisi singola fonte — combina aspetti normativi e raccomandazioni costruttore."""
-    category_warning = (
-        f"\n⚠ ATTENZIONE: Questo documento NON appartiene a {brand} {model} ma a una macchina "
-        f"della stessa categoria.\n"
-        f"Estrai SOLO informazioni valide per TUTTA la categoria.\n"
-        f"Ometti completamente: dispositivi_sicurezza e limiti_operativi con valori numerici "
-        f"(specifici del modello del documento, non di {brand} {model}).\n\n"
-        if is_category_match else ""
-    )
-    return (f"""{category_warning}Analizza questo documento relativo al macchinario {brand} {model} ed estrai le informazioni di sicurezza nel seguente formato JSON:
+    if is_category_match:
+        category_warning = (
+            f"\n⚠ ATTENZIONE: Questo documento NON appartiene a {brand} {model} ma a una macchina "
+            f"della stessa categoria.\n"
+            f"Estrai SOLO informazioni valide per TUTTA la categoria.\n"
+            f"Ometti completamente: dispositivi_sicurezza e limiti_operativi con valori numerici "
+            f"(specifici del modello del documento, non di {brand} {model}).\n\n"
+        )
+        dispositivi_vincolo = "lascia la lista vuota [] — questo documento appartiene a un modello diverso"
+        limiti_vincolo = f"lascia la lista vuota [] — i valori numerici si riferiscono al modello del documento, non a {brand} {model}"
+    else:
+        category_warning = ""
+        dispositivi_vincolo = "3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI sulla macchina dal costruttore (interblocchi, sensori, ripari, pulsanti emergenza, limitatori, valvole di sicurezza). Sii specifico sulla posizione fisica."
+        limiti_vincolo = "includi SOLO valori ESPLICITAMENTE presenti nel documento — NON generare valori ipotetici."
 
-{{
+    # Stringa NORMALE: placeholder sostituiti via .replace() per evitare che le graffe JSON
+    # passino per il format engine di Python (vedi nota in _build_producer_prompt).
+    template = """{category_warning}Analizza questo documento relativo al macchinario {brand} {model} ed estrai le informazioni di sicurezza nel seguente formato JSON:
+
+{
   "rischi_principali": [
-    {{
+    {
       "testo": "[ALTA/MEDIA/BASSA] rischio di INFORTUNIO O DANNO ALLA SALUTE specifico per {brand} {model} [riferimento normativo o sezione documento]. INCLUDI SOLO rischi che minacciano l'incolumità di persone.",
       "probabilita": "P1 | P2 | P3",
       "gravita": "S1 | S2 | S3"
-    }}
+    }
   ],
   "dispositivi_protezione": [
     "DPI (cosa indossa l'operatore) OPPURE protezione collettiva — specifica e concreta per questo macchinario"
@@ -416,19 +448,19 @@ def _build_analysis_prompt(brand: str, model: str, is_category_match: bool = Fal
     "rischio che persiste anche con tutte le protezioni attive — spiega PERCHÉ non eliminabile"
   ],
   "dispositivi_sicurezza": [
-    {{
+    {
       "nome": "Nome esatto del dispositivo installato su {brand} {model} (es. 'Pulsante di emergenza a fungo rosso')",
       "tipo": "interblocco | sensore | riparo | arresto_emergenza | segnalazione | limitatore",
       "descrizione": "Funzione del dispositivo e posizione fisica sulla macchina",
       "verifica_ispezione": "Verifica/Controlla/Accertati [dove trovarlo fisicamente] — [come verificare il funzionamento] [rif. sezione documento]"
-    }}
+    }
   ],
   "abilitazione_operatore": "Formazione obbligatoria richiesta dalla normativa italiana VIGENTE per questo tipo di macchina (cita la versione aggiornata dell'Accordo Stato-Regioni in vigore, o normativa settoriale specifica). Null se non obbligatoria.",
   "documenti_da_richiedere": [
-    {{
+    {
       "documento": "Nome documento [riferimento normativo che ne impone la tenuta]",
       "smart_hint": "Cosa verificare specificamente su questo documento durante l'ispezione"
-    }}
+    }
   ],
   "verifiche_periodiche": "Obblighi di verifica periodica. Se applicabile: 1) categoria di appartenenza secondo Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma; 2) cadenza; 3) soggetto abilitato; 4) riferimento normativo VIGENTE aggiornato. Null se non previsti.",
   "limiti_operativi": [
@@ -441,31 +473,36 @@ def _build_analysis_prompt(brand: str, model: str, is_category_match: bool = Fal
     "pittogramma o avvertenza che deve essere presente e leggibile sulla macchina — con posizione [rif. documento]"
   ],
   "checklist": [
-    {{
+    {
       "testo": "Verifica [elemento concreto fisico] — [dove trovarlo sulla macchina] — [come stabilire se conforme] [rif. normativo o sezione documento]",
       "livello": 1,
       "norma": "All. V D.Lgs. 81/08",
       "prescrizione_precompilata": "Si rileva [il problema specifico]. In violazione di [norma]. Si prescrive [azione correttiva] [entro termine se livello=2]."
-    }}
+    }
   ],
   "attrezzature_intercambiabili": "Se la macchina può montare attrezzature intercambiabili (pinze, bracci, forche, utensili da taglio, benne speciali ecc.), descrivi in 2-3 frasi: quali attrezzature sono compatibili, se richiedono marcatura CE propria, come verificare la compatibilità. Null se la macchina non prevede attrezzature intercambiabili.",
   "note": "osservazioni aggiuntive di sicurezza, limiti d'uso, condizioni ambientali"
-}}
+}
 
 VINCOLI:
 - rischi_principali: 3-8 rischi SOLO per l'incolumità delle persone, ORDINATI da ALTA a BASSA gravità. Includi tag [ALTA/MEDIA/BASSA] e riferimento normativo/documentale. NON includere rischi di guasto meccanico, intasamento filtri, degradazione prestazioni o danni alla sola macchina.
 - raccomandazioni_produttore: SOLO raccomandazioni che proteggono persone. NON manutenzione, fluidi, filtri DPF, preriscaldamento, avvisi motore.
 - procedure_emergenza: SOLO per emergenze che minacciano persone (incendio, ribaltamento, cedimento freni, investimento, folgorazione). NON rigenerazione DPF, avarie meccaniche, call to service. Lista vuota [] se il documento non ne contiene.
-- dispositivi_sicurezza: {"lascia la lista vuota [] — questo documento appartiene a un modello diverso" if is_category_match else "3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI sulla macchina dal costruttore (interblocchi, sensori, ripari, pulsanti emergenza, limitatori, valvole di sicurezza). Sii specifico sulla posizione fisica."}.
+- dispositivi_sicurezza: {dispositivi_vincolo}.
 - checklist: 5-10 voci azionabili IMMEDIATAMENTE in sopralluogo. Ogni voce deve rispondere a: COSA verificare, DOVE trovarlo, COME stabilire la conformità. Includi riferimento sezione o articolo normativo tra parentesi quadre. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
-- limiti_operativi: {"lascia la lista vuota [] — i valori numerici si riferiscono al modello del documento, non a " + brand + " " + model if is_category_match else "includi SOLO valori ESPLICITAMENTE presenti nel documento — NON generare valori ipotetici."}.
+- limiti_operativi: {limiti_vincolo}.
 - documenti_da_richiedere: 3-5 documenti essenziali per l'accesso ispettivo con riferimento normativo che ne impone la tenuta.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto nel documento fornito.
 - Se il documento è in altra lingua: TRADUCI tutto in italiano. NON lasciare termini stranieri.
 - Usa terminologia del D.Lgs. 81/2008 e delle norme armonizzate dove appropriato."""
-    + _workplace_prompt_hints(workplace_context)
-    + "\n- Rispondi SOLO con il JSON valido."
-)
+
+    base = (template
+            .replace("{category_warning}", category_warning)
+            .replace("{brand}", brand)
+            .replace("{model}", model)
+            .replace("{dispositivi_vincolo}", dispositivi_vincolo)
+            .replace("{limiti_vincolo}", limiti_vincolo))
+    return base + _workplace_prompt_hints(workplace_context) + "\n- Rispondi SOLO con il JSON valido."
 
 
 FALLBACK_PROMPT_TEMPLATE = """Non è disponibile il manuale ufficiale del macchinario {brand} {model}.
@@ -727,6 +764,13 @@ async def generate_safety_card(
 
     has_inail = inail_bytes is not None
     has_producer = producer_bytes is not None
+
+    logger.info(
+        "generate_safety_card strategy: has_inail=%s has_producer=%s producer_pages=%d "
+        "machine_type=%s producer_label=%s brand=%s model=%s",
+        has_inail, has_producer, producer_page_count or 0,
+        machine_type or "-", producer_source_label or "-", brand, model,
+    )
 
     # Determina strategia fonte A–F (source_manager) — usata per badge UI e log
     from app.services.source_manager import resolve_sources, source_context_to_dict

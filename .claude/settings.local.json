@@ -27,7 +27,8 @@
       "Bash(grep -rn \"except:\\\\s*$\" /c/sviluppo/manualfinder/manualfinder/backend/app/services/*.py)",
       "Bash(grep -n \"CREATE TABLE\" /c/sviluppo/manualfinder/manualfinder/backend/app/services/*.py)",
       "Bash(cat backend/app/local_indexer/*.py)",
-      "Bash(find /c/sviluppo/manualfinder/manualfinder/frontend -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" \\\\\\) -exec grep -l \"upload-chroma\\\\|/rag/upload\\\\|chroma\" {} \\\\;)"
+      "Bash(find /c/sviluppo/manualfinder/manualfinder/frontend -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" \\\\\\) -exec grep -l \"upload-chroma\\\\|/rag/upload\\\\|chroma\" {} \\\\;)",
+      "Bash(grep -n \"pdf_blob\\\\|pdf_content\\\\|file_data\\\\|bytea\" backend/app/services/*.py backend/app/routers/*.py)"
     ]
   }
 }
