@@ -188,7 +188,7 @@ def rag_find_inail_filename(machine_name: str, distance_threshold: float = 0.55)
 
         queries = [
             f"attrezzatura da lavoro {machine_name}",
-            f"sicurezza {machine_name} cantiere",
+            f"sicurezza {machine_name} D.Lgs 81/08",
         ]
 
         best_filename: str | None = None

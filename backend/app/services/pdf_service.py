@@ -759,7 +759,7 @@ async def ai_quick_validate(
             client = genai.Client(api_key=settings.gemini_api_key)
             resp = await _asyncio.wait_for(
                 client.aio.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash",
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         max_output_tokens=5, temperature=0.0,

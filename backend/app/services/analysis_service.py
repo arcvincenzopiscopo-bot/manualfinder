@@ -71,13 +71,13 @@ def _enrich_card_sources(card, machine_type: Optional[str]) -> None:
         pass
 
 
-SYSTEM_PROMPT = """Sei un esperto di sicurezza sul lavoro specializzato nell'analisi di manuali tecnici di macchinari industriali e da cantiere, con profonda conoscenza di:
+SYSTEM_PROMPT = """Sei un esperto di sicurezza sul lavoro specializzato nell'analisi di manuali tecnici di macchinari di ogni settore produttivo (edilizia, industria, logistica, agricoltura, sollevamento e altri), con profonda conoscenza di:
 - D.Lgs. 81/2008 (Testo Unico sulla Sicurezza sul Lavoro) e relativi Allegati
 - Direttive Macchine 89/392/CEE, 98/37/CE e 2006/42/CE
 - Accordi Stato-Regioni (es. 22/02/2012 per abilitazioni operatori)
 - Norme armonizzate EN, UNI EN, ISO applicabili ai macchinari
 
-Il tuo compito è analizzare la documentazione fornita (manuali ufficiali, schede INAIL, normative) e produrre una scheda di sicurezza strutturata che un ISPETTORE DEL LAVORO possa utilizzare DIRETTAMENTE durante un accesso ispettivo in un cantiere o stabilimento industriale italiano.
+Il tuo compito è analizzare la documentazione fornita (manuali ufficiali, schede INAIL, normative) e produrre una scheda di sicurezza strutturata che un ISPETTORE DEL LAVORO possa utilizzare DIRETTAMENTE durante un accesso ispettivo in qualsiasi luogo di lavoro italiano (cantiere edile, stabilimento industriale, azienda agricola, hub logistico, ecc.).
 
 PRINCIPI FONDAMENTALI — applicali sempre:
 1. FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è effettivamente scritto nel documento fornito. Non integrare con conoscenze generali quando hai un manuale reale tra le mani. Se un'informazione non è presente nel documento, non inventarla — lascia il campo vuoto o indica "non specificato nel documento".
@@ -612,7 +612,7 @@ async def generate_safety_card(
     producer_source_label: Optional[str] = None,
     # ID nel catalogo machine_types (None = testo libero, fallback normative hardcoded)
     machine_type_id: Optional[int] = None,
-    # Contesto sopralluogo (cantiere/industria/logistica + fase cantiere)
+    # Contesto sopralluogo (cantiere/industria/logistica/altro; + fase solo per cantiere)
     workplace_context: Optional[dict] = None,
 ) -> SafetyCard:
     """
@@ -1376,9 +1376,13 @@ async def _analyze_pdf_map_reduce(
         return _build_safety_card(brand, model, json.loads(partial[0]), pdf_url, "pdf")
 
     # REDUCE: sintetizza i risultati parziali
-    reduce_prompt = REDUCE_PROMPT.format(
-        n=len(partial),
-        partial_analyses="\n\n---\n\n".join(partial),
+    # Usa .replace() invece di .format() per evitare che i { } dell'output AI
+    # (JSON delle analisi parziali) vengano interpretati come format specifier.
+    partial_analyses_str = "\n\n---\n\n".join(partial)
+    reduce_prompt = (
+        REDUCE_PROMPT
+        .replace("{n}", str(len(partial)))
+        .replace("{partial_analyses}", partial_analyses_str)
     )
     result_json = await _call_ai_with_text("", reduce_prompt, provider, is_reduce=True)
     return _build_safety_card(brand, model, result_json, pdf_url, "pdf")

@@ -85,14 +85,15 @@ async def upload_chroma_db(file: UploadFile = File(...)):
     with open(tmp_zip, "wb") as f:
         f.write(content)
 
-    # Backup del DB esistente
+    # Backup del DB esistente e rimozione per stato pulito prima dell'estrazione
     if os.path.exists(chroma_path):
         try:
             if os.path.exists(backup_path):
                 shutil.rmtree(backup_path)
             shutil.copytree(chroma_path, backup_path)
+            shutil.rmtree(chroma_path)  # rimuove dopo backup ok → estrazione parte da zero
         except Exception as e:
-            logger.warning("Backup ChromaDB fallito: %s", e)
+            logger.warning("Backup/rimozione ChromaDB falliti: %s", e)
 
     try:
         # Estrai ZIP

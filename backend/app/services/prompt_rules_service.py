@@ -99,7 +99,7 @@ async def _call_ai_for_rule(prompt: str, provider: str) -> Optional[dict]:
             from google.genai import types as gtypes
             client = genai.Client(api_key=settings.gemini_api_key)
             r = await client.aio.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=gtypes.GenerateContentConfig(max_output_tokens=900, temperature=0),
             )

@@ -26,7 +26,8 @@
       "Bash(grep -n \"TODO\\\\|FIXME\\\\|HACK\\\\|BUG\\\\|XXX\" /c/sviluppo/manualfinder/manualfinder/backend/app/services/*.py)",
       "Bash(grep -rn \"except:\\\\s*$\" /c/sviluppo/manualfinder/manualfinder/backend/app/services/*.py)",
       "Bash(grep -n \"CREATE TABLE\" /c/sviluppo/manualfinder/manualfinder/backend/app/services/*.py)",
-      "Bash(cat backend/app/local_indexer/*.py)"
+      "Bash(cat backend/app/local_indexer/*.py)",
+      "Bash(find /c/sviluppo/manualfinder/manualfinder/frontend -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" \\\\\\) -exec grep -l \"upload-chroma\\\\|/rag/upload\\\\|chroma\" {} \\\\;)"
     ]
   }
 }

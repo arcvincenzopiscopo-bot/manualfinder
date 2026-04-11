@@ -307,27 +307,30 @@ async def _pipeline(request: FullAnalysisRequest):
             key=lambda x: x[0], reverse=True
         )
         if inail_scored:
-            # Scegli il migliore con score minimo: un documento INAIL a 0/100 è generico
-            # (es. manuale generico edilizia invece di scheda specifica carrelli/PLE)
             INAIL_MIN_SCORE = 5
+            # Passo 1: priorità assoluta ai PDF locali (/manuals/local/).
+            # Sono già verificati dall'admin per categoria e non contengono brand/model
+            # specifici (schede INAIL generiche) → score e classify darebbero falsi negativi
+            # se competessero alla pari con risultati online. Vanno sempre preferiti.
             for inail_entry in inail_scored:
                 _iscore, _ibytes, _iurl = inail_entry
-                if _iscore < INAIL_MIN_SCORE:
-                    continue
-                # I PDF locali (/manuals/local/) sono già verificati per categoria in fase
-                # di indicizzazione — bypass sia score minimo che classify_pdf_match:
-                # non contengono brand/modello specifici (sono schede INAIL generiche per
-                # categoria), quindi score e match restituirebbero falsi negativi.
-                is_local = _iurl.startswith("/manuals/local/")
-                if is_local:
+                if _iurl.startswith("/manuals/local/") and _iscore >= INAIL_MIN_SCORE:
                     inail_bytes, inail_url = _ibytes, _iurl
                     break
-                if not is_local and machine_type:
-                    _imatch = pdf_service.classify_pdf_match(_ibytes, brand, model, machine_type)
-                    if _imatch == "unrelated":
-                        continue  # prova il prossimo candidato
-                inail_bytes, inail_url = _ibytes, _iurl
-                break
+            # Passo 2: nessun locale → usa il miglior PDF online non-unrelated
+            if inail_bytes is None:
+                for inail_entry in inail_scored:
+                    _iscore, _ibytes, _iurl = inail_entry
+                    if _iscore < INAIL_MIN_SCORE:
+                        continue
+                    if _iurl.startswith("/manuals/local/"):
+                        continue  # già tentato nel passo 1
+                    if machine_type:
+                        _imatch = pdf_service.classify_pdf_match(_ibytes, brand, model, machine_type)
+                        if _imatch == "unrelated":
+                            continue
+                    inail_bytes, inail_url = _ibytes, _iurl
+                    break
 
         # Scarica scheda tecnica commerciale (datasheet) — usata solo per limiti_operativi
         # Soglia pagine: <= 20 = datasheet breve. Se più lungo → reindirizza a producer.

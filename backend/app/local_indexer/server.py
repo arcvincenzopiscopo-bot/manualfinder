@@ -237,7 +237,7 @@ async def export_zip():
             chroma_dir = Path(CHROMA_PATH)
             for file_path in chroma_dir.rglob("*"):
                 if file_path.is_file():
-                    arcname = file_path.relative_to(chroma_dir.parent)
+                    arcname = file_path.relative_to(chroma_dir.parent).as_posix()
                     zf.write(file_path, arcname)
         buf.seek(0)
         return buf.read()

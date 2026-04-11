@@ -221,7 +221,7 @@ async def validate_plate_image(image_base64: str) -> bool:
             img_bytes = _b64.b64decode(b64_data)
             client = genai.Client(api_key=settings.gemini_api_key)
             resp = await client.aio.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash",
                 contents=[
                     types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
                     _VALIDATE_PROMPT,
