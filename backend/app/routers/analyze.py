@@ -575,12 +575,13 @@ async def _pipeline(request: FullAnalysisRequest):
 
                 if _is_db_generic:
                     producer_source_label = f"Manuale DB — categoria {machine_type or 'macchina'}"
+                    producer_match_type = "category"
                 elif _is_db_exact_match:
                     producer_source_label = f"Manuale DB {brand} {model}"
+                    producer_match_type = "exact"
                 else:
-                    # Manuale DB ma per un modello diverso — avvisa che è di categoria simile
                     producer_source_label = f"Manuale DB categoria simile ({machine_type or 'macchina'})"
-                producer_match_type = "exact"
+                    producer_match_type = "category"
             else:
                 producer_match_type = pdf_service.classify_pdf_match(
                     producer_bytes, brand, model, machine_type or ""

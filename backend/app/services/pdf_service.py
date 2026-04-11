@@ -430,6 +430,12 @@ _CATEGORY_MULTILANG: dict[str, list[str]] = {
     # Sollevamento
     "paranchi": ["paranchi", "hoist", "hebezeug", "palan"],
     "sollevatore": ["sollevatore", "lift", "heber", "élévateur"],
+    # Ascensori da cantiere / montacarichi
+    "ascensore": ["ascensore", "ascensore da cantiere", "ascensore di cantiere",
+                   "montacarichi", "construction hoist", "personnel hoist",
+                   "builder's hoist", "material hoist", "bauaufzug",
+                   "personenaufzug", "lastenaufzug", "ascenseur de chantier",
+                   "monte-charge"],
 }
 
 def _get_category_keywords(machine_type: str) -> list[str]:
