@@ -10,9 +10,9 @@
 
 # RAG indexing
 # NumPy <2.0 richiesto: chromadb 0.5.x usa np.float_ rimosso in NumPy 2.0
+# fastembed usa ONNX runtime (non PyTorch) → ~60MB RAM vs ~350MB di sentence-transformers
 numpy>=1.26.0,<2.0
 chromadb==0.5.0
-sentence-transformers==3.0.0
 langchain-text-splitters==0.2.0
 
 # PDF processing (già in requirements.txt su Render, serve anche in locale)

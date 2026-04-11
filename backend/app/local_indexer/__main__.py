@@ -27,13 +27,12 @@ if str(_BACKEND_ROOT) not in sys.path:
 def _check_deps():
     """Verifica che le dipendenze necessarie siano installate."""
     missing = []
-    for pkg in ["chromadb", "sentence_transformers", "fitz", "fastapi", "uvicorn"]:
+    for pkg in ["chromadb", "fitz", "fastapi", "uvicorn"]:
         try:
             __import__(pkg)
         except ImportError:
             friendly = {
                 "fitz": "PyMuPDF",
-                "sentence_transformers": "sentence-transformers",
             }.get(pkg, pkg)
             missing.append(friendly)
 
@@ -46,7 +45,6 @@ def _check_deps():
         print("\nSe requirements-local.txt non esiste:")
         reqs = " ".join([
             "chromadb==0.5.0",
-            "sentence-transformers==3.0.0",
             "langchain-text-splitters==0.2.0",
             "fastapi",
             "uvicorn[standard]",

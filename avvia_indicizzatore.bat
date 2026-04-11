@@ -54,6 +54,27 @@ echo.
 :python_ok
 echo [OK] Python standalone trovato
 
+:: Migrazione da sentence-transformers o fastembed → DefaultEmbeddingFunction (chromadb built-in)
+:: Se uno dei vecchi pacchetti e' ancora installato:
+::   1. Rimuovi sentence-transformers + torch + fastembed
+::   2. Cancella il ChromaDB (embedding incompatibili col nuovo modello)
+::   3. Forza reinstall dipendenze aggiornate
+if exist "%STAMP%" (
+    "%PYTHON%" -c "import sentence_transformers" 2>nul
+    if not errorlevel 1 set NEED_MIGRATION=1
+    "%PYTHON%" -c "import fastembed" 2>nul
+    if not errorlevel 1 set NEED_MIGRATION=1
+)
+if defined NEED_MIGRATION (
+    echo [MIGRAZIONE] Rimozione vecchie dipendenze ^(sentence-transformers / fastembed / torch^)...
+    "%PIP%" uninstall sentence-transformers torch torchvision torchaudio fastembed -y --quiet 2>nul
+    echo [MIGRAZIONE] Cancellazione ChromaDB vecchio ^(embedding incompatibili^)...
+    if exist "%ROOT%\corpus\chroma_db" rmdir /s /q "%ROOT%\corpus\chroma_db"
+    del "%STAMP%" 2>nul
+    set NEED_MIGRATION=
+    echo [OK] Migrazione completata - ri-indicizza tutto dalla GUI
+)
+
 if exist "%STAMP%" goto :deps_ok
 
 echo Installazione dipendenze (prima volta: 2-5 minuti)...
@@ -74,6 +95,13 @@ echo [OK] Dipendenze presenti
 if errorlevel 1 (
     echo [FIX] NumPy 2.x incompatibile con chromadb. Downgrade a 1.x in corso...
     "%PIP%" install "numpy>=1.26.0,<2.0" --quiet
+)
+
+:: Verifica che chromadb sia installato (failsafe)
+"%PYTHON%" -c "import chromadb" 2>nul
+if errorlevel 1 (
+    echo [FIX] chromadb mancante, installazione in corso...
+    "%PIP%" install "chromadb==0.5.0" --quiet
 )
 
 :avvia

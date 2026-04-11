@@ -43,12 +43,11 @@ ddgs>=0.1.0
 psycopg2-binary>=2.9.0
 
 # RAG corpus normativo
-# chromadb + sentence-transformers necessari ANCHE su Render per interrogare il DB
-# pre-indicizzato (caricato via /rag/upload-chroma). L'indicizzazione avviene in
-# locale; su Render si legge solo il DB già costruito (no re-index).
+# chromadb + fastembed necessari ANCHE su Render per interrogare il DB pre-indicizzato.
+# fastembed usa ONNX runtime (non PyTorch) → ~60MB RAM vs ~350MB di sentence-transformers.
+# Stesso modello multilingua: paraphrase-multilingual-MiniLM-L12-v2.
 # NumPy <2.0: chromadb 0.5.x usa np.float_ rimosso in NumPy 2.0.
 chromadb==0.5.0
-sentence-transformers==3.0.0
 langchain-text-splitters==0.2.0
 
 # Crawler notturno — job scheduler asincrono

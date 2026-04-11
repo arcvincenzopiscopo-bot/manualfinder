@@ -1,8 +1,8 @@
 """
 Indicizzazione e gestione del corpus normativo in ChromaDB.
 
-Modello: paraphrase-multilingual-MiniLM-L12-v2 (stesso modello per indicizzazione e query).
-Questo elimina il rischio di mismatch embedding e mantiene RAM < 150MB su Render.
+Modello: all-MiniLM-L6-v2 via DefaultEmbeddingFunction (ONNX integrato in chromadb).
+Zero dipendenze extra, zero symlink Windows, ~30MB RAM su Render.
 
 Cartelle corpus:
   - Primaria:    corpus/raw/   (normativa EU + quaderni extra)
@@ -41,8 +41,9 @@ else:
     # Cartella esistente con le 22 schede INAIL (git-tracked)
     PDF_MANUALI_PATH = str(_PROJECT_ROOT / "pdf manuali")
 
-# Modello unico per indicizzazione e query — zero mismatch
-EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+# Modello: all-MiniLM-L6-v2 via DefaultEmbeddingFunction (ONNX, integrato in chromadb).
+# Non richiede fastembed né PyTorch — zero problemi di symlink su Windows.
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 COLLECTION_NAME = "corpus_normativo"
 
@@ -67,10 +68,9 @@ CORPUS_MANIFEST: dict = {
 # ─── Client ChromaDB (lazy, con graceful failure) ─────────────────────────────
 
 def _is_available() -> bool:
-    """Verifica se chromadb e sentence-transformers sono installati."""
+    """Verifica se chromadb è installato."""
     try:
         import chromadb  # noqa: F401
-        import sentence_transformers  # noqa: F401
         return True
     except ImportError:
         return False
@@ -87,21 +87,24 @@ def get_collection(model: str = EMBEDDING_MODEL):
     """
     Ritorna (o crea) la collection ChromaDB con la funzione di embedding specificata.
     Ritorna None se chromadb non è disponibile.
+
+    Usa DefaultEmbeddingFunction (all-MiniLM-L6-v2 via ONNX, integrato in chromadb).
+    Zero dipendenze extra, zero problemi di symlink su Windows.
     """
     if not _is_available():
         return None
     try:
-        from chromadb.utils import embedding_functions
+        from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
         client = get_chroma_client()
-        ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=model
-        )
+        ef = DefaultEmbeddingFunction()
         return client.get_or_create_collection(
             name=COLLECTION_NAME,
             embedding_function=ef,
             metadata={"hnsw:space": "cosine"},
         )
     except Exception as e:
+        import sys
+        print(f"[ChromaDB ERRORE] {e}", file=sys.stderr, flush=True)
         logger.warning("ChromaDB collection non disponibile: %s", e)
         return None
 

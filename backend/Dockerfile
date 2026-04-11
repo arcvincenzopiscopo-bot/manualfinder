@@ -27,6 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY . .
 
+# Pre-scarica il modello ONNX di chromadb nell'immagine durante la build.
+# DefaultEmbeddingFunction scarica all-MiniLM-L6-v2 (~22MB) al primo uso.
+# Baking nell'immagine evita il download al cold start su Render.
+RUN python -c "from chromadb.utils.embedding_functions import DefaultEmbeddingFunction; DefaultEmbeddingFunction()(['test'])"
+
 # Render fornisce $PORT automaticamente (default 10000)
 # uvicorn legge la porta dalla variabile d'ambiente
 EXPOSE 8000
