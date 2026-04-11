@@ -42,11 +42,10 @@ ddgs>=0.1.0
 # Database (Supabase via connessione diretta Postgres)
 psycopg2-binary>=2.9.0
 
-# RAG corpus normativo — ChromaDB + sentence-transformers
-# chromadb e sentence-transformers vengono caricati lazy: se non installati
-# il sistema degrada silenziosamente (solo dizionario D.Lgs 81/08 attivo).
-chromadb==0.5.0
-sentence-transformers==3.0.0
+# RAG corpus normativo — solo il text splitter è necessario in produzione.
+# chromadb e sentence-transformers sono usati SOLO localmente (indicizzazione).
+# Su Render il corpus viene caricato come ZIP pre-indicizzato via /rag/upload-chroma.
+# chromadb._is_available() verifica la presenza e degrada silenziosamente se assente.
 langchain-text-splitters==0.2.0
 
 # Crawler notturno — job scheduler asincrono

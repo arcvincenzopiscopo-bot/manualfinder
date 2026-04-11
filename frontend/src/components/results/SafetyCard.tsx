@@ -340,7 +340,7 @@ function DocumentiSection({ items }: { items: (DocumentoRichiesto | string)[] })
         {parsed.map((item, i) => {
           const hasL2 = !!(item.validity_requirements || item.irregularity_indicators)
           return (
-            <div key={`${i}_${item.testo?.slice(0, 20) ?? ''}`} style={{
+            <div key={`${i}_${item.documento?.slice(0, 20) ?? ''}`} style={{
               borderBottom: i < parsed.length - 1 ? '1px solid #f3f0ff' : 'none',
               background: checked.has(i) ? '#f3f0ff' : '#fff',
             }}>
