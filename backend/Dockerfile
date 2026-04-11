@@ -16,7 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# build-essential + cmake necessari per compilare chroma-hnswlib (dipendenza C++ di chromadb).
+# Vengono rimossi dopo pip install per mantenere l'immagine leggera.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y --auto-remove build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 
