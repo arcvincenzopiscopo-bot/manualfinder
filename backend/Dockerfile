@@ -33,7 +33,7 @@ COPY . .
 # Soluzione: ignoriamo corpus/chroma_db/ in git e lo ricostruiamo qui su Linux,
 # indicizzando i PDF di "pdf manuali/" (git-tracked, le 22 schede INAIL).
 # Il modello ONNX viene scaricato al primo uso e rimane nell'immagine.
-RUN python -c "\
+RUN RENDER=1 python -c "\
 import sys; sys.path.insert(0, '/app'); \
 from app.services.corpus_indexer import index_all_corpus; \
 results = index_all_corpus(); \

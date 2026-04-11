@@ -26,10 +26,11 @@ logger = logging.getLogger(__name__)
 _IS_RENDER = bool(os.environ.get("RENDER"))
 
 if _IS_RENDER:
-    # ChromaDB e corpus raw sono dentro il repo (git-tracked) per sopravvivere ai deploy.
-    # Il piano free di Render non supporta Persistent Disk → unica opzione è il repo.
-    _HERE_RENDER = Path(__file__).parent  # backend/app/services/
-    _PROJECT_ROOT_RENDER = _HERE_RENDER.parent.parent.parent  # manualfinder/
+    # Docker build context = backend/ → COPY . . mette i file in /app direttamente.
+    # corpus_indexer.py è in /app/app/services/ → 2 livelli su = /app/ (backend root).
+    # NON 3 livelli (che darebbe /, la root del filesystem).
+    _HERE_RENDER = Path(__file__).parent  # /app/app/services/
+    _PROJECT_ROOT_RENDER = _HERE_RENDER.parent.parent  # /app/
     CHROMA_PATH = str(_PROJECT_ROOT_RENDER / "corpus" / "chroma_db")
     CORPUS_PATH = str(_PROJECT_ROOT_RENDER / "corpus" / "raw")
     PDF_MANUALI_PATH = str(_PROJECT_ROOT_RENDER / "pdf manuali")
