@@ -896,7 +896,8 @@ async def generate_safety_card(
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
     else:
         card = await _analyze_pdf_map_reduce(brand, model, producer_bytes, producer_url, provider,
-                                             workplace_context=workplace_context)
+                                             workplace_context=workplace_context,
+                                             is_category_match="categoria" in (producer_source_label or "").lower())
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
 
@@ -1494,19 +1495,22 @@ async def _analyze_pdf_direct(
 async def _analyze_pdf_map_reduce(
     brand: str, model: str, pdf_bytes: bytes, pdf_url: Optional[str], provider: str,
     workplace_context: Optional[dict] = None,
+    is_category_match: bool = False,
 ) -> SafetyCard:
     """Analisi map-reduce per PDF grandi (>100 pagine)."""
     text = pdf_service.extract_safety_relevant_text(pdf_bytes, max_pages=50)
     chunks = pdf_service.chunk_text(text, max_chars=80000)
-    prompt = _build_analysis_prompt(brand, model, workplace_context=workplace_context)
+    prompt = _build_analysis_prompt(brand, model, is_category_match=is_category_match,
+                                    workplace_context=workplace_context)
 
     # MAP: analizza ogni chunk
     partial = []
-    for chunk in chunks[:8]:  # Max 8 chunk (aumentato da 5 per manuali molto grandi)
+    for i, chunk in enumerate(chunks[:8]):  # Max 8 chunk (aumentato da 5 per manuali molto grandi)
         try:
             partial_json = await _call_ai_with_text(chunk, prompt, provider)
             partial.append(json.dumps(partial_json, ensure_ascii=False))
-        except Exception:
+        except Exception as e:
+            logger.warning("map-reduce chunk %d/%d failed for %s %s: %s", i + 1, min(8, len(chunks)), brand, model, e)
             continue
 
     if not partial:

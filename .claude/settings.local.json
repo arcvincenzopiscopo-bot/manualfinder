@@ -28,7 +28,10 @@
       "Bash(grep -n \"CREATE TABLE\" /c/sviluppo/manualfinder/manualfinder/backend/app/services/*.py)",
       "Bash(cat backend/app/local_indexer/*.py)",
       "Bash(find /c/sviluppo/manualfinder/manualfinder/frontend -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" \\\\\\) -exec grep -l \"upload-chroma\\\\|/rag/upload\\\\|chroma\" {} \\\\;)",
-      "Bash(grep -n \"pdf_blob\\\\|pdf_content\\\\|file_data\\\\|bytea\" backend/app/services/*.py backend/app/routers/*.py)"
+      "Bash(grep -n \"pdf_blob\\\\|pdf_content\\\\|file_data\\\\|bytea\" backend/app/services/*.py backend/app/routers/*.py)",
+      "Bash(find /c/sviluppo/manualfinder/manualfinder -name \"*.py\" -exec grep -l \"saved_manuals\" {} \\\\;)",
+      "Bash(cat /c/sviluppo/manualfinder/manualfinder/.python311/Lib/site-packages/**/migrations.py)",
+      "Bash(python -c ':*)"
     ]
   }
 }

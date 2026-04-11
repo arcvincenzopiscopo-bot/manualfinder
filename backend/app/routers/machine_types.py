@@ -13,12 +13,22 @@ POST /api/machine-types/{id}/aliases             → aggiungi alias
 DELETE /api/machine-types/aliases/{alias_id}     → elimina alias
 PATCH /api/machine-types/{id}/flags              → aggiorna flags normativi
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, Field
 from typing import Optional
 
 from app.services import machine_type_service, scan_log_service
 from app.config import settings
+
+
+def _require_admin_token(x_admin_token: str | None = Header(default=None)) -> None:
+    """Verifica X-Admin-Token per endpoint admin."""
+    expected = settings.admin_token
+    if expected and x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="X-Admin-Token non valido o mancante.")
+
+
+_admin = [Depends(_require_admin_token)]
 
 router = APIRouter(prefix="/machine-types", tags=["machine-types"])
 
@@ -89,7 +99,7 @@ def submit_feedback(req: FeedbackRequest):
 
 # ── Admin: statistiche (punto 6) ──────────────────────────────────────────────
 
-@router.get("/admin/stats")
+@router.get("/admin/stats", dependencies=_admin)
 def admin_stats():
     """Statistiche pannello admin: totali, top-10 tipi per utilizzo, pending stale."""
     return machine_type_service.admin_get_stats()
@@ -97,13 +107,13 @@ def admin_stats():
 
 # ── Admin: gestione pending (punto 3) ────────────────────────────────────────
 
-@router.get("/admin/pending")
+@router.get("/admin/pending", dependencies=_admin)
 def admin_list_pending():
     """Lista delle proposte utente in attesa di revisione."""
     return machine_type_service.admin_get_pending()
 
 
-@router.post("/admin/pending/{pending_id}/resolve")
+@router.post("/admin/pending/{pending_id}/resolve", dependencies=_admin)
 def admin_resolve_pending(pending_id: int, req: ResolveRequest):
     """
     Risolve una proposta pending.
@@ -128,13 +138,13 @@ def admin_resolve_pending(pending_id: int, req: ResolveRequest):
 
 # ── Admin: gestione alias (punto 4) ──────────────────────────────────────────
 
-@router.get("/{machine_type_id}/aliases")
+@router.get("/{machine_type_id}/aliases", dependencies=_admin)
 def admin_get_aliases(machine_type_id: int):
     """Lista degli alias di un tipo macchina."""
     return machine_type_service.admin_get_aliases(machine_type_id)
 
 
-@router.post("/{machine_type_id}/aliases")
+@router.post("/{machine_type_id}/aliases", dependencies=_admin)
 def admin_add_alias(machine_type_id: int, req: AddAliasRequest):
     """Aggiunge un alias manuale a un tipo macchina."""
     result = machine_type_service.admin_add_alias(machine_type_id, req.alias_text)
@@ -143,7 +153,7 @@ def admin_add_alias(machine_type_id: int, req: AddAliasRequest):
     return result
 
 
-@router.delete("/aliases/{alias_id}")
+@router.delete("/aliases/{alias_id}", dependencies=_admin)
 def admin_delete_alias(alias_id: int):
     """Elimina un alias."""
     return machine_type_service.admin_delete_alias(alias_id)
@@ -151,7 +161,7 @@ def admin_delete_alias(alias_id: int):
 
 # ── Admin: aggiorna flags normativi (punto 5) ─────────────────────────────────
 
-@router.patch("/{machine_type_id}/flags")
+@router.patch("/{machine_type_id}/flags", dependencies=_admin)
 def admin_update_flags(machine_type_id: int, req: UpdateFlagsRequest):
     """Aggiorna requires_patentino, requires_verifiche, inail_search_hint e vita_utile_anni di un tipo."""
     return machine_type_service.admin_update_flags(
@@ -165,7 +175,7 @@ def admin_update_flags(machine_type_id: int, req: UpdateFlagsRequest):
 
 # ── Vita utile ────────────────────────────────────────────────────────────────
 
-@router.post("/admin/populate-vita-utile")
+@router.post("/admin/populate-vita-utile", dependencies=_admin)
 async def admin_populate_vita_utile():
     """Chiama AI per popolare vita_utile_anni per tutti i tipi con valore NULL."""
     provider = settings.get_analysis_provider()
@@ -174,27 +184,27 @@ async def admin_populate_vita_utile():
 
 # ── Hazard Intelligence ───────────────────────────────────────────────────────
 
-@router.get("/{machine_type_id}/hazard")
+@router.get("/{machine_type_id}/hazard", dependencies=_admin)
 def get_hazard(machine_type_id: int):
     """Restituisce i dati hazard di un tipo macchina."""
     return machine_type_service.get_hazard(machine_type_id) or {}
 
 
-@router.post("/{machine_type_id}/hazard")
+@router.post("/{machine_type_id}/hazard", dependencies=_admin)
 def update_hazard(machine_type_id: int, req: HazardUpdateRequest):
     """Inserisce o aggiorna manualmente i dati hazard di un tipo macchina."""
     machine_type_service.admin_upsert_hazard(machine_type_id, req.categoria_inail, req.focus_testo, "admin")
     return {"ok": True}
 
 
-@router.post("/admin/populate-hazard")
+@router.post("/admin/populate-hazard", dependencies=_admin)
 async def admin_populate_hazard():
     """Chiama AI per generare i dati hazard per tutti i tipi senza dati o dati > 90 giorni."""
     provider = settings.get_analysis_provider()
     return await machine_type_service.admin_populate_hazard(provider)
 
 
-@router.post("/admin/populate-inail-hint")
+@router.post("/admin/populate-inail-hint", dependencies=_admin)
 async def admin_populate_inail_hint():
     """Chiama AI per associare il quaderno INAIL locale a tutti i tipi con inail_search_hint NULL."""
     provider = settings.get_analysis_provider()
@@ -203,19 +213,19 @@ async def admin_populate_inail_hint():
 
 # ── Admin: proposte da disco ──────────────────────────────────────────────────
 
-@router.post("/admin/propose-from-disk")
+@router.post("/admin/propose-from-disk", dependencies=_admin)
 async def admin_propose_from_disk():
     """Scansiona la cartella pdf manuali e crea proposte per i file senza categoria associata."""
     return await machine_type_service.admin_propose_from_disk()
 
 
-@router.get("/admin/disk-proposals")
+@router.get("/admin/disk-proposals", dependencies=_admin)
 def admin_get_disk_proposals():
     """Ritorna le proposte pending generate dalla scansione disco."""
     return machine_type_service.admin_get_pending_proposals()
 
 
-@router.post("/admin/disk-proposals/{proposal_id}/resolve")
+@router.post("/admin/disk-proposals/{proposal_id}/resolve", dependencies=_admin)
 def admin_resolve_disk_proposal(proposal_id: int, body: dict):
     """
     Risolve una proposta.
@@ -230,7 +240,7 @@ def admin_resolve_disk_proposal(proposal_id: int, body: dict):
 
 # ── Admin: scan log (storico analisi) ────────────────────────────────────────
 
-@router.get("/admin/scan-log")
+@router.get("/admin/scan-log", dependencies=_admin)
 def admin_scan_log(limit: int = 100, fonte: Optional[str] = None, exclude_exact: bool = False):
     """
     Lista scansioni per il pannello admin (escluse le dismissed).
@@ -240,7 +250,7 @@ def admin_scan_log(limit: int = 100, fonte: Optional[str] = None, exclude_exact:
     return scan_log_service.get_admin_scans(limit=limit, fonte_filter=fonte, exclude_exact=exclude_exact)
 
 
-@router.post("/admin/scan-log/{scan_id}/dismiss")
+@router.post("/admin/scan-log/{scan_id}/dismiss", dependencies=_admin)
 def admin_dismiss_scan(scan_id: int):
     """Nasconde una scansione dal pannello admin (non la cancella dal DB)."""
     ok = scan_log_service.dismiss_scan(scan_id)
@@ -249,7 +259,7 @@ def admin_dismiss_scan(scan_id: int):
     return {"ok": True}
 
 
-@router.get("/admin/scan-log/{scan_id}/image")
+@router.get("/admin/scan-log/{scan_id}/image", dependencies=_admin)
 def admin_scan_image(scan_id: int):
     """
     Restituisce la foto dell'etichetta compressa (JPEG) per una scansione.
@@ -264,7 +274,7 @@ def admin_scan_image(scan_id: int):
 
 # ── Lista file INAIL locali ───────────────────────────────────────────────────
 
-@router.get("/inail-local-files")
+@router.get("/inail-local-files", dependencies=_admin)
 def list_inail_local_files():
     """
     Restituisce la lista dei PDF INAIL presenti nella cartella locale.

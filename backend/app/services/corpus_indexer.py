@@ -370,7 +370,7 @@ def cleanup_orphaned_documents() -> dict:
     """
     Rimuove da ChromaDB i chunk di file che non esistono più su disco.
 
-    Scansiona tutti i metadati nella collection e confronta il campo 'filepath'
+    Scansiona tutti i metadati nella collection e confronta il campo 'filename'
     con i file presenti in CORPUS_PATH e PDF_MANUALI_PATH. I chunk di file non
     più presenti vengono eliminati.
 
@@ -387,19 +387,28 @@ def cleanup_orphaned_documents() -> dict:
     except Exception as e:
         return {"removed_files": [], "removed_chunks": 0, "error": str(e)}
 
-    # Raggruppa gli ID per filepath
-    filepath_to_ids: dict[str, list[str]] = {}
-    for meta, chunk_id in zip(metadatas, ids):
-        fp = meta.get("filepath", "")
-        if fp:
-            filepath_to_ids.setdefault(fp, []).append(chunk_id)
+    # Costruisci set di filename attualmente su disco
+    disk_filenames: set[str] = set()
+    for search_dir in [CORPUS_PATH, PDF_MANUALI_PATH]:
+        if os.path.exists(search_dir):
+            for root, _, files in os.walk(search_dir):
+                for f in files:
+                    if f.lower().endswith(".pdf"):
+                        disk_filenames.add(f)
 
-    # Determina quali filepath non esistono più su disco
+    # Raggruppa gli ID per filename
+    filename_to_ids: dict[str, list[str]] = {}
+    for meta, chunk_id in zip(metadatas, ids):
+        fn = meta.get("filename", "")
+        if fn:
+            filename_to_ids.setdefault(fn, []).append(chunk_id)
+
+    # Determina quali filename non esistono più su disco
     removed_files = []
     ids_to_delete: list[str] = []
-    for filepath, chunk_ids in filepath_to_ids.items():
-        if not os.path.exists(filepath):
-            removed_files.append(filepath)
+    for filename, chunk_ids in filename_to_ids.items():
+        if filename not in disk_filenames:
+            removed_files.append(filename)
             ids_to_delete.extend(chunk_ids)
 
     if not ids_to_delete:
