@@ -9,12 +9,17 @@
 .env.development
 backend/.env
 
-# ── Python: ambiente virtuale (290MB, NON caricare) ──────────
+# ── Python: ambienti virtuali (NON caricare) ─────────────────
 backend/venv/
 backend/.venv/
+backend/venv311/
 venv/
 .venv/
 env/
+
+# ── Python standalone (scaricato dal bat, ~50MB) ─────────────
+.python311/
+.python311.zip
 
 # ── Python: bytecode e cache ─────────────────────────────────
 __pycache__/
@@ -83,3 +88,9 @@ coverage/
 corpus/raw/
 corpus/chroma_db/
 corpus/chroma_db_backup/
+
+# ── Indicizzatore locale — file non necessari nel repo ───────
+**/.req_stamp
+_upload_tmp.zip
+avvia_indicizzatore.ps1
+LANCIA_INDICIZZATORE.cmd
