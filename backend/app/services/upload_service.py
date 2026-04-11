@@ -172,6 +172,9 @@ def save_uploaded_pdf(
     Salva il PDF nella cartella manuali_locali/ (con compressione massima) e registra su Supabase.
     Ritorna { filename, url, db_id }.
     """
+    if not pdf_bytes.startswith(b"%PDF"):
+        raise ValueError("Il file caricato non è un PDF valido (magic bytes mancanti).")
+
     _ensure_upload_dir()
 
     compressed_bytes = _compress_pdf(pdf_bytes)

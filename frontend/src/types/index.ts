@@ -13,6 +13,20 @@ export interface PlateOCRResult {
   machine_category: 'cantiere' | 'industriale' | 'agricola' | 'sollevamento' | 'altro' | null
   qr_url: string | null
   qr_urls: string[]
+  // Flag incertezza OCR: True se meno di 2/4 varianti multishot concordano sul campo
+  serial_number_uncertain?: boolean
+  year_uncertain?: boolean
+  model_uncertain?: boolean
+}
+
+// Metadati fonte strategia A–F — popolati da source_manager nel backend
+export interface SourceMetadata {
+  strategy: 'A' | 'B' | 'C' | 'D' | 'E' | 'F'
+  badge_label: string
+  badge_color: string
+  disclaimer: string
+  affidabilita: number  // 0-100
+  fonte_tipo: string
 }
 
 export interface MachineType {
@@ -35,6 +49,8 @@ export interface ChecklistItem {
 export interface DocumentoRichiesto {
   documento: string      // "Manuale d'uso e manutenzione in italiano"
   smart_hint: string     // "Verificare che il numero di serie coincida con l'etichetta"
+  validity_requirements?: string    // Elementi obbligatori per la validità del documento
+  irregularity_indicators?: string  // Segnali di non conformità o non aggiornamento
 }
 
 export interface ManualSearchResult {
@@ -53,6 +69,11 @@ export interface SafetyItem {
   // Classificazione rischio ISO 12100 (presente solo su rischi_principali)
   probabilita?: 'P1' | 'P2' | 'P3'  // P1=raro, P2=possibile, P3=probabile
   gravita?: 'S1' | 'S2' | 'S3'      // S1=lieve, S2=grave, S3=mortale/invalidante
+  // DPI: destinatario del dispositivo di protezione individuale
+  recipient?: 'operatore' | 'personale_a_terra' | 'entrambi'
+  // Procedure emergenza: tier della fonte e disclaimer AI
+  source_tier?: 'manuale' | 'inail' | 'ai'
+  ai_disclaimer?: boolean
 }
 
 // Dispositivo di sicurezza installato sulla macchina dal costruttore
@@ -139,6 +160,17 @@ export interface SafetyCard {
   vita_utile_anni?: number | null
   focus_rischi_categoria?: string | null
   categoria_inail?: string | null
+  // Metadati fonte strategia A–F
+  source_metadata?: SourceMetadata | null
+}
+
+// Contestualizzazione sopralluogo (persistita in localStorage)
+export type WorkplaceCategory = 'cantiere' | 'industria' | 'logistica' | 'altro'
+export type WorkplacePhase = 'scavo' | 'fondazioni' | 'strutture' | 'finiture' | 'demolizione' | 'altro'
+
+export interface WorkplaceContext {
+  category: WorkplaceCategory
+  phase?: WorkplacePhase  // solo se category === 'cantiere'
 }
 
 export interface SSEEvent {

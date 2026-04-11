@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RAG Corpus Indexer — ManualFinder</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+    header { background: #1e293b; border-bottom: 1px solid #334155;
+             padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 1.2rem; font-weight: 700; color: #f8fafc; }
+    header .badge { background: #3b82f6; color: white; font-size: 0.7rem;
+                    padding: 2px 8px; border-radius: 9999px; font-weight: 600; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+    /* Stats bar */
+    .stats-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 16px; }
+    .stat-card .label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-card .value { font-size: 1.8rem; font-weight: 700; color: #f8fafc; margin-top: 4px; }
+    .stat-card .sub { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+
+    /* Actions */
+    .actions { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+    .btn { padding: 10px 18px; border-radius: 8px; border: none; cursor: pointer;
+           font-size: 0.875rem; font-weight: 600; transition: all 0.15s; display: inline-flex;
+           align-items: center; gap: 6px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #2563eb; }
+    .btn-secondary { background: #475569; color: white; }
+    .btn-secondary:hover:not(:disabled) { background: #334155; }
+    .btn-success { background: #10b981; color: white; }
+    .btn-success:hover:not(:disabled) { background: #059669; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover:not(:disabled) { background: #dc2626; }
+
+    /* Upload zone */
+    .upload-zone { border: 2px dashed #334155; border-radius: 10px; padding: 24px;
+                   text-align: center; cursor: pointer; transition: all 0.15s; margin-bottom: 24px; }
+    .upload-zone:hover, .upload-zone.drag-over { border-color: #3b82f6; background: #1e293b; }
+    .upload-zone p { color: #64748b; font-size: 0.875rem; }
+    .upload-zone strong { color: #94a3b8; }
+    .upload-zone select { background: #334155; border: none; color: #e2e8f0;
+                          padding: 6px 12px; border-radius: 6px; margin-top: 8px; }
+
+    /* Log / Progress */
+    .log-box { background: #0f172a; border: 1px solid #334155; border-radius: 10px;
+               padding: 16px; height: 200px; overflow-y: auto; font-family: monospace;
+               font-size: 0.8rem; line-height: 1.6; margin-bottom: 24px; }
+    .log-box .log-line { color: #94a3b8; }
+    .log-box .log-ok { color: #10b981; }
+    .log-box .log-skip { color: #f59e0b; }
+    .log-box .log-err { color: #ef4444; }
+    .log-box .log-done { color: #3b82f6; font-weight: 700; }
+
+    /* File list */
+    .section-title { font-size: 0.875rem; font-weight: 700; color: #94a3b8;
+                     text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+    .file-table { width: 100%; border-collapse: collapse; }
+    .file-table th { text-align: left; font-size: 0.75rem; color: #64748b;
+                     padding: 8px 12px; border-bottom: 1px solid #1e293b;
+                     text-transform: uppercase; letter-spacing: 0.05em; }
+    .file-table td { padding: 10px 12px; border-bottom: 1px solid #1e293b; font-size: 0.8rem; }
+    .file-table tr:last-child td { border-bottom: none; }
+    .file-table tr:hover td { background: #1e293b; }
+
+    .badge-indexed { background: #064e3b; color: #10b981; padding: 2px 8px;
+                     border-radius: 9999px; font-size: 0.7rem; font-weight: 600; }
+    .badge-pending { background: #431407; color: #f97316; padding: 2px 8px;
+                     border-radius: 9999px; font-size: 0.7rem; font-weight: 600; }
+
+    .fonti-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .fonte-chip { background: #1e3a5f; color: #93c5fd; font-size: 0.75rem;
+                  padding: 3px 10px; border-radius: 6px; }
+    .fonte-chip.inail { background: #1e3a2f; color: #6ee7b7; }
+
+    .info-box { background: #172033; border: 1px solid #1e3a5f; border-radius: 8px;
+                padding: 12px 16px; margin-bottom: 24px; font-size: 0.8rem; color: #93c5fd; }
+    .info-box strong { color: #bfdbfe; }
+
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3);
+               border-top-color: white; border-radius: 50%; animation: spin 0.6s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .empty-state { text-align: center; padding: 40px; color: #475569; }
+    .empty-state .icon { font-size: 3rem; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>📚</div>
+  <h1>RAG Corpus Indexer</h1>
+  <span class="badge">locale</span>
+  <span style="margin-left:auto; color:#64748b; font-size:0.8rem;" id="model-label">Caricamento...</span>
+</header>
+
+<div class="container">
+
+  <div class="info-box">
+    <strong>Come funziona:</strong>
+    La GUI legge automaticamente le 22 schede INAIL da <code>pdf manuali/</code> (già nel progetto)
+    + i PDF in <code>corpus/raw/</code> (dove metti la Direttiva Macchine e altri documenti).
+    Clicca <strong>Indicizza tutto</strong>, poi <strong>Esporta ZIP ChromaDB</strong>
+    e caricalo nel pannello admin → tab Corpus.
+    Il corpus arricchisce il prompt AI con citazioni verificabili — senza toccare l'analisi dei PDF dei produttori.
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-bar">
+    <div class="stat-card">
+      <div class="label">Chunk indicizzati</div>
+      <div class="value" id="stat-chunks">—</div>
+      <div class="sub">nel corpus ChromaDB</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">PDF nel corpus</div>
+      <div class="value" id="stat-pdfs">—</div>
+      <div class="sub" id="stat-pdfs-sub">in corpus/raw/</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">PDF indicizzati</div>
+      <div class="value" id="stat-indexed">—</div>
+      <div class="sub">su totale trovati</div>
+    </div>
+  </div>
+
+  <!-- Fonti -->
+  <div id="fonti-section" style="display:none; margin-bottom:24px;">
+    <div class="section-title">Fonti nel corpus</div>
+    <div class="fonti-list" id="fonti-list"></div>
+  </div>
+
+  <!-- Actions -->
+  <div class="actions">
+    <button class="btn btn-primary" id="btn-index-all" onclick="indexAll()">
+      🚀 Indicizza tutto
+    </button>
+    <button class="btn btn-success" id="btn-export" onclick="exportZip()">
+      📦 Esporta ZIP ChromaDB
+    </button>
+    <button class="btn btn-secondary" onclick="openFolder()">
+      📁 Apri cartella corpus
+    </button>
+    <button class="btn btn-secondary" onclick="loadStatus()">
+      🔄 Aggiorna
+    </button>
+  </div>
+
+  <!-- Log -->
+  <div class="section-title">Log indicizzazione</div>
+  <div class="log-box" id="log-box">
+    <div class="log-line">Pronto. Clicca "Indicizza tutto" per iniziare.</div>
+  </div>
+
+  <!-- Upload drag & drop -->
+  <div class="section-title">Aggiungi PDF al corpus</div>
+  <div class="upload-zone" id="drop-zone"
+       ondrop="handleDrop(event)" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)"
+       onclick="document.getElementById('file-input').click()">
+    <p><strong>Trascina un PDF qui</strong> o clicca per selezionare</p>
+    <p style="margin-top:6px;">
+      Sottocartella:
+      <select id="subfolder" onclick="event.stopPropagation()">
+        <option value="quaderni_inail">📋 Quaderno INAIL</option>
+        <option value="normativa">⚖️ Normativa (Direttiva, Regolamenti)</option>
+      </select>
+    </p>
+    <input type="file" id="file-input" accept=".pdf" style="display:none" onchange="handleFileSelect(event)">
+  </div>
+
+  <!-- Lista file -->
+  <div class="section-title">PDF trovati in corpus/raw/</div>
+  <div id="file-list-container">
+    <div class="empty-state">
+      <div class="icon">📂</div>
+      <div>Caricamento in corso...</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const API = 'http://127.0.0.1:7777';
+  let indexing = false;
+
+  // ─── Load status ───────────────────────────────────────────────────────────
+
+  async function loadStatus() {
+    try {
+      const r = await fetch(`${API}/status`);
+      const data = await r.json();
+      renderStatus(data);
+    } catch (e) {
+      log('❌ Impossibile connettersi al server: ' + e.message, 'err');
+    }
+  }
+
+  function renderStatus(data) {
+    document.getElementById('model-label').textContent = `Modello: ${data.model || 'MiniLM'}`;
+    document.getElementById('stat-chunks').textContent = data.total_chunks ?? 0;
+
+    const files = data.pdf_files || [];
+    const indexed = files.filter(f => f.indexed).length;
+    document.getElementById('stat-pdfs').textContent = files.length;
+    document.getElementById('stat-indexed').textContent = `${indexed}/${files.length}`;
+    document.getElementById('stat-pdfs-sub').textContent = data.corpus_path || '';
+
+    // Fonti
+    const fonti = data.fonti || [];
+    if (fonti.length > 0) {
+      document.getElementById('fonti-section').style.display = '';
+      const list = document.getElementById('fonti-list');
+      list.innerHTML = fonti.map(f => {
+        const cls = f.tipo === 'quaderno_inail' ? 'fonte-chip inail' : 'fonte-chip';
+        return `<span class="${cls}">${f.fonte}</span>`;
+      }).join('');
+    } else {
+      document.getElementById('fonti-section').style.display = 'none';
+    }
+
+    // Tabella file
+    const container = document.getElementById('file-list-container');
+    if (files.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="icon">📂</div>
+          <div>Nessun PDF trovato in <code>${data.corpus_path}</code></div>
+          <div style="margin-top:8px;color:#334155;">
+            Crea le cartelle <code>corpus/raw/quaderni_inail/</code> e <code>corpus/raw/normativa/</code>
+            e copia i PDF INAIL e la Direttiva Macchine.
+          </div>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = `
+      <table class="file-table">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Cartella</th>
+            <th>Dimensione</th>
+            <th>Stato</th>
+            <th>Azione</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${files.map(f => `
+            <tr>
+              <td>${f.filename}</td>
+              <td style="color:#64748b;">${f.rel_path.replace(f.filename,'') || '/'}</td>
+              <td style="color:#64748b;">${f.size_kb} KB</td>
+              <td>
+                ${f.indexed
+                  ? '<span class="badge-indexed">✓ Indicizzato</span>'
+                  : '<span class="badge-pending">⏳ Da indicizzare</span>'}
+              </td>
+              <td>
+                <button class="btn btn-secondary" style="padding:4px 10px;font-size:0.75rem;"
+                        onclick="indexSingle('${f.filename.replace(/'/g,"\\'")}')">
+                  ${f.indexed ? '🔄 Re-indicizza' : '📥 Indicizza'}
+                </button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  // ─── Indicizzazione ────────────────────────────────────────────────────────
+
+  function log(msg, type = 'line') {
+    const box = document.getElementById('log-box');
+    const div = document.createElement('div');
+    div.className = `log-${type}`;
+    div.textContent = msg;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  async function indexAll() {
+    if (indexing) return;
+    indexing = true;
+    const btn = document.getElementById('btn-index-all');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Indicizzazione...';
+
+    document.getElementById('log-box').innerHTML = '';
+    log('🚀 Avvio indicizzazione completa...', 'line');
+
+    try {
+      const resp = await fetch(`${API}/index-all`, { method: 'POST' });
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value);
+        const lines = text.split('\n');
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.type === 'result') {
+              const type = evt.skipped ? 'skip' : 'ok';
+              log(evt.msg, type);
+            } else if (evt.type === 'done') {
+              log('✅ ' + evt.msg + ` — Chunk totali: ${evt.stats?.total_chunks ?? '?'}`, 'done');
+              loadStatus();
+            } else if (evt.msg) {
+              log(evt.msg, 'line');
+            }
+          } catch {}
+        }
+      }
+    } catch (e) {
+      log('❌ Errore: ' + e.message, 'err');
+    } finally {
+      indexing = false;
+      btn.disabled = false;
+      btn.innerHTML = '🚀 Indicizza tutto';
+    }
+  }
+
+  async function indexSingle(filename) {
+    log(`📥 Indicizzazione: ${filename}`, 'line');
+    try {
+      const r = await fetch(`${API}/index-file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename }),
+      });
+      const data = await r.json();
+      if (data.skipped) {
+        log(`⏭ ${filename}: ${data.reason}`, 'skip');
+      } else {
+        log(`✅ ${filename}: ${data.chunks} chunk`, 'ok');
+      }
+      loadStatus();
+    } catch (e) {
+      log(`❌ ${filename}: ${e.message}`, 'err');
+    }
+  }
+
+  // ─── Export ZIP ────────────────────────────────────────────────────────────
+
+  async function exportZip() {
+    log('📦 Generazione ZIP ChromaDB...', 'line');
+    const btn = document.getElementById('btn-export');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Generazione...';
+    try {
+      const r = await fetch(`${API}/export-zip`);
+      if (!r.ok) {
+        const err = await r.json();
+        throw new Error(err.detail || r.statusText);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'chroma_db.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+      log('✅ ZIP scaricato: chroma_db.zip — Caricalo nel pannello admin → tab Corpus', 'done');
+    } catch (e) {
+      log('❌ Export fallito: ' + e.message, 'err');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '📦 Esporta ZIP ChromaDB';
+    }
+  }
+
+  // ─── Upload drag & drop ────────────────────────────────────────────────────
+
+  function handleDragOver(e) {
+    e.preventDefault();
+    document.getElementById('drop-zone').classList.add('drag-over');
+  }
+
+  function handleDragLeave(e) {
+    document.getElementById('drop-zone').classList.remove('drag-over');
+  }
+
+  async function handleDrop(e) {
+    e.preventDefault();
+    document.getElementById('drop-zone').classList.remove('drag-over');
+    const files = e.dataTransfer.files;
+    for (const file of files) {
+      if (file.name.endsWith('.pdf')) await uploadFile(file);
+    }
+  }
+
+  async function handleFileSelect(e) {
+    for (const file of e.target.files) {
+      await uploadFile(file);
+    }
+    e.target.value = '';
+  }
+
+  async function uploadFile(file) {
+    const subfolder = document.getElementById('subfolder').value;
+    log(`📤 Upload: ${file.name} → ${subfolder}/`, 'line');
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('subfolder', subfolder);
+    try {
+      const r = await fetch(`${API}/upload-pdf`, { method: 'POST', body: fd });
+      const data = await r.json();
+      if (data.skipped) {
+        log(`⏭ ${file.name}: ${data.reason}`, 'skip');
+      } else {
+        log(`✅ ${file.name}: caricato e indicizzato (${data.chunks} chunk)`, 'ok');
+      }
+      loadStatus();
+    } catch (e) {
+      log(`❌ Upload fallito: ${e.message}`, 'err');
+    }
+  }
+
+  // ─── Apri cartella ────────────────────────────────────────────────────────
+
+  async function openFolder() {
+    try {
+      await fetch(`${API}/open-corpus-folder`, { method: 'POST' });
+    } catch {}
+  }
+
+  // ─── Init ─────────────────────────────────────────────────────────────────
+
+  loadStatus();
+  setInterval(loadStatus, 10000);  // aggiorna ogni 10s
+</script>
+</body>
+</html>

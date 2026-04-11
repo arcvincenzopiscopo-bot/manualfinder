@@ -42,9 +42,11 @@ export function ExportButton({ card, onBeforeExport, onAfterExport }: Props) {
 
   const handleExport = async () => {
     setLoading(true)
-    // Attiva isPrinting in SafetyCard per rendere visibili entrambe le viste durante l'export
+    // Attiva isPrinting in SafetyCard per rendere visibili entrambe le viste durante l'export.
+    // Il doppio rAF garantisce che React abbia completato il re-render e il browser abbia dipinto
+    // prima che html2canvas catturi il DOM.
     onBeforeExport?.()
-    await new Promise(r => setTimeout(r, 80)) // attendi re-render con entrambe le sezioni
+    await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())))
     try {
       // Trova il container della scheda nel DOM
       const cardEl = document.querySelector<HTMLElement>('.safety-card-printable')
@@ -129,7 +131,6 @@ export function ExportButton({ card, onBeforeExport, onAfterExport }: Props) {
 
         prevSrcY_px = srcY_px
       }
-      void prevSrcY_px
 
       // ── 4. Salva ──────────────────────────────────────────────────────────
       const filename = `scheda_${card.brand}_${card.model}_${new Date().toISOString().slice(0, 10)}.pdf`

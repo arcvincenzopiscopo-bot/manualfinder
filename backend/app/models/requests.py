@@ -44,3 +44,4 @@ class FullAnalysisRequest(BaseModel):
     qr_urls: List[str] = []               # Tutti gli URL decodificati da QR Code sulla targa
     preferred_language: str = "it"
     session_id: Optional[str] = None      # ID sessione ispettore (opzionale, per audit e batch)
+    workplace_context: Optional[dict] = None  # {category, phase?} — contesto sopralluogo per sessione

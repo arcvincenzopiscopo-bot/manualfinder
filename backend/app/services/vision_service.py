@@ -4,10 +4,13 @@ Estrae: brand, modello, numero di serie, anno di fabbricazione.
 """
 import asyncio
 import json
+import logging
 import re
 from typing import Optional
 from app.config import settings
 from app.models.responses import PlateOCRResult
+
+logger = logging.getLogger(__name__)
 
 PLATE_OCR_PROMPT = """Sei un sistema OCR specializzato nel leggere targhe di identificazione di macchinari industriali e da cantiere.
 
@@ -231,8 +234,8 @@ async def validate_plate_image(image_base64: str) -> bool:
             )
             answer = (resp.text or "").strip().upper()
             return answer.startswith("S")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("validate_plate_image: validazione AI fallita (%s) — immagine accettata per default", e)
     # Se la validazione fallisce (errore rete, provider disattivato), lascia passare
     return True
 
@@ -359,7 +362,30 @@ async def extract_plate_info_multishot(image_base64: str) -> PlateOCRResult:
         if majority_val:
             best = best.model_copy(update={field: majority_val})
 
+    # Flag di incertezza: marca i campi su cui meno di 2/4 varianti concordano
+    best = _add_uncertain_flags(best, valid)
+
     return best
+
+
+def _add_uncertain_flags(result: PlateOCRResult, variants: list) -> PlateOCRResult:
+    """
+    Marca uncertain=True i campi con accordo < 2 varianti su 4.
+    Campi controllati: serial_number, year, model.
+    """
+    updates: dict = {}
+    for field in ("serial_number", "year", "model"):
+        values = [(getattr(r, field) or "").strip().lower() for r in variants if getattr(r, field)]
+        if not values:
+            # Campo mai letto da nessuna variante — potenzialmente incerto
+            continue
+        from collections import Counter
+        top_count = Counter(values).most_common(1)[0][1]
+        if top_count < 2:
+            updates[f"{field}_uncertain"] = True
+    if updates:
+        return result.model_copy(update=updates)
+    return result
 
 
 # ── Lookup deterministico brand → tipo macchina ──────────────────────────────

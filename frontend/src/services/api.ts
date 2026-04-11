@@ -1,4 +1,4 @@
-import type { ManualSearchResult, MachineType, PlateOCRResult, SSEEvent } from '../types'
+import type { ManualSearchResult, MachineType, PlateOCRResult, SSEEvent, WorkplaceContext } from '../types'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
@@ -41,6 +41,7 @@ export async function analyzeFullSSE(
     year?: string | null
     serialNumber?: string | null
     qrUrls?: string[]
+    workplaceContext?: WorkplaceContext
   }
 ): Promise<void> {
   const response = await fetch(`${BASE_URL}/analyze/full`, {
@@ -57,6 +58,7 @@ export async function analyzeFullSSE(
       preferred_language: options.preferredLanguage ?? 'it',
       qr_urls: options.qrUrls ?? [],
       qr_url: options.qrUrls?.[0] ?? null,
+      workplace_context: options.workplaceContext ?? null,
     }),
     signal: options.signal,
   })
@@ -69,25 +71,29 @@ export async function analyzeFullSSE(
   const decoder = new TextDecoder()
   let buffer = ''
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
 
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
 
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const jsonStr = line.slice(6).trim()
-        if (!jsonStr) continue
-        try {
-          options.onEvent(JSON.parse(jsonStr) as SSEEvent)
-        } catch {
-          // ignora eventi malformati
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const jsonStr = line.slice(6).trim()
+          if (!jsonStr) continue
+          try {
+            options.onEvent(JSON.parse(jsonStr) as SSEEvent)
+          } catch {
+            // ignora eventi malformati
+          }
         }
       }
     }
+  } finally {
+    reader.cancel()
   }
 }
 

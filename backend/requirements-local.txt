@@ -1,0 +1,22 @@
+# Dipendenze per la GUI locale di indicizzazione corpus RAG.
+# Installare SOLO in locale — NON su Render (già coperto da requirements.txt).
+#
+# Installazione:
+#   pip install -r requirements-local.txt
+#
+# Avvio GUI:
+#   cd backend
+#   python -m app.local_indexer
+
+# RAG indexing
+chromadb==0.5.0
+sentence-transformers==3.0.0
+langchain-text-splitters==0.2.0
+
+# PDF processing (già in requirements.txt su Render, serve anche in locale)
+PyMuPDF>=1.24.0
+
+# GUI server (già in requirements.txt su Render)
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9

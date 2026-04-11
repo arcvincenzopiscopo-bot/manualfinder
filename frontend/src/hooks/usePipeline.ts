@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { analyzeFullSSE } from '../services/api'
-import type { PipelineState, PipelineStep, SSEEvent, ManualSearchResult, SafetyCard } from '../types'
+import type { PipelineState, PipelineStep, SSEEvent, ManualSearchResult, SafetyCard, WorkplaceContext } from '../types'
 
 // I 3 step della pipeline (OCR è separato)
 const INITIAL_STEPS: PipelineStep[] = [
@@ -61,6 +61,7 @@ export function usePipeline() {
     imageBase64: string, brand: string, model: string,
     machineType?: string, qrUrls?: string[], machineTypeId?: number | null,
     serialNumber?: string | null, year?: string | null,
+    workplaceContext?: WorkplaceContext,
   ) => {
     abortRef.current?.abort()
     const controller = new AbortController()
@@ -77,6 +78,7 @@ export function usePipeline() {
         qrUrls,
         serialNumber,
         year,
+        workplaceContext,
       })
     } catch (err) {
       if ((err as Error).name === 'AbortError') return

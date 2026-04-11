@@ -41,3 +41,13 @@ ddgs>=0.1.0
 
 # Database (Supabase via connessione diretta Postgres)
 psycopg2-binary>=2.9.0
+
+# RAG corpus normativo — ChromaDB + sentence-transformers
+# chromadb e sentence-transformers vengono caricati lazy: se non installati
+# il sistema degrada silenziosamente (solo dizionario D.Lgs 81/08 attivo).
+chromadb==0.5.0
+sentence-transformers==3.0.0
+langchain-text-splitters==0.2.0
+
+# Crawler notturno — job scheduler asincrono
+apscheduler>=3.10.0

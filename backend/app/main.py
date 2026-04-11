@@ -1,11 +1,18 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from app.routers import analyze, manual, health, manuals, machine_types
+from app.routers import analyze, manual, health, manuals, machine_types, rag_admin, feedback
 from app.config import settings
+
+
+def require_admin_token(x_admin_token: str | None = Header(default=None)) -> None:
+    """Dependency: verifica X-Admin-Token se admin_token è configurato in settings."""
+    expected = settings.admin_token
+    if expected and x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="X-Admin-Token non valido o mancante.")
 
 # Rate limiting
 limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.rate_limit_per_minute}/minute"])
@@ -42,6 +49,8 @@ app.include_router(analyze.router, prefix="/analyze")
 app.include_router(manual.router, prefix="/manual")
 app.include_router(manuals.router, prefix="/manuals")
 app.include_router(machine_types.router)
+app.include_router(rag_admin.router, dependencies=[Depends(require_admin_token)])
+app.include_router(feedback.router, prefix="/feedback")
 
 
 @app.on_event("startup")
@@ -52,6 +61,13 @@ async def on_startup():
         search_cache._store.clear()
     elif hasattr(search_cache, "_fallback"):
         search_cache._fallback._store.clear()
+    # Esegui migrazioni DB versionato (idempotente)
+    try:
+        from app.db.migrations import run_migrations
+        run_migrations()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Migrazioni DB fallite: %s", e)
     # Inizializza catalogo tipi macchina: crea tabelle + seed + carica alias map
     try:
         from app.services.machine_type_service import _ensure_tables
@@ -59,9 +75,32 @@ async def on_startup():
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning("machine_type_service init fallito: %s", e)
+    # Invalida cache RAG — corpus potrebbe essere stato aggiornato offline
+    try:
+        from app.services import rag_service
+        rag_service.invalidate_cache()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("RAG cache invalidation fallita: %s", e)
+    # Avvia crawler scheduler notturno
+    try:
+        from app.services.crawl_scheduler import start_scheduler
+        start_scheduler()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Crawl scheduler non avviato: %s", e)
 
 
-@app.get("/admin/cache-clear")
+@app.on_event("shutdown")
+async def on_shutdown():
+    try:
+        from app.services.crawl_scheduler import stop_scheduler
+        stop_scheduler()
+    except Exception:
+        pass
+
+
+@app.get("/admin/cache-clear", dependencies=[Depends(require_admin_token)])
 async def cache_clear():
     """Svuota manualmente la cache di ricerca (utile dopo aggiornamenti del codice)."""
     from app.services.cache_service import search_cache

@@ -115,7 +115,7 @@ const badge = (color: string, bg: string): React.CSSProperties => ({
 // ── Componente principale ─────────────────────────────────────────────────────
 
 export function AdminPanel() {
-  const [tab, setTab] = useState<'stats' | 'pending' | 'diskproposals' | 'aliases' | 'flags' | 'scans' | 'log'>('stats')
+  const [tab, setTab] = useState<'stats' | 'pending' | 'diskproposals' | 'aliases' | 'flags' | 'scans' | 'log' | 'corpus'>('stats')
 
   return (
     <div style={{ background: COLORS.bg, minHeight: '100vh', padding: '0 0 40px' }}>
@@ -155,6 +155,7 @@ export function AdminPanel() {
           { id: 'flags',   label: '⚖️ Flags normativi' },
           { id: 'scans',   label: '📨 Ricerche' },
           { id: 'log',     label: '🗂 Log scansioni' },
+          { id: 'corpus',  label: '📚 Corpus RAG' },
         ] as const).map(t => (
           <button
             key={t.id}
@@ -184,6 +185,7 @@ export function AdminPanel() {
         {tab === 'flags'   && <TabFlags />}
         {tab === 'scans'   && <TabScans />}
         {tab === 'log'     && <TabLog />}
+        {tab === 'corpus'  && <TabCorpus />}
       </div>
     </div>
   )
@@ -1400,6 +1402,286 @@ function TabLog() {
           </table>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Tab 8: Corpus RAG ─────────────────────────────────────────────────────────
+
+interface RagStats {
+  total_chunks: number
+  fonti: Array<{ fonte: string; filename: string; tipo: string }>
+  available: boolean
+}
+
+function TabCorpus() {
+  const [stats, setStats] = useState<RagStats | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [uploadMsg, setUploadMsg] = useState('')
+  const [indexingAll, setIndexingAll] = useState(false)
+  const [deletingFile, setDeletingFile] = useState<string | null>(null)
+
+  const ragFetch = async (path: string, opts?: RequestInit) => {
+    const r = await fetch(`${BASE_URL}/rag${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    })
+    if (!r.ok) {
+      const t = await r.text().catch(() => r.statusText)
+      throw new Error(`HTTP ${r.status}: ${t}`)
+    }
+    return r.json()
+  }
+
+  const loadStats = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await ragFetch('/stats')
+      setStats(data)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadStats() }, [loadStats])
+
+  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const subfolder = (document.getElementById('rag-subfolder') as HTMLSelectElement)?.value || 'quaderni_inail'
+    setUploading(true)
+    setUploadMsg('')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const r = await fetch(`${BASE_URL}/rag/upload-and-index?subfolder=${encodeURIComponent(subfolder)}`, {
+        method: 'POST',
+        body: fd,
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = await r.json()
+      const msg = data.skipped
+        ? `⏭ Saltato: ${data.reason}`
+        : `✅ ${file.name}: ${data.chunks} chunk indicizzati`
+      setUploadMsg(msg)
+      loadStats()
+    } catch (e: unknown) {
+      setUploadMsg(`❌ ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  const handleZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    setUploadMsg('')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const r = await fetch(`${BASE_URL}/rag/upload-chroma`, { method: 'POST', body: fd })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const data = await r.json()
+      setUploadMsg(`✅ ChromaDB caricato: ${data.stats?.total_chunks ?? 0} chunk, ${data.stats?.fonti?.length ?? 0} fonti`)
+      loadStats()
+    } catch (e: unknown) {
+      setUploadMsg(`❌ ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  const handleDelete = async (filename: string) => {
+    if (!confirm(`Rimuovere "${filename}" dal corpus?`)) return
+    setDeletingFile(filename)
+    try {
+      await fetch(`${BASE_URL}/rag/document/${encodeURIComponent(filename)}`, { method: 'DELETE' })
+      loadStats()
+    } catch (e: unknown) {
+      alert(`Errore: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setDeletingFile(null)
+    }
+  }
+
+  const handleIndexAll = async () => {
+    if (!confirm('Re-indicizzare tutto il corpus con MiniLM (può richiedere alcuni minuti)?')) return
+    setIndexingAll(true)
+    setUploadMsg('')
+    try {
+      const data = await ragFetch('/index-all', { method: 'POST', headers: {} })
+      setUploadMsg(`✅ Indicizzazione completata: ${data.summary?.total_chunks ?? 0} chunk totali`)
+      loadStats()
+    } catch (e: unknown) {
+      setUploadMsg(`❌ ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setIndexingAll(false)
+    }
+  }
+
+  const infoBox: React.CSSProperties = {
+    background: '#eff6ff',
+    border: '1px solid #bfdbfe',
+    borderRadius: 8,
+    padding: '10px 14px',
+    fontSize: 12,
+    color: '#1e40af',
+    marginBottom: 16,
+  }
+
+  const uploadSection: React.CSSProperties = {
+    background: '#fff',
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 10,
+    padding: '14px 16px',
+    marginBottom: 12,
+  }
+
+  return (
+    <div>
+      <div style={infoBox}>
+        <strong>Come funziona:</strong> Indicizza i PDF in locale con la GUI
+        (<code>python -m app.local_indexer</code>), poi esporta il ZIP e carica qui.
+        Il corpus arricchisce il prompt AI con citazioni verificabili dalla
+        Direttiva Macchine e dai Quaderni INAIL — senza sostituire l'analisi del PDF manuale produttore.
+      </div>
+
+      {/* Stats */}
+      {loading && <LoadingSpinner />}
+      {error && <ErrorBox message={error} onRetry={loadStats} />}
+      {!loading && stats && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 16 }}>
+          <div style={{ ...card, textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: stats.total_chunks > 0 ? COLORS.primary : COLORS.muted }}>
+              {stats.total_chunks}
+            </div>
+            <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2 }}>Chunk indicizzati</div>
+          </div>
+          <div style={{ ...card, textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: stats.fonti.length > 0 ? COLORS.success : COLORS.muted }}>
+              {stats.fonti.length}
+            </div>
+            <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2 }}>Fonti presenti</div>
+          </div>
+          <div style={{ ...card, textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: stats.available ? COLORS.success : COLORS.danger }}>
+              {stats.available ? '✓' : '✗'}
+            </div>
+            <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 2 }}>
+              {stats.available ? 'Corpus attivo' : 'Corpus vuoto'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fonti presenti */}
+      {!loading && stats && stats.fonti.length > 0 && (
+        <div style={{ ...card, marginBottom: 16 }}>
+          <SectionTitle>Fonti nel corpus</SectionTitle>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+                <Th>Fonte</Th>
+                <Th>Tipo</Th>
+                <Th>File</Th>
+                <Th right>Azioni</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.fonti.map((f) => (
+                <tr key={f.filename} style={{ borderBottom: `1px solid #f1f5f9` }}>
+                  <Td><strong>{f.fonte}</strong></Td>
+                  <Td>
+                    <span style={{
+                      background: f.tipo === 'normativa_EU' ? '#dbeafe' : '#d1fae5',
+                      color: f.tipo === 'normativa_EU' ? '#1e40af' : '#065f46',
+                      fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+                    }}>
+                      {f.tipo}
+                    </span>
+                  </Td>
+                  <Td><span style={{ fontFamily: 'monospace', fontSize: 11 }}>{f.filename}</span></Td>
+                  <Td right>
+                    <button
+                      onClick={() => handleDelete(f.filename)}
+                      disabled={deletingFile === f.filename}
+                      style={btn('danger', true)}
+                      title="Rimuovi dal corpus"
+                    >
+                      {deletingFile === f.filename ? '⏳' : '🗑️'}
+                    </button>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Messaggio upload */}
+      {uploadMsg && (
+        <div style={{
+          background: uploadMsg.startsWith('❌') ? '#fef2f2' : '#f0fdf4',
+          border: `1px solid ${uploadMsg.startsWith('❌') ? '#fca5a5' : '#86efac'}`,
+          borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 13,
+          color: uploadMsg.startsWith('❌') ? COLORS.danger : COLORS.success,
+        }}>
+          {uploadMsg}
+        </div>
+      )}
+
+      {/* Upload PDF singolo */}
+      <div style={uploadSection}>
+        <SectionTitle>Carica PDF singolo (indicizzazione rapida con MiniLM)</SectionTitle>
+        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '8px 12px', fontSize: 12, color: '#92400e', marginBottom: 10 }}>
+          ⚠ Usa il modello MiniLM (leggero). Per qualità ottimale:
+          indicizza in locale con la GUI e carica il DB pre-indicizzato.
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select id="rag-subfolder" style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${COLORS.border}`, fontSize: 13 }}>
+            <option value="quaderni_inail">📋 Quaderno INAIL</option>
+            <option value="normativa">⚖️ Normativa (Direttiva, Regolamenti)</option>
+          </select>
+          <label style={{ ...btn('primary'), cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {uploading ? '⏳ Caricamento...' : '📤 Scegli PDF'}
+            <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={handlePdfUpload} disabled={uploading} />
+          </label>
+        </div>
+      </div>
+
+      {/* Upload ChromaDB ZIP */}
+      <div style={uploadSection}>
+        <SectionTitle>Carica DB pre-indicizzato (ZIP ChromaDB da GUI locale)</SectionTitle>
+        <p style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+          Genera il ZIP dalla GUI locale (<code>python -m app.local_indexer</code>) →
+          click "Esporta ZIP ChromaDB", poi caricalo qui.
+          Sostituisce integralmente il corpus su Render.
+        </p>
+        <label style={{ ...btn('success'), cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {uploading ? '⏳ Caricamento...' : '📦 Carica chroma_db.zip'}
+          <input type="file" accept=".zip" style={{ display: 'none' }} onChange={handleZipUpload} disabled={uploading} />
+        </label>
+      </div>
+
+      {/* Re-indicizza tutto */}
+      <div style={uploadSection}>
+        <SectionTitle>Re-indicizza tutto (corpus su Render)</SectionTitle>
+        <p style={{ fontSize: 12, color: COLORS.muted, marginBottom: 10 }}>
+          Usa MiniLM su tutti i PDF presenti nel corpus di Render.
+          Eseguire dopo upload di PDF singoli per sincronizzare l'indice.
+        </p>
+        <button onClick={handleIndexAll} disabled={indexingAll} style={btn('warn')}>
+          {indexingAll ? '⏳ Indicizzazione in corso...' : '🔄 Re-indicizza tutto'}
+        </button>
+      </div>
     </div>
   )
 }

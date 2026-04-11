@@ -11,18 +11,24 @@ import { ErrorBanner } from './components/ui/ErrorBanner'
 import { OfflineBadge } from './components/ui/OfflineBadge'
 import { UploadManualModal } from './components/upload/UploadManualModal'
 import { AdminPanel } from './components/admin/AdminPanel'
-import type { PlateOCRResult } from './types'
+import { WorkplaceContextDialog, loadWorkplaceContext, saveWorkplaceContext, clearWorkplaceContext, workplaceContextLabel } from './components/ui/WorkplaceContextDialog'
+import type { PlateOCRResult, WorkplaceContext } from './types'
 
 type AppState = 'idle' | 'preview' | 'ocr_loading' | 'confirming' | 'running' | 'done' | 'error'
 
-/** Attende che il backend risponda all'health check (max 60 tentativi × 2s = 2 minuti). */
+/**
+ * Attende che il backend risponda all'health check con backoff esponenziale.
+ * Intervalli: 2s, 4s, 8s, 16s, 30s (cappato), max ~2 minuti totali.
+ */
 function useBackendReady() {
   const [ready, setReady] = useState<boolean | null>(null) // null = checking
   const attempts = useRef(0)
 
   useEffect(() => {
     let cancelled = false
-    const MAX = 60
+    const MAX_ATTEMPTS = 10
+    const BASE_DELAY_MS = 2000
+    const MAX_DELAY_MS = 30_000
 
     async function poll() {
       const ok = await checkHealth()
@@ -32,11 +38,12 @@ function useBackendReady() {
         return
       }
       attempts.current += 1
-      if (attempts.current >= MAX) {
+      if (attempts.current >= MAX_ATTEMPTS) {
         setReady(false) // timeout — lascia comunque procedere
         return
       }
-      setTimeout(poll, 2000)
+      const delay = Math.min(BASE_DELAY_MS * 2 ** (attempts.current - 1), MAX_DELAY_MS)
+      setTimeout(poll, delay)
     }
 
     poll()
@@ -66,6 +73,10 @@ export default function App() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [ocrResult, setOcrResult] = useState<(PlateOCRResult & { brightness_warning?: string }) | null>(null)
   const [ocrError, setOcrError] = useState<string | null>(null)
+  const [workplaceCtx, setWorkplaceCtx] = useState<WorkplaceContext | null>(() => loadWorkplaceContext())
+  const [showCtxDialog, setShowCtxDialog] = useState(false)
+  // Callback da eseguire dopo che il contesto è confermato
+  const pendingConfirmRef = useRef<(() => void) | null>(null)
 
   // Sincronizza lo stato app con quello della pipeline
   useEffect(() => {
@@ -105,12 +116,42 @@ export default function App() {
 
   const handleConfirm = (brand: string, model: string, serial: string, year: string, machineType: string, machineTypeId: number | null = null) => {
     if (!imageBase64) return
-    // Aggiorna ocrResult con i valori corretti dall'utente
     if (ocrResult) {
       setOcrResult({ ...ocrResult, brand, model, serial_number: serial || null, year: year || null, machine_type: machineType || null, machine_type_id: machineTypeId })
     }
-    setAppState('running')
-    run(imageBase64, brand, model, machineType, ocrResult?.qr_urls ?? [], machineTypeId, serial || null, year || null)
+
+    const doRun = (ctx: WorkplaceContext | null) => {
+      setAppState('running')
+      run(imageBase64, brand, model, machineType, ocrResult?.qr_urls ?? [], machineTypeId, serial || null, year || null, ctx ?? undefined)
+    }
+
+    if (workplaceCtx) {
+      doRun(workplaceCtx)
+    } else {
+      // Mostra dialog contesto — dopo conferma esegue il run
+      pendingConfirmRef.current = () => doRun(loadWorkplaceContext())
+      setShowCtxDialog(true)
+    }
+  }
+
+  const handleCtxConfirm = (ctx: WorkplaceContext) => {
+    setWorkplaceCtx(ctx)
+    setShowCtxDialog(false)
+    pendingConfirmRef.current?.()
+    pendingConfirmRef.current = null
+  }
+
+  const handleCtxSkip = () => {
+    setShowCtxDialog(false)
+    pendingConfirmRef.current?.()
+    pendingConfirmRef.current = null
+  }
+
+  const handleChangeCtx = () => {
+    clearWorkplaceContext()
+    setWorkplaceCtx(null)
+    setShowCtxDialog(true)
+    pendingConfirmRef.current = null
   }
 
   const handleNewSearch = () => {
@@ -155,10 +196,33 @@ export default function App() {
           <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1e293b' }}>ManualFinder</h1>
           <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>Sicurezza macchinari da cantiere</p>
         </div>
-        {/* Indicatore stato + Upload */}
+        {/* Indicatore stato + contesto + Upload */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           {appState !== 'idle' && appState !== 'done' && (
             <StepIndicator state={appState} />
+          )}
+          {/* Badge contesto sopralluogo */}
+          {workplaceCtx && (
+            <button
+              onClick={handleChangeCtx}
+              title="Cambia contesto sopralluogo"
+              style={{
+                background: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: 20,
+                padding: '3px 8px',
+                fontSize: 11,
+                fontWeight: 700,
+                color: '#1e40af',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                maxWidth: 120,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {workplaceContextLabel(workplaceCtx)}
+            </button>
           )}
           <button
             onClick={() => setShowUpload(true)}
@@ -188,6 +252,13 @@ export default function App() {
       )}
 
       {showUpload && <UploadManualModal onClose={() => setShowUpload(false)} />}
+
+      {showCtxDialog && (
+        <WorkplaceContextDialog
+          onConfirm={handleCtxConfirm}
+          onSkip={pendingConfirmRef.current ? handleCtxSkip : undefined}
+        />
+      )}
 
       <main>
         {/* IDLE */}

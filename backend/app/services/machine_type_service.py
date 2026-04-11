@@ -13,6 +13,7 @@ Tabelle create automaticamente all'avvio:
 import json
 import logging
 import re
+import threading
 import time as _time
 from typing import Optional
 
@@ -26,6 +27,7 @@ _cache_ts: float = 0.0
 _alias_map: dict[str, int] = {}   # {normalized_alias: machine_type_id}
 _type_flags: dict[int, dict] = {} # {machine_type_id: {requires_patentino, requires_verifiche}}
 _CACHE_TTL = 3600  # 1 ora
+_cache_lock = threading.Lock()  # protegge accessi concorrenti alle strutture in-memory
 
 # ── Soglie di matching ────────────────────────────────────────────────────────
 _FUZZY_DIRECT = 82    # L1a: hit diretto, confidenza alta
@@ -317,8 +319,9 @@ def _rebuild_alias_map() -> None:
             cur.execute("SELECT id, requires_patentino, requires_verifiche FROM machine_types WHERE is_verified = true")
             new_flags = {row[0]: {"requires_patentino": row[1], "requires_verifiche": row[2]} for row in cur.fetchall()}
         conn.close()
-        _alias_map = new_map
-        _type_flags = new_flags
+        with _cache_lock:
+            _alias_map = new_map
+            _type_flags = new_flags
     except Exception as e:
         logger.error("machine_type_service: errore rebuild alias map: %s", e)
 
@@ -326,10 +329,11 @@ def _rebuild_alias_map() -> None:
 def invalidate_cache() -> None:
     """Invalida cache + alias map. Chiamare dopo ogni scrittura su machine_types/machine_aliases."""
     global _cache, _cache_ts, _alias_map, _type_flags
-    _cache = None
-    _cache_ts = 0.0
-    _alias_map = {}
-    _type_flags = {}
+    with _cache_lock:
+        _cache = None
+        _cache_ts = 0.0
+        _alias_map = {}
+        _type_flags = {}
     # Ricostruisce subito la map (non lazy, evita stale state)
     _rebuild_alias_map()
 
@@ -348,8 +352,9 @@ def get_all_types() -> list[dict]:
     """Lista completa dei tipi verificati per il dropdown frontend. Cache 1h."""
     global _cache, _cache_ts
     now = _time.monotonic()
-    if _cache is not None and now - _cache_ts < _CACHE_TTL:
-        return _cache
+    with _cache_lock:
+        if _cache is not None and now - _cache_ts < _CACHE_TTL:
+            return _cache
     if not settings.database_url:
         # Fallback sintetico da seed
         result = [
@@ -377,8 +382,9 @@ def get_all_types() -> list[dict]:
             }
             for r in rows
         ]
-        _cache = result
-        _cache_ts = now
+        with _cache_lock:
+            _cache = result
+            _cache_ts = now
         return result
     except Exception as e:
         logger.error("machine_type_service.get_all_types: %s", e)

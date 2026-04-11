@@ -146,11 +146,13 @@ async def _pipeline(request: FullAnalysisRequest):
     ))
     await asyncio.sleep(0)
 
-    try:
-        # Esegui ricerca manuale e Safety Gate in parallelo con timeout globale
-        # (evita hang su certi brand/modelli che causano scraper lenti)
-        search_results, safety_alerts = await asyncio.wait_for(
-            asyncio.gather(
+    # Timeout differenziati: ricerca manuale lenta (120s), safety alerts breve (30s).
+    # Eseguiamo i due task con timeout individuali così uno slow brand non blocca tutto.
+    _log = __import__("logging").getLogger(__name__)
+
+    async def _search_with_timeout():
+        try:
+            return await asyncio.wait_for(
                 search_service.search_manual(
                     brand=brand,
                     model=model,
@@ -160,24 +162,31 @@ async def _pipeline(request: FullAnalysisRequest):
                     serial_number=serial_number,
                     machine_type_id=machine_type_id,
                 ),
+                timeout=120,
+            )
+        except asyncio.TimeoutError:
+            _log.warning("search_manual timeout (120s) per %s %s", brand, model)
+            return []
+        except Exception as e:
+            _log.warning("search_manual errore per %s %s: %s", brand, model, e)
+            return []
+
+    async def _alerts_with_timeout():
+        try:
+            return await asyncio.wait_for(
                 safety_gate_service.check_safety_alerts(brand, model),
-                return_exceptions=True,
-            ),
-            timeout=90,  # max 90s per ricerca completa
-        )
-        if isinstance(search_results, Exception):
-            search_results = []
-        if isinstance(safety_alerts, Exception):
-            safety_alerts = []
-    except asyncio.TimeoutError:
-        # Ricerca scaduta (90s) — procedi con fallback AI
-        import logging as _log
-        _log.getLogger(__name__).warning("search_manual timeout per %s %s", brand, model)
-        search_results = []
-        safety_alerts = []
-    except Exception:
-        search_results = []
-        safety_alerts = []
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            _log.warning("check_safety_alerts timeout (30s) per %s %s", brand, model)
+            return []
+        except Exception:
+            return []
+
+    search_results, safety_alerts = await asyncio.gather(
+        _search_with_timeout(),
+        _alerts_with_timeout(),
+    )
 
     pdf_candidates = [r for r in search_results if r.is_pdf]
     
@@ -663,6 +672,7 @@ async def _pipeline(request: FullAnalysisRequest):
             is_allegato_v=is_allegato_v,
             norme=norme,
             producer_source_label=producer_source_label,
+            workplace_context=getattr(request, "workplace_context", None),
         )
     except Exception as e:
         yield _sse(SSEEvent(

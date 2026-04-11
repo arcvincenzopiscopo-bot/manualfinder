@@ -2,14 +2,73 @@
 Generazione della scheda di sicurezza dal manuale del macchinario.
 Usa Claude (L1) o Gemini (L2) per analizzare PDF e produrre JSON strutturato.
 Strategia dual-source: INAIL (normativa) + produttore (raccomandazioni specifiche).
+
+Layer RAG: il contesto normativo (D.Lgs 81/08 dizionario + Direttiva Macchine/INAIL ChromaDB)
+viene anteposto al prompt come blocco aggiuntivo. Il flusso di analisi PDF rimane invariato.
 """
 import json
 import re
+import logging
 from typing import Optional
 from app.config import settings
 from app.models.responses import SafetyCard
 from app.services import pdf_service
 from app.data.allegato_v_data import get_machine_category, format_requisiti_for_prompt
+
+logger = logging.getLogger(__name__)
+
+# ─── RAG / Normative context ──────────────────────────────────────────────────
+# Import lazy — evita crash se chromadb/sentence-transformers non installati su Render.
+# Il sistema degrada silenziosamente al solo dizionario D.Lgs se RAG non disponibile.
+
+def _get_normative_context(machine_type: Optional[str]) -> str:
+    """
+    Recupera il contesto normativo completo per il prompt.
+    Fallback gerarchico: dizionario D.Lgs → RAG ChromaDB → stringa vuota.
+    Mai solleva eccezioni — l'analisi del PDF procede comunque.
+    """
+    if not machine_type:
+        return ""
+    try:
+        from app.services.hybrid_retriever import get_full_normative_context
+        return get_full_normative_context(machine_type)
+    except Exception as e:
+        logger.debug("Normative context non disponibile: %s", e)
+        return ""
+
+
+def _log_rag_metadata(machine_type: Optional[str], fonte_tipo: str) -> None:
+    """Log strutturato sulle fonti normative usate per questa Safety Card."""
+    if not machine_type:
+        return
+    try:
+        from app.services.hybrid_retriever import get_normative_metadata
+        meta = get_normative_metadata(machine_type)
+        logger.info(
+            "rag_context machine_type=%s fonte_tipo=%s dlgs_refs=%d rag_available=%s rag_chunks=%d",
+            machine_type,
+            fonte_tipo,
+            meta.get("dlgs_refs", 0),
+            meta.get("rag_available", False),
+            meta.get("rag_chunks", 0),
+        )
+    except Exception:
+        pass
+
+
+def _enrich_card_sources(card, machine_type: Optional[str]) -> None:
+    """Popola i campi fonte_* della card solo se vuoti."""
+    if not machine_type:
+        return
+    try:
+        from app.services.hybrid_retriever import enrich_card_with_sources
+        enrich_card_with_sources(card.__dict__, machine_type)
+        # Riapplica i valori aggiornati al modello Pydantic
+        for field in ["fonte_rischi", "fonte_protezione", "fonte_raccomandazioni", "fonte_residui"]:
+            if field in card.__dict__ and not getattr(card, field, None):
+                setattr(card, field, card.__dict__.get(field))
+    except Exception:
+        pass
 
 
 SYSTEM_PROMPT = """Sei un esperto di sicurezza sul lavoro specializzato nell'analisi di manuali tecnici di macchinari industriali e da cantiere, con profonda conoscenza di:
@@ -98,7 +157,10 @@ def _build_inail_prompt(machine_rules: Optional[dict] = None) -> str:
     }
   ],
   "dispositivi_protezione": [
-    "DPI individuale (es. 'Elmetto EN 397', 'Imbracatura anticaduta EN 361 cat. C') OPPURE protezione collettiva (es. 'Parapetto perimetrale h≥1m') richiesta dalla normativa"
+    {
+      "testo": "DPI o protezione collettiva richiesta dalla normativa (es. 'Elmetto EN 397', 'Imbracatura anticaduta EN 361 cat. C', 'Parapetto perimetrale h≥1m')",
+      "recipient": "operatore | personale_a_terra | entrambi"
+    }
   ],
   "rischi_residui": [
     "rischio che persiste anche con tutte le protezioni attive — specifica PERCHÉ non è eliminabile (es. 'Rumore residuo >85 dB(A) nonostante insonorizzazione: uso obbligatorio di protezioni uditive EN 352')"
@@ -115,7 +177,9 @@ def _build_inail_prompt(machine_rules: Optional[dict] = None) -> str:
   "documenti_da_richiedere": [
     {
       "documento": "Nome documento con riferimento normativo che ne impone la tenuta (es. 'Dichiarazione di conformità CE [Dir. 2006/42/CE Art. 7]', 'Registro verifiche periodiche [Art. 71 c.11 D.Lgs. 81/08]')",
-      "smart_hint": "Suggerimento pratico per l'ispettore: cosa verificare specificamente su questo documento (es. 'Controllare che la lingua sia l'italiano e che il numero di serie coincida con l'etichetta')"
+      "smart_hint": "Suggerimento pratico per l'ispettore: cosa verificare specificamente su questo documento (es. 'Controllare che la lingua sia l'italiano e che il numero di serie coincida con l'etichetta')",
+      "validity_requirements": "Elementi obbligatori che il documento deve contenere per essere valido ai sensi della norma (es. firma del datore di lavoro, timbro, data aggiornamento, numero seriale macchina coincidente con targa, lingua italiana)",
+      "irregularity_indicators": "Segnali che indicano non conformità o documento non aggiornato che l'ispettore deve riconoscere (es. data antecedente a 3 anni, firma mancante, numero di serie non coincidente, documento in lingua straniera senza traduzione certificata)"
     }
   ],
   "verifiche_periodiche": "Obblighi di verifica periodica. Se applicabile: 1) categoria di appartenenza secondo Allegato VII D.Lgs. 81/08 e D.M. 11 aprile 2011 con testo esteso completo come riportato nella norma; 2) cadenza; 3) soggetto abilitato; 4) riferimento normativo VIGENTE aggiornato. Null se non previsti per questa categoria.",
@@ -132,10 +196,10 @@ def _build_inail_prompt(machine_rules: Optional[dict] = None) -> str:
 
 VINCOLI:
 - rischi_principali: 3-8 rischi come oggetti JSON con campi "testo", "probabilita", "gravita". ORDINATI da gravità S3→S1, a parità P3→P1. Il campo "testo" deve contenere [ALTA/MEDIA/BASSA] e riferimento normativo. Classificazione ISO 12100: probabilita = P1 (raro), P2 (possibile), P3 (probabile); gravita = S1 (lieve reversibile), S2 (grave/invalidante), S3 (morte/invalidante permanente).
-- dispositivi_protezione: distingui tra DPI (cosa INDOSSA l'operatore) e protezioni collettive (dispositivi sulla macchina o nell'area). 3-8 elementi SPECIFICI per questa categoria.
+- dispositivi_protezione: 3-8 oggetti {testo, recipient}. Il campo "recipient" indica a chi si applica: "operatore" (chi conduce/opera la macchina), "personale_a_terra" (chi lavora nell'area di influenza della macchina), "entrambi" (richiesto a tutti). Esempi: elmetto EN 397 → "operatore"; gilet alta visibilità → "personale_a_terra"; scarpe antinfortunistiche → "entrambi". SEMPRE specificare il campo recipient.
 - dispositivi_sicurezza: 2-5 dispositivi di sicurezza richiesti dalla normativa per questa categoria di macchina.
 - checklist: 4-6 oggetti {testo, livello, norma, prescrizione_precompilata}. livello=1 (STOP immediato: ripari fissi/mobili, pulsanti emergenza, freni, ROPS/FOPS); livello=2 (PRESCRIZIONE: segnalatori, illuminazione, targhette, estintori). Ordina L1 prima. Ogni testo risponde a: COSA verificare, DOVE trovarlo, COME valutare la conformità. Il campo "norma" è opzionale ma aggiungilo se disponibile. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
-- documenti_da_richiedere: 3-6 oggetti {documento, smart_hint} con il riferimento normativo nel campo "documento". ESSENZIALE per l'attività ispettiva. Lo smart_hint deve essere pratico e specifico (cosa guardare/verificare su quel documento).
+- documenti_da_richiedere: 3-6 oggetti {documento, smart_hint, validity_requirements, irregularity_indicators} con il riferimento normativo nel campo "documento". ESSENZIALE per l'attività ispettiva. Lo smart_hint deve essere pratico e specifico. I campi validity_requirements e irregularity_indicators devono essere concreti e specifici per quel documento.
 - abilitazione_operatore: se prevista da normativa vigente (Accordo Stato-Regioni nella versione più aggiornata in vigore, o norma settoriale specifica), descrivila in dettaglio (tipo corso, durata minima, ente formatore). Cita sempre la versione normativa attualmente in vigore, non necessariamente quella del 22/02/2012 se aggiornata.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo documento. Non integrare con conoscenze generali.
 - Usa terminologia precisa del D.Lgs. 81/2008.
@@ -204,7 +268,10 @@ def _build_producer_prompt(brand: str, model: str, machine_rules: Optional[dict]
     "limite con VALORE NUMERICO e unità di misura come indicato nel manuale (es. 'Portata massima: 3.500 kg [Sez. 2.4]', 'Pendenza massima operativa: 30% [pag. 18]', 'Pressione idraulica max: 350 bar [Sez. 5.1]')"
   ],
   "procedure_emergenza": [
-    "Procedura di emergenza PER SALVAGUARDARE PERSONE specifica per {brand} {model}: Passo 1 — [azione]. Passo 2 — [azione]. Passo 3 — [azione]. [Sez. manuale]. INCLUDI SOLO: incendio, ribaltamento, cedimento freni/idraulico, investimento persone, folgorazione, seppellimento. ESCLUDI: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio immediato per persone, istruzioni per chiamare l'officina."
+    {
+      "testo": "Procedura di emergenza PER SALVAGUARDARE PERSONE specifica per {brand} {model}: Passo 1 — [azione]. Passo 2 — [azione]. Passo 3 — [azione]. [Sez. manuale]. INCLUDI SOLO: incendio, ribaltamento, cedimento freni/idraulico, investimento persone, folgorazione, seppellimento. ESCLUDI: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio immediato per persone, istruzioni per chiamare l'officina.",
+      "source_tier": "manuale"
+    }
   ],
   "pittogrammi_sicurezza": [
     "pittogramma o avvertenza obbligatoria che deve essere presente e leggibile sulla macchina — specifica posizione (es. 'Pittogramma PERICOLO SCHIACCIAMENTO — pannello laterale sinistro cabina [pag. 12 manuale]')"
@@ -224,7 +291,7 @@ VINCOLI:
 - raccomandazioni_produttore: 2-6 elementi SPECIFICI per {brand} {model} che riguardano esclusivamente la SICUREZZA DELLE PERSONE. NON includere: manutenzione motore/filtri/fluidi, gestione DPF, preriscaldamento, istruzioni per officina, avvisi di degradazione prestazioni. Ogni voce: sezione o pagina del manuale tra parentesi quadre.
 - dispositivi_sicurezza: {"lascia la lista vuota [] — questo manuale appartiene a un modello diverso" if is_category_match else f"3-6 dispositivi di sicurezza FISICAMENTE INSTALLATI su {brand} {model} dal costruttore (interblocchi, sensori, ripari fissi/mobili, pulsanti emergenza, limitatori, valvole). Sii specifico sulla posizione fisica."}.
 - limiti_operativi: {"lascia la lista vuota [] — i valori numerici si riferiscono al modello del manuale, non a " + brand + " " + model if is_category_match else "includi SOLO valori ESPLICITAMENTE riportati nel manuale. NON generare valori ipotetici anche se plausibili per la categoria. Se non presenti, lascia la lista vuota []."}.
-- procedure_emergenza: 2-5 procedure SOLO per emergenze che mettono a rischio PERSONE (incendio, ribaltamento, cedimento freni, investimento, folgorazione). NON includere: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio per persone, call to service. Se il manuale descrive solo procedure di manutenzione, lascia la lista vuota [].
+- procedure_emergenza: 2-5 oggetti {{testo, source_tier}} SOLO per emergenze che mettono a rischio PERSONE (incendio, ribaltamento, cedimento freni, investimento, folgorazione). Il campo source_tier deve essere sempre "manuale". NON includere: rigenerazione DPF, surriscaldamento motore, avarie meccaniche senza rischio per persone, call to service. Se il manuale descrive solo procedure di manutenzione, lascia la lista vuota [].
 - pittogrammi_sicurezza: {"lascia la lista vuota [] — le posizioni fisiche sono specifiche del modello del manuale" if is_category_match else "segnala SOLO i pittogrammi esplicitamente citati nel manuale con la loro posizione sulla macchina."}.
 - checklist: 5-8 oggetti {{testo, livello, norma, prescrizione_precompilata}} SPECIFICI per {brand} {model}. livello=1 (STOP: ripari, emergenza, freni, ROPS); livello=2 (PRESCRIZIONE: segnalatori, pittogrammi, luci). Ogni testo: verbo imperativo + cosa + dove + criterio di conformità + riferimento sezione/pagina manuale. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto in questo manuale. Per elementi non presenti, lascia la lista vuota — NON integrare con conoscenze generali sul tipo di macchina.
@@ -545,6 +612,8 @@ async def generate_safety_card(
     producer_source_label: Optional[str] = None,
     # ID nel catalogo machine_types (None = testo libero, fallback normative hardcoded)
     machine_type_id: Optional[int] = None,
+    # Contesto sopralluogo (cantiere/industria/logistica + fase cantiere)
+    workplace_context: Optional[dict] = None,
 ) -> SafetyCard:
     """
     Genera la scheda di sicurezza combinando INAIL (normativa) + produttore (raccomandazioni).
@@ -571,6 +640,14 @@ async def generate_safety_card(
 
     has_inail = inail_bytes is not None
     has_producer = producer_bytes is not None
+
+    # Determina strategia fonte A–F (source_manager) — usata per badge UI e log
+    from app.services.source_manager import resolve_sources, source_context_to_dict
+    _source_ctx = resolve_sources(
+        inail_bytes=inail_bytes,
+        producer_bytes=producer_bytes,
+        producer_source_label=producer_source_label,
+    )
 
     # Smart Selector: determina categoria Allegato V dalla tipologia macchina OCR
     av_category_key, av_category_data = get_machine_category(machine_type)
@@ -600,11 +677,43 @@ async def generate_safety_card(
 
     effective_producer_label = producer_source_label or f"Produttore ({brand})"
 
+    # Calcola il contesto normativo RAG una volta sola — passato a tutte le funzioni interne
+    # Fallback silenzioso: se dizionario+RAG non disponibili → stringa vuota
+    _norm_ctx = _get_normative_context(machine_type)
+
+    # Inietta contesto sopralluogo all'inizio del contesto normativo (se fornito)
+    if workplace_context and isinstance(workplace_context, dict):
+        _cat_labels = {
+            "cantiere": "Cantiere edile",
+            "industria": "Stabilimento industriale",
+            "logistica": "Hub logistico / magazzino",
+            "altro": "Luogo di lavoro non specificato",
+        }
+        _phase_labels = {
+            "scavo": "Fase di scavo",
+            "fondazioni": "Fase di fondazioni",
+            "strutture": "Fase di strutture",
+            "finiture": "Fase di finiture",
+            "demolizione": "Fase di demolizione",
+            "altro": "Fase generica",
+        }
+        _cat = _cat_labels.get(workplace_context.get("category", ""), "")
+        _phase = _phase_labels.get(workplace_context.get("phase", ""), "")
+        _ctx_block = f"CONTESTO SOPRALLUOGO: Luogo di lavoro: {_cat}."
+        if _phase:
+            _ctx_block += f" {_phase}."
+        _ctx_block += (
+            "\nAdatta le raccomandazioni, le priorità di rischio e i controlli checklist "
+            "al contesto specifico del sopralluogo."
+        )
+        _norm_ctx = _ctx_block + ("\n\n" + _norm_ctx if _norm_ctx else "")
+
     if not has_inail and not has_producer:
         card = await _generate_fallback(
             brand, model, provider, norme=norme or [],
             allegato_v_context=allegato_v_context,
             machine_type=machine_type,
+            normative_context=_norm_ctx,
         )
         # Se disponibile un datasheet (scheda tecnica commerciale ≤20 pagine),
         # estrai i limiti operativi e sovrascrivili nel risultato fallback AI.
@@ -628,6 +737,7 @@ async def generate_safety_card(
             allegato_v_context=allegato_v_context,
             producer_source_label=effective_producer_label,
             machine_rules=machine_rules,
+            normative_context=_norm_ctx,
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
@@ -636,6 +746,7 @@ async def generate_safety_card(
             brand, model, inail_bytes, inail_url, provider,
             allegato_v_context=allegato_v_context,
             fonte_tipo="inail",
+            normative_context=_norm_ctx,
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
@@ -644,6 +755,7 @@ async def generate_safety_card(
             brand, model, producer_bytes, producer_url, provider,
             allegato_v_context=allegato_v_context,
             is_category_match="categoria" in (producer_source_label or "").lower(),
+            normative_context=_norm_ctx,
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
@@ -686,7 +798,126 @@ async def generate_safety_card(
     except Exception:
         pass  # Non bloccare la generazione della scheda
 
+    # Arricchisce i campi fonte_* con le sorgenti normative usate (solo se vuoti)
+    _enrich_card_sources(card, machine_type)
+
+    # Valida riferimenti normativi nella checklist e svuota prescrizioni non verificate
+    _validate_normative_refs(card)
+
+    # Inietta metadati fonte (strategia A–F, badge, disclaimer, affidabilità)
+    card.source_metadata = source_context_to_dict(_source_ctx)
+
+    # Log strutturato per osservabilità RAG
+    _log_rag_metadata(machine_type, card.fonte_tipo or "unknown")
+
+    # Log asincrono strategia fonte → analysis_log (non bloccante)
+    _log_analysis_sync(brand, model, machine_type, _source_ctx)
+
     return card
+
+def _validate_normative_refs(card: "SafetyCard") -> None:
+    """
+    Verifica che le norme citate nella checklist esistano nel dizionario D.Lgs 81/08.
+    Se una norma non è nel dizionario, svuota prescrizione_precompilata (non rimuove l'item).
+    """
+    try:
+        from app.data.riferimenti_normativi import RIFERIMENTI
+        # Estrae tutti gli articoli verificati dal dizionario
+        norme_certe: set[str] = set()
+        for ref in RIFERIMENTI.values():
+            norma = ref.get("norma") or ref.get("articolo") or ""
+            if norma:
+                norme_certe.add(norma.lower())
+
+        if not norme_certe:
+            return
+
+        for item in card.checklist:
+            if not isinstance(item, dict):
+                continue
+            norma = (item.get("norma") or "").strip()
+            if not norma:
+                continue
+            norma_l = norma.lower()
+            # Verifica se la norma citata contiene almeno uno degli articoli certi
+            verificata = any(n in norma_l for n in norme_certe)
+            if not verificata:
+                item["prescrizione_precompilata"] = ""
+                item["_norma_non_verificata"] = True
+    except Exception:
+        pass  # Non bloccare mai la generazione della scheda
+
+
+def _log_analysis_sync(
+    brand: str,
+    model: str,
+    machine_type: Optional[str],
+    ctx: "SourceContext",
+) -> None:
+    """
+    Inserisce un record in analysis_log con la strategia fonte usata.
+    Usa psycopg2 sincrono. Fallisce silenziosamente — non blocca la risposta.
+    """
+    try:
+        import psycopg2
+        db_url = settings.database_url
+        if not db_url:
+            return
+        conn = psycopg2.connect(db_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO analysis_log
+                        (brand, model, machine_type, strategy, badge_label, affidabilita, fonte_tipo)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (brand, model, machine_type,
+                     ctx.strategy, ctx.badge_label,
+                     ctx.affidabilita, ctx.fonte_tipo),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass  # Log non bloccante
+
+
+def _ensure_analysis_log_table() -> None:
+    """Crea la tabella analysis_log se non esiste. Chiamata lazy al primo log."""
+    try:
+        import psycopg2
+        db_url = settings.database_url
+        if not db_url:
+            return
+        conn = psycopg2.connect(db_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS analysis_log (
+                        id          SERIAL PRIMARY KEY,
+                        ts          TIMESTAMP NOT NULL DEFAULT NOW(),
+                        brand       TEXT,
+                        model       TEXT,
+                        machine_type TEXT,
+                        strategy    TEXT NOT NULL,
+                        badge_label TEXT,
+                        affidabilita INT,
+                        fonte_tipo  TEXT
+                    )
+                """)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+# Crea la tabella al primo import del modulo (lazy, non blocca avvio se DB non disponibile)
+try:
+    _ensure_analysis_log_table()
+except Exception:
+    pass
 
 
 # Macchine per cui abilitazione_operatore deve essere sempre null
@@ -764,6 +995,94 @@ def _apply_normative_overrides(card, machine_type: Optional[str], machine_type_i
         card.verifiche_periodiche = None
 
 
+_EMERGENCY_TYPES = {
+    "incendio":            ["incendio", "fuoco", "fire"],
+    "ribaltamento":        ["ribaltamento", "capovolgimento", "rollover"],
+    "cedimento_freni":     ["freni", "idraulico", "cedimento freni", "cedimento idraulico", "brake"],
+    "investimento_persone":["investimento", "persona investita", "pedestrian", "persone"],
+    "folgorazione":        ["folgorazione", "elettrico", "electrocution", "scarica"],
+    "seppellimento":       ["seppellimento", "crollo", "burial", "collapse"],
+}
+
+AI_DISCLAIMER_TEXT = (
+    "Procedura generata da intelligenza artificiale sulla base delle linee guida INAIL. "
+    "Verificare con il manuale del costruttore prima dell'applicazione."
+)
+
+
+async def _fill_emergency_gaps(
+    procedures: list,
+    brand: str,
+    model: str,
+    machine_type: Optional[str],
+    provider: str,
+) -> list:
+    """
+    Controlla quali tipi di emergenza (whitelist) non sono coperti dalle procedure esistenti.
+    Per i tipi mancanti genera una procedura AI con source_tier='ai' e ai_disclaimer=True.
+    Restituisce la lista aggiornata (originale + nuove).
+    """
+    def _covers_type(testo: str, keywords: list[str]) -> bool:
+        t = testo.lower()
+        return any(kw in t for kw in keywords)
+
+    missing_types: list[str] = []
+    for etype, keywords in _EMERGENCY_TYPES.items():
+        covered = any(
+            _covers_type(p.get("testo", "") if isinstance(p, dict) else str(p), keywords)
+            for p in procedures
+        )
+        if not covered:
+            missing_types.append(etype)
+
+    if not missing_types:
+        return procedures
+
+    machine_desc = f"{brand} {model}" + (f" ({machine_type})" if machine_type else "")
+    missing_labels = {
+        "incendio": "Incendio a bordo macchina",
+        "ribaltamento": "Ribaltamento della macchina",
+        "cedimento_freni": "Cedimento freni/sistema idraulico",
+        "investimento_persone": "Investimento di persone",
+        "folgorazione": "Folgorazione / contatto con linee elettriche",
+        "seppellimento": "Seppellimento / crollo di scavi o strutture",
+    }
+    labels_list = "\n".join(f"- {missing_labels[t]}" for t in missing_types)
+
+    prompt = f"""Genera procedure di emergenza sintetiche per la macchina {machine_desc}.
+Crea UNA procedura per CIASCUNO dei seguenti tipi di emergenza che mettono a rischio persone:
+{labels_list}
+
+Rispondi SOLO con questo JSON:
+{{
+  "procedures": [
+    {{"testo": "Tipo emergenza — Passo 1: [azione]. Passo 2: [azione]. Passo 3: [azione]."}},
+    ...
+  ]
+}}
+
+Genera esattamente {len(missing_types)} oggetti nell'array procedures, uno per tipo.
+Le procedure devono essere pratiche per la categoria di macchina. Rispondi SOLO con il JSON."""
+
+    try:
+        raw = await _call_ai_with_text("", prompt, provider, is_fallback=True)
+        generated: list = raw.get("procedures", []) if isinstance(raw, dict) else []
+    except Exception:
+        generated = []
+
+    ai_procedures = []
+    for item in generated:
+        if isinstance(item, dict) and item.get("testo"):
+            ai_procedures.append({
+                "testo": item["testo"],
+                "fonte": "AI (INAIL linee guida)",
+                "source_tier": "ai",
+                "ai_disclaimer": True,
+            })
+
+    return procedures + ai_procedures
+
+
 async def _analyze_dual_source(
     brand: str, model: str,
     inail_bytes: bytes, inail_url: Optional[str],
@@ -773,6 +1092,7 @@ async def _analyze_dual_source(
     allegato_v_context: Optional[str] = None,
     producer_source_label: Optional[str] = None,
     machine_rules: Optional[dict] = None,
+    normative_context: str = "",
 ) -> SafetyCard:
     """
     Analisi combinata: INAIL → rischi/DPI/residui; produttore → raccomandazioni specifiche.
@@ -786,6 +1106,11 @@ async def _analyze_dual_source(
                                              is_category_match=is_category_match)
     if allegato_v_context:
         inail_prompt += f"\n\nCONTESTO ALLEGATO V (macchina ante-1996):\n{allegato_v_context}\n{ALLEGATO_V_EXTRA_FIELDS}"
+
+    # Anteponi contesto normativo RAG (dizionario D.Lgs + Direttiva/INAIL ChromaDB)
+    # Solo al prompt INAIL (fonte normativa) — non al produttore (fonte operativa)
+    if normative_context:
+        inail_prompt = normative_context + "\n\n---\n\n" + inail_prompt
 
     inail_text = pdf_service.extract_full_text(inail_bytes)
     producer_text = (
@@ -896,6 +1221,11 @@ async def _analyze_dual_source(
         producer_json.get("procedure_emergenza") or [],
         producer_label,
     )
+    # Completa con procedure AI per tipi di emergenza non coperti (F4 — cascade)
+    procedure_emergenza = await _fill_emergency_gaps(
+        procedure_emergenza, brand, model,
+        machine_type=None, provider=provider,
+    )
     limiti_operativi = _tag_items(
         producer_json.get("limiti_operativi") or [],
         producer_label,
@@ -994,12 +1324,17 @@ async def _analyze_pdf_direct(
     allegato_v_context: Optional[str] = None,
     fonte_tipo: str = "pdf",
     is_category_match: bool = False,
+    normative_context: str = "",
 ) -> SafetyCard:
     """Analisi diretta del PDF (≤100 pagine) — inviato come documento nativo."""
     pdf_b64 = pdf_service.pdf_to_base64(pdf_bytes)
     prompt = _build_analysis_prompt(brand, model, is_category_match=is_category_match)
     if allegato_v_context:
         prompt += f"\n\nCONTESTO ALLEGATO V (macchina ante-1996):\n{allegato_v_context}\n{ALLEGATO_V_EXTRA_FIELDS}"
+
+    # Anteponi contesto normativo RAG se disponibile
+    if normative_context:
+        prompt = normative_context + "\n\n---\n\n" + prompt
 
     # Rileva lingua dal testo estratto e rafforza istruzione traduzione
     text = pdf_service.extract_full_text(pdf_bytes)
@@ -1054,6 +1389,7 @@ async def _generate_fallback(
     norme: list = [],
     allegato_v_context: Optional[str] = None,
     machine_type: Optional[str] = None,
+    normative_context: str = "",
 ) -> SafetyCard:
     """Genera scheda di sicurezza dalla conoscenza AI senza manuale."""
     norme_context = ""
@@ -1098,6 +1434,9 @@ async def _generate_fallback(
             f"Usa questa classificazione per tutti i rischi, dispositivi, normative e procedure."
         )
     prompt = FALLBACK_PROMPT_TEMPLATE.format(brand=safe_brand, model=safe_model) + machine_type_context + norme_context + av_context
+    # Anteponi contesto normativo RAG se disponibile
+    if normative_context:
+        prompt = normative_context + "\n\n---\n\n" + prompt
     result_json = await _call_ai_with_text("", prompt, provider, is_fallback=True)
     card = _build_safety_card(brand, model, result_json, None, "fallback_ai")
     card.gap_ce_ante = result_json.get("gap_ce_ante")

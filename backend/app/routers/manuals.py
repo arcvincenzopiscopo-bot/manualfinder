@@ -297,6 +297,8 @@ async def upload_manual(
             is_generic=is_generic,
             notes=notes,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore salvataggio: {e}")
 

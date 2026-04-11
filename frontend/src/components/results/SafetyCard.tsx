@@ -6,6 +6,9 @@ import { ManualLink } from './ManualLink'
 import { ExportButton } from './ExportButton'
 import { AllegatoVSection } from './AllegatoVSection'
 import { ClipboardButton } from './ClipboardButton'
+import { SourceBadgeBar } from './SourceBadgeBar'
+import { DisclaimerBanner } from './DisclaimerBanner'
+import { FeedbackWidget } from './FeedbackWidget'
 
 interface Props {
   card: SafetyCardType
@@ -32,7 +35,7 @@ function highlightPageRefs(text: string): React.ReactNode {
   const parts = text.split(/(\[(?:pag|Sez|p|cap|sezione|section)\.\s*[\w.]+\])/gi)
   return parts.map((part, i) =>
     /^\[(?:pag|Sez|p|cap|sezione|section)\./i.test(part)
-      ? <span key={i} style={{
+      ? <span key={`ref_${i}_${part.slice(0, 16)}`} style={{
           display: 'inline-block',
           padding: '0 5px',
           margin: '0 2px',
@@ -137,7 +140,7 @@ function Section({ title, items, variant, icon, sourceLabel }: SectionProps) {
             const probabilita = typeof item !== 'string' ? item.probabilita : undefined
             const gravita = typeof item !== 'string' ? item.gravita : undefined
             return (
-              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 8 }}>
+              <div key={`${i}_${testo.slice(0, 20)}`} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <RiskBadge text={testo} variant={variant} renderContent={highlightPageRefs(testo)} />
                 </div>
@@ -220,7 +223,7 @@ function DispositiviSicurezzaSection({ items }: { items: DispositivoSicurezza[] 
           overflow: 'hidden',
         }}>
           {items.map((d, i) => (
-            <div key={i} style={{
+            <div key={`${i}_${d.nome ?? ''}`} style={{
               padding: '12px 14px',
               borderBottom: i < items.length - 1 ? '1px solid #f0f9ff' : 'none',
             }}>
@@ -279,10 +282,12 @@ function AbilitazioneBanner({ testo }: { testo: string }) {
   )
 }
 
-// Sezione documenti da richiedere — spuntabili come checklist con smart hint
+// Sezione documenti da richiedere — spuntabili come checklist con smart hint e doppio livello di espansione
 function DocumentiSection({ items }: { items: (DocumentoRichiesto | string)[] }) {
   const [checked, setChecked] = useState<Set<number>>(new Set())
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [expandedValidity, setExpandedValidity] = useState<Set<number>>(new Set())
+  const [expandedIrregularity, setExpandedIrregularity] = useState<Set<number>>(new Set())
   if (!items.length) return null
 
   const parsed = items.map(i =>
@@ -296,6 +301,18 @@ function DocumentiSection({ items }: { items: (DocumentoRichiesto | string)[] })
   })
 
   const toggleHint = (i: number) => setExpanded(prev => {
+    const next = new Set(prev)
+    next.has(i) ? next.delete(i) : next.add(i)
+    return next
+  })
+
+  const toggleValidity = (i: number) => setExpandedValidity(prev => {
+    const next = new Set(prev)
+    next.has(i) ? next.delete(i) : next.add(i)
+    return next
+  })
+
+  const toggleIrregularity = (i: number) => setExpandedIrregularity(prev => {
     const next = new Set(prev)
     next.has(i) ? next.delete(i) : next.add(i)
     return next
@@ -320,41 +337,239 @@ function DocumentiSection({ items }: { items: (DocumentoRichiesto | string)[] })
         borderRadius: '0 0 8px 8px',
         background: '#fff',
       }}>
-        {parsed.map((item, i) => (
-          <div key={i} style={{
-            borderBottom: i < parsed.length - 1 ? '1px solid #f3f0ff' : 'none',
-            background: checked.has(i) ? '#f3f0ff' : '#fff',
+        {parsed.map((item, i) => {
+          const hasL2 = !!(item.validity_requirements || item.irregularity_indicators)
+          return (
+            <div key={`${i}_${item.testo?.slice(0, 20) ?? ''}`} style={{
+              borderBottom: i < parsed.length - 1 ? '1px solid #f3f0ff' : 'none',
+              background: checked.has(i) ? '#f3f0ff' : '#fff',
+            }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 14px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={checked.has(i)}
+                  onChange={() => toggle(i)}
+                  style={{ marginTop: 2, width: 16, height: 16, accentColor: '#7c3aed', flexShrink: 0 }}
+                />
+                <span style={{
+                  flex: 1,
+                  fontSize: 13,
+                  color: checked.has(i) ? '#a78bfa' : '#334155',
+                  textDecoration: checked.has(i) ? 'line-through' : 'none',
+                  lineHeight: 1.5,
+                }}>
+                  {item.documento}
+                </span>
+                {item.smart_hint && (
+                  <button
+                    onClick={e => { e.preventDefault(); toggleHint(i) }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: '#7c3aed', flexShrink: 0, padding: '2px 4px' }}
+                    title="Mostra suggerimento"
+                  >
+                    {expanded.has(i) ? '▾ Suggerimento' : '▸ Suggerimento'}
+                  </button>
+                )}
+              </label>
+
+              {/* Livello 1: suggerimento pratico */}
+              {item.smart_hint && expanded.has(i) && (
+                <div style={{ padding: '0 14px 8px 42px', fontSize: 12, color: '#6b21a8', fontStyle: 'italic', lineHeight: 1.5 }}>
+                  💡 {item.smart_hint}
+                </div>
+              )}
+
+              {/* Livello 2: requisiti di validità e indicatori di irregolarità */}
+              {item.smart_hint && expanded.has(i) && hasL2 && (
+                <div style={{ padding: '0 14px 8px 42px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {item.validity_requirements && (
+                    <button
+                      onClick={e => { e.preventDefault(); toggleValidity(i) }}
+                      style={{
+                        background: 'none', border: '1px solid #d8b4fe', cursor: 'pointer',
+                        fontSize: 10, color: '#7c3aed', padding: '2px 8px', borderRadius: 20,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {expandedValidity.has(i) ? '▾' : '▸'} Requisiti di validità
+                    </button>
+                  )}
+                  {item.irregularity_indicators && (
+                    <button
+                      onClick={e => { e.preventDefault(); toggleIrregularity(i) }}
+                      style={{
+                        background: 'none', border: '1px solid #fca5a5', cursor: 'pointer',
+                        fontSize: 10, color: '#b91c1c', padding: '2px 8px', borderRadius: 20,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {expandedIrregularity.has(i) ? '▾' : '▸'} Indicatori di irregolarità
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {item.validity_requirements && expandedValidity.has(i) && (
+                <div style={{
+                  padding: '4px 14px 8px 42px', fontSize: 12, color: '#6b21a8',
+                  background: '#faf5ff', lineHeight: 1.5,
+                }}>
+                  ✓ {item.validity_requirements}
+                </div>
+              )}
+
+              {item.irregularity_indicators && expandedIrregularity.has(i) && (
+                <div style={{
+                  padding: '4px 14px 8px 42px', fontSize: 12, color: '#991b1b',
+                  background: '#fff1f2', lineHeight: 1.5,
+                }}>
+                  ⚠ {item.irregularity_indicators}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// DPI separati per destinatario (operatore / personale a terra)
+function DPISection({ items, sourceLabel }: { items: SafetyItem[]; sourceLabel?: string }) {
+  const hasRecipient = items.some(it => it.recipient)
+
+  if (!hasRecipient) {
+    // Fallback: rendering piatto per dati senza campo recipient
+    return (
+      <Section title="Dispositivi di protezione (DPI)" items={items} variant="protection" icon="🛡️" sourceLabel={sourceLabel} />
+    )
+  }
+
+  const operatore = items.filter(it => it.recipient === 'operatore' || it.recipient === 'entrambi')
+  const terra = items.filter(it => it.recipient === 'personale_a_terra' || it.recipient === 'entrambi')
+
+  const renderBlock = (label: string, icon: string, blockItems: SafetyItem[], color: string, bg: string, border: string) => (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{
+        padding: '8px 14px',
+        background: bg,
+        border: `1px solid ${border}`,
+        borderRadius: '6px 6px 0 0',
+        fontWeight: 700,
+        fontSize: 12,
+        color,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+      }}>
+        {icon} {label}
+      </div>
+      <div style={{ border: `1px solid ${border}`, borderTop: 'none', borderRadius: '0 0 6px 6px', background: '#fff' }}>
+        {blockItems.length === 0 ? (
+          <div style={{ padding: '8px 14px', fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>Nessun DPI specifico</div>
+        ) : blockItems.map((it, i) => (
+          <div key={`${i}_${String(it).slice(0, 20)}`} style={{
+            padding: '8px 14px',
+            fontSize: 13,
+            color: '#334155',
+            borderBottom: i < blockItems.length - 1 ? `1px solid ${border}` : 'none',
+            lineHeight: 1.5,
           }}>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 14px', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={checked.has(i)}
-                onChange={() => toggle(i)}
-                style={{ marginTop: 2, width: 16, height: 16, accentColor: '#7c3aed', flexShrink: 0 }}
-              />
-              <span style={{
-                flex: 1,
-                fontSize: 13,
-                color: checked.has(i) ? '#a78bfa' : '#334155',
-                textDecoration: checked.has(i) ? 'line-through' : 'none',
+            🔹 {it.testo}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{
+        padding: '12px 14px',
+        background: '#ecfdf5',
+        border: '1px solid #6ee7b7',
+        borderRadius: '8px 8px 0 0',
+        fontWeight: 700,
+        fontSize: 15,
+        color: '#065f46',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+      }}>
+        <span>🛡️ Dispositivi di protezione (DPI)</span>
+        {sourceLabel && <span style={{ fontSize: 10, color: '#6ee7b7', fontWeight: 600 }}>{sourceLabel}</span>}
+      </div>
+      <div style={{ border: '1px solid #6ee7b7', borderTop: 'none', borderRadius: '0 0 8px 8px', background: '#fff', padding: '10px 10px 2px' }}>
+        {renderBlock('Operatore a bordo macchina', '👷', operatore, '#065f46', '#f0fdf4', '#bbf7d0')}
+        {renderBlock('Personale a terra (area di influenza)', '🚧', terra, '#92400e', '#fffbeb', '#fde68a')}
+      </div>
+    </div>
+  )
+}
+
+// Sezione procedure di emergenza con cascade sorgenti
+function ProcedureEmergenzaSection({ items }: { items: SafetyItem[] }) {
+  if (!items.length) return null
+  const hasTiers = items.some(it => it.source_tier)
+
+  const tierBadge = (item: SafetyItem) => {
+    if (!item.source_tier) return null
+    const config = {
+      manuale: { label: '📖 Manuale', color: '#166534', bg: '#dcfce7' },
+      inail:   { label: '🏛 INAIL',  color: '#1e40af', bg: '#dbeafe' },
+      ai:      { label: '🤖 AI',     color: '#374151', bg: '#f3f4f6' },
+    }[item.source_tier]
+    if (!config) return null
+    return (
+      <span style={{
+        fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 20,
+        background: config.bg, color: config.color, letterSpacing: '0.02em', flexShrink: 0,
+      }}>
+        {config.label}
+      </span>
+    )
+  }
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{
+        padding: '12px 14px',
+        background: '#fff5f5',
+        border: '1px solid #fca5a5',
+        borderRadius: '8px 8px 0 0',
+        fontWeight: 700,
+        fontSize: 15,
+        color: '#991b1b',
+      }}>
+        🚨 Procedure di emergenza
+        {hasTiers && (
+          <span style={{ fontSize: 10, fontWeight: 400, color: '#b91c1c', marginLeft: 8 }}>
+            (fonte: {['📖 Manuale', '🏛 INAIL', '🤖 AI'].join(' → ')})
+          </span>
+        )}
+      </div>
+      <div style={{ border: '1px solid #fca5a5', borderTop: 'none', borderRadius: '0 0 8px 8px', background: '#fff' }}>
+        {items.map((item, i) => (
+          <div key={`${i}_${item.testo?.slice(0, 20) ?? ''}`} style={{ borderBottom: i < items.length - 1 ? '1px solid #fee2e2' : 'none', padding: '10px 14px' }}>
+            {item.ai_disclaimer && (
+              <div style={{
+                background: '#fefce8',
+                border: '1px solid #fde047',
+                borderRadius: 6,
+                padding: '6px 10px',
+                marginBottom: 8,
+                fontSize: 11,
+                color: '#713f12',
                 lineHeight: 1.5,
               }}>
-                {item.documento}
-              </span>
-              {item.smart_hint && (
-                <button
-                  onClick={e => { e.preventDefault(); toggleHint(i) }}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: '#7c3aed', flexShrink: 0, padding: '2px 4px' }}
-                  title="Mostra suggerimento"
-                >
-                  {expanded.has(i) ? '▾ Suggerimento' : '▸ Suggerimento'}
-                </button>
-              )}
-            </label>
-            {item.smart_hint && expanded.has(i) && (
-              <div style={{ padding: '0 14px 10px 42px', fontSize: 12, color: '#6b21a8', fontStyle: 'italic', lineHeight: 1.5 }}>
-                💡 {item.smart_hint}
+                ⚠ Procedura generata da intelligenza artificiale sulla base delle linee guida INAIL. Verificare con il manuale del costruttore prima dell'applicazione.
               </div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+              <div style={{ flex: 1, fontSize: 13, color: '#1e293b', lineHeight: 1.6 }}>{item.testo}</div>
+              {tierBadge(item)}
+            </div>
+            {item.fonte && (
+              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>Fonte: {item.fonte}</div>
             )}
           </div>
         ))}
@@ -459,7 +674,7 @@ function PittogrammiSection({ items }: { items: string[] }) {
           padding: '8px 14px',
         }}>
           {items.map((item, i) => (
-            <div key={i} style={{
+            <div key={`${i}_${String(item).slice(0, 20)}`} style={{
               fontSize: 13,
               color: '#713f12',
               padding: '6px 0',
@@ -512,7 +727,7 @@ function NormativeSection({ items }: { items: string[] }) {
           padding: '8px 14px',
         }}>
           {items.map((norm, i) => (
-            <div key={i} style={{
+            <div key={`${i}_${String(norm).slice(0, 20)}`} style={{
               fontSize: 12,
               color: '#0369a1',
               padding: '5px 0',
@@ -604,7 +819,7 @@ function ChecklistSection({ items }: { items: (ChecklistItem | string)[] }) {
             {item.testo}
           </span>
         </div>
-        <ClipboardButton text={item.prescrizione_precompilata} />
+        <ClipboardButton text={item.prescrizione_precompilata} norma={item.norma} />
       </label>
     )
   }
@@ -853,6 +1068,12 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
         </div>
       </div>
 
+      {/* Badge fonte strategia A–F + disclaimer */}
+      {card.source_metadata && (
+        <SourceBadgeBar source={card.source_metadata} />
+      )}
+      <DisclaimerBanner source={card.source_metadata} />
+
       {/* Safety Gate EU Alerts */}
       {card.safety_alerts?.length > 0 && (
         <div style={{
@@ -866,7 +1087,7 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
             🚨 AVVISO SAFETY GATE EU — Richiami / Difetti Noti
           </p>
           {card.safety_alerts.map((alert, i) => (
-            <div key={i} style={{
+            <div key={`${i}_${alert.risk_level}_${alert.title?.slice(0, 16) ?? ''}`} style={{
               background: alert.risk_level === 'serious' ? '#fee2e2' : '#fff7ed',
               border: `1px solid ${alert.risk_level === 'serious' ? '#fca5a5' : '#fed7aa'}`,
               borderRadius: 6,
@@ -979,7 +1200,7 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
 
           {/* Dispositivi di protezione */}
           {card.dispositivi_protezione?.length > 0
-            ? <Section title="Dispositivi di protezione (DPI)" items={card.dispositivi_protezione} variant="protection" icon="🛡️" sourceLabel={card.fonte_protezione ?? undefined} />
+            ? <DPISection items={card.dispositivi_protezione} sourceLabel={card.fonte_protezione ?? undefined} />
             : <EmptySection title="Dispositivi di protezione" icon="🛡️" />}
 
           {/* Dispositivi di sicurezza */}
@@ -1005,9 +1226,7 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
           )}
 
           {/* Procedure di emergenza */}
-          {(card.procedure_emergenza ?? []).length > 0 && (
-            <Section title="Procedure di emergenza" items={card.procedure_emergenza ?? []} variant="residual" icon="🚨" />
-          )}
+          <ProcedureEmergenzaSection items={card.procedure_emergenza ?? []} />
 
           {/* Rischi residui */}
           {card.rischi_residui?.length > 0
@@ -1046,6 +1265,9 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
       }}>
         Scheda generata il {new Date(card.generated_at).toLocaleString('it-IT')}
       </p>
+
+      {/* Feedback ispettori */}
+      <FeedbackWidget card={card} />
 
       {/* Azioni */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>

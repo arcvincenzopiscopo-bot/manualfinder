@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # === Database ===
     database_url: Optional[str] = None  # postgresql://postgres.[PWD]@aws-0-eu-west-1.pooler.supabase.com:6543/postgres
 
+    # === Admin ===
+    # Se impostato, tutti gli endpoint /admin/* e /rag/* richiedono header X-Admin-Token con questo valore.
+    # Lasciare vuoto per disabilitare l'autenticazione (solo ambienti di sviluppo).
+    admin_token: Optional[str] = None
+
     # === Upload manuali ===
     upload_dir: str = "manuali_locali"  # relativo a backend/ — cartella dove vengono salvati i PDF caricati dagli ispettori
 

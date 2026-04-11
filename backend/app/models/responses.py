@@ -19,6 +19,10 @@ class PlateOCRResult(BaseModel):
     # Nuovi campi per determinazione ante-CE e routing ricerca
     ce_marking: Optional[str] = None      # "presente" | "assente" | "non_visibile"
     machine_category: Optional[str] = None # "cantiere" | "industriale" | "agricola" | "sollevamento" | "altro"
+    # Flag di incertezza OCR: True se meno di 2/4 varianti multishot concordano sul campo
+    serial_number_uncertain: bool = False
+    year_uncertain: bool = False
+    model_uncertain: bool = False
 
     @field_validator("brand", "model", "machine_type", "serial_number", "year", mode="before")
     @classmethod
@@ -102,6 +106,8 @@ class SafetyCard(BaseModel):
     vita_utile_anni: Optional[int] = None               # vita utile stimata dalla tabella machine_types
     focus_rischi_categoria: Optional[str] = None        # testo hazard intelligence da machine_type_hazard
     categoria_inail: Optional[str] = None               # categoria "agente materiale" INAIL
+    # Metadati fonte: strategia A-F, badge, affidabilità — popolati da source_manager
+    source_metadata: Optional[dict] = None
 
     def __init__(self, **data):
         if not data.get("generated_at"):

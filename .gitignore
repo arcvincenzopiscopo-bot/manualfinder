@@ -76,3 +76,10 @@ coverage/
 *.pdf
 !pdf manuali/*.pdf
 !backend/pdf manuali/*.pdf
+
+# ── Corpus RAG (generato in locale, non nel repo) ─────────────
+# I PDF raw e il ChromaDB vengono indicizzati in locale e caricati
+# su Render tramite admin panel → tab Corpus.
+corpus/raw/
+corpus/chroma_db/
+corpus/chroma_db_backup/
