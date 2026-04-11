@@ -140,7 +140,90 @@ def _translation_note(lang: str) -> str:
     )
 
 
-def _build_inail_prompt(machine_rules: Optional[dict] = None) -> str:
+def _workplace_prompt_hints(workplace_context: Optional[dict]) -> str:
+    """
+    Genera vincoli aggiuntivi contestuali da iniettare nei prompt AI.
+    Fornisce esempi DPI e rischi tipici per il settore ispettivo selezionato,
+    così l'AI non si limita ai soli esempi da cantiere edile.
+    """
+    if not workplace_context or not isinstance(workplace_context, dict):
+        return ""
+
+    category = workplace_context.get("category", "")
+
+    _labels = {
+        "cantiere":    "Cantiere edile",
+        "industria":   "Stabilimento industriale",
+        "logistica":   "Hub logistico / magazzino",
+        "agricoltura": "Azienda agricola",
+        "sollevamento": "Operazioni di sollevamento",
+        "altro":       "Luogo di lavoro generico",
+    }
+
+    _dpi = {
+        "cantiere": (
+            'elmetto EN 397 → "operatore"; '
+            'imbracatura anticaduta EN 361 cat. C → "operatore" (lavori in quota); '
+            'gilet alta visibilità EN ISO 20471 → "personale_a_terra"; '
+            'scarpe antinfortunistiche EN ISO 20345 → "entrambi"; '
+            'guanti EN 388 → "operatore"; '
+            'maschera antipolvere FFP2 → "operatore" (polveri/diesel)'
+        ),
+        "industria": (
+            'cuffie antirumore EN 352 → "operatore" (rumore >85 dB); '
+            'occhiali EN 166 → "operatore" (proiezioni materiale/fluidi); '
+            'scarpe antinfortunistiche EN ISO 20345 → "entrambi"; '
+            'guanti EN 388 → "operatore"; '
+            'tuta EN ISO 13688 → "operatore"; '
+            'ripari fissi/mobili organi in moto → protezione collettiva, recipient "entrambi"'
+        ),
+        "logistica": (
+            'gilet alta visibilità EN ISO 20471 → "entrambi"; '
+            'scarpe antinfortunistiche EN ISO 20345 → "entrambi"; '
+            'guanti anti-taglio EN 388 → "operatore"; '
+            'elmetto EN 397 → "operatore" (rischio caduta materiale); '
+            'segnaletica pavimento corsie pedoni/mezzi → protezione collettiva, recipient "entrambi"'
+        ),
+        "agricoltura": (
+            'casco EN 397 → "operatore"; '
+            'stivali antinfortunistici EN ISO 20345 → "operatore"; '
+            'guanti EN 388 → "operatore"; '
+            'maschera FFP2/FFP3 → "operatore" (polveri, fitosanitari); '
+            'occhiali EN 166 → "operatore" (trattamenti fitosanitari); '
+            'carter protezione PTO → protezione collettiva, recipient "entrambi"'
+        ),
+        "sollevamento": (
+            'elmetto EN 397 → "entrambi" (zona influenza carico); '
+            'imbracatura anticaduta EN 361 → "operatore" (accesso in quota sull\'apparecchio); '
+            'guanti EN 388 → "operatore"; '
+            'scarpe antinfortunistiche EN ISO 20345 → "entrambi"; '
+            'gilet alta visibilità EN ISO 20471 → "personale_a_terra"; '
+            'delimitazione zona influenza carico → protezione collettiva, recipient "entrambi"'
+        ),
+    }
+
+    _risks = {
+        "cantiere":    "caduta dall'alto, investimento da mezzi, seppellimento/cedimento terreno, ribaltamento, elettrocuzione da linee aeree/interrate",
+        "industria":   "rumore occupazionale, vibrazioni mano-braccio/corpo intero, schiacciamento da organi in moto, proiezione materiali/utensili, contatto con sostanze chimiche, tagli",
+        "logistica":   "investimento da carrelli elevatori, caduta materiale da scaffalature, ribaltamento del carrello, movimentazione manuale carichi, urti in spazi ristretti",
+        "agricoltura": "ribaltamento su terreno accidentato/in pendenza, presa/trascinamento da PTO, schiacciamento tra trattore e attrezzo trainato, esposizione a fitosanitari, caduta dalla macchina",
+        "sollevamento": "caduta del carico, cedimento strutturale dell'apparecchio, urto del carico su persone, ribaltamento per instabilità del piano d'appoggio, contatto con linee elettriche aeree",
+    }
+
+    label = _labels.get(category, category)
+    dpi = _dpi.get(category, "")
+    risks = _risks.get(category, "")
+
+    lines = [f"\n- CONTESTO SETTORE: Il sopralluogo avviene in '{label}'."]
+    if dpi:
+        lines.append(f"  Adatta i DPI a questo settore. Esempi tipici: {dpi}.")
+    if risks:
+        lines.append(f"  Enfatizza i rischi caratteristici del settore: {risks}.")
+    return "\n".join(lines)
+
+
+def _build_inail_prompt(machine_rules: Optional[dict] = None,
+                        workplace_context: Optional[dict] = None) -> str:
     """
     Prompt per analisi scheda INAIL: estrae rischi normativi, DPI, dispositivi di sicurezza,
     abilitazioni operatore, documenti da richiedere, verifiche periodiche, checklist sopralluogo.
@@ -196,7 +279,7 @@ def _build_inail_prompt(machine_rules: Optional[dict] = None) -> str:
 
 VINCOLI:
 - rischi_principali: 3-8 rischi come oggetti JSON con campi "testo", "probabilita", "gravita". ORDINATI da gravità S3→S1, a parità P3→P1. Il campo "testo" deve contenere [ALTA/MEDIA/BASSA] e riferimento normativo. Classificazione ISO 12100: probabilita = P1 (raro), P2 (possibile), P3 (probabile); gravita = S1 (lieve reversibile), S2 (grave/invalidante), S3 (morte/invalidante permanente).
-- dispositivi_protezione: 3-8 oggetti {testo, recipient}. Il campo "recipient" indica a chi si applica: "operatore" (chi conduce/opera la macchina), "personale_a_terra" (chi lavora nell'area di influenza della macchina), "entrambi" (richiesto a tutti). Esempi: elmetto EN 397 → "operatore"; gilet alta visibilità → "personale_a_terra"; scarpe antinfortunistiche → "entrambi". SEMPRE specificare il campo recipient.
+- dispositivi_protezione: 3-8 oggetti {testo, recipient}. Il campo "recipient" indica a chi si applica: "operatore" (chi conduce/opera la macchina), "personale_a_terra" (chi lavora nell'area di influenza della macchina), "entrambi" (richiesto a tutti). SEMPRE specificare il campo recipient.{workplace_hints}
 - dispositivi_sicurezza: 2-5 dispositivi di sicurezza richiesti dalla normativa per questa categoria di macchina.
 - checklist: 4-6 oggetti {testo, livello, norma, prescrizione_precompilata}. livello=1 (STOP immediato: ripari fissi/mobili, pulsanti emergenza, freni, ROPS/FOPS); livello=2 (PRESCRIZIONE: segnalatori, illuminazione, targhette, estintori). Ordina L1 prima. Ogni testo risponde a: COSA verificare, DOVE trovarlo, COME valutare la conformità. Il campo "norma" è opzionale ma aggiungilo se disponibile. REGOLA prescrizione_precompilata: testo stile verbale ispettivo pronto per copia, usa SOLO la norma già in campo "norma", lascia "" se incerto.
 - documenti_da_richiedere: 3-6 oggetti {documento, smart_hint, validity_requirements, irregularity_indicators} con il riferimento normativo nel campo "documento". ESSENZIALE per l'attività ispettiva. Lo smart_hint deve essere pratico e specifico. I campi validity_requirements e irregularity_indicators devono essere concreti e specifici per quel documento.
@@ -205,6 +288,7 @@ VINCOLI:
 - Usa terminologia precisa del D.Lgs. 81/2008.
 - CITAZIONI OBBLIGATORIE: per ogni voce estratta dal documento includi OBBLIGATORIAMENTE il riferimento alla sezione o pagina in formato [pag. X] o [Sez. X.X] DENTRO il campo "testo". Se non trovi il riferimento esatto, ometti la voce piuttosto che inventare un numero.
 - Rispondi SOLO con il JSON valido."""
+    base = base.replace("{workplace_hints}", _workplace_prompt_hints(workplace_context))
     return _append_machine_rules(base, machine_rules)
 
 
@@ -301,7 +385,8 @@ VINCOLI:
     return _append_machine_rules(base, machine_rules)
 
 
-def _build_analysis_prompt(brand: str, model: str, is_category_match: bool = False) -> str:
+def _build_analysis_prompt(brand: str, model: str, is_category_match: bool = False,
+                           workplace_context: Optional[dict] = None) -> str:
     """Prompt generico per analisi singola fonte — combina aspetti normativi e raccomandazioni costruttore."""
     category_warning = (
         f"\n⚠ ATTENZIONE: Questo documento NON appartiene a {brand} {model} ma a una macchina "
@@ -311,7 +396,7 @@ def _build_analysis_prompt(brand: str, model: str, is_category_match: bool = Fal
         f"(specifici del modello del documento, non di {brand} {model}).\n\n"
         if is_category_match else ""
     )
-    return f"""{category_warning}Analizza questo documento relativo al macchinario {brand} {model} ed estrai le informazioni di sicurezza nel seguente formato JSON:
+    return (f"""{category_warning}Analizza questo documento relativo al macchinario {brand} {model} ed estrai le informazioni di sicurezza nel seguente formato JSON:
 
 {{
   "rischi_principali": [
@@ -377,8 +462,10 @@ VINCOLI:
 - documenti_da_richiedere: 3-5 documenti essenziali per l'accesso ispettivo con riferimento normativo che ne impone la tenuta.
 - FEDELTÀ ALLA FONTE: Estrai SOLO ciò che è scritto nel documento fornito.
 - Se il documento è in altra lingua: TRADUCI tutto in italiano. NON lasciare termini stranieri.
-- Usa terminologia del D.Lgs. 81/2008 e delle norme armonizzate dove appropriato.
-- Rispondi SOLO con il JSON valido."""
+- Usa terminologia del D.Lgs. 81/2008 e delle norme armonizzate dove appropriato."""
+    + _workplace_prompt_hints(workplace_context)
+    + "\n- Rispondi SOLO con il JSON valido."
+)
 
 
 FALLBACK_PROMPT_TEMPLATE = """Non è disponibile il manuale ufficiale del macchinario {brand} {model}.
@@ -714,6 +801,7 @@ async def generate_safety_card(
             allegato_v_context=allegato_v_context,
             machine_type=machine_type,
             normative_context=_norm_ctx,
+            workplace_context=workplace_context,
         )
         # Se disponibile un datasheet (scheda tecnica commerciale ≤20 pagine),
         # estrai i limiti operativi e sovrascrivili nel risultato fallback AI.
@@ -738,6 +826,7 @@ async def generate_safety_card(
             producer_source_label=effective_producer_label,
             machine_rules=machine_rules,
             normative_context=_norm_ctx,
+            workplace_context=workplace_context,
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
@@ -747,6 +836,7 @@ async def generate_safety_card(
             allegato_v_context=allegato_v_context,
             fonte_tipo="inail",
             normative_context=_norm_ctx,
+            workplace_context=workplace_context,
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
@@ -756,11 +846,13 @@ async def generate_safety_card(
             allegato_v_context=allegato_v_context,
             is_category_match="categoria" in (producer_source_label or "").lower(),
             normative_context=_norm_ctx,
+            workplace_context=workplace_context,
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
     else:
-        card = await _analyze_pdf_map_reduce(brand, model, producer_bytes, producer_url, provider)
+        card = await _analyze_pdf_map_reduce(brand, model, producer_bytes, producer_url, provider,
+                                             workplace_context=workplace_context)
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
 
@@ -1093,6 +1185,7 @@ async def _analyze_dual_source(
     producer_source_label: Optional[str] = None,
     machine_rules: Optional[dict] = None,
     normative_context: str = "",
+    workplace_context: Optional[dict] = None,
 ) -> SafetyCard:
     """
     Analisi combinata: INAIL → rischi/DPI/residui; produttore → raccomandazioni specifiche.
@@ -1101,7 +1194,7 @@ async def _analyze_dual_source(
     import asyncio
 
     is_category_match = "categoria" in (producer_source_label or "").lower()
-    inail_prompt = _build_inail_prompt(machine_rules=machine_rules)
+    inail_prompt = _build_inail_prompt(machine_rules=machine_rules, workplace_context=workplace_context)
     producer_prompt = _build_producer_prompt(brand, model, machine_rules=machine_rules,
                                              is_category_match=is_category_match)
     if allegato_v_context:
@@ -1325,10 +1418,12 @@ async def _analyze_pdf_direct(
     fonte_tipo: str = "pdf",
     is_category_match: bool = False,
     normative_context: str = "",
+    workplace_context: Optional[dict] = None,
 ) -> SafetyCard:
     """Analisi diretta del PDF (≤100 pagine) — inviato come documento nativo."""
     pdf_b64 = pdf_service.pdf_to_base64(pdf_bytes)
-    prompt = _build_analysis_prompt(brand, model, is_category_match=is_category_match)
+    prompt = _build_analysis_prompt(brand, model, is_category_match=is_category_match,
+                                    workplace_context=workplace_context)
     if allegato_v_context:
         prompt += f"\n\nCONTESTO ALLEGATO V (macchina ante-1996):\n{allegato_v_context}\n{ALLEGATO_V_EXTRA_FIELDS}"
 
@@ -1353,12 +1448,13 @@ async def _analyze_pdf_direct(
 
 
 async def _analyze_pdf_map_reduce(
-    brand: str, model: str, pdf_bytes: bytes, pdf_url: Optional[str], provider: str
+    brand: str, model: str, pdf_bytes: bytes, pdf_url: Optional[str], provider: str,
+    workplace_context: Optional[dict] = None,
 ) -> SafetyCard:
     """Analisi map-reduce per PDF grandi (>100 pagine)."""
     text = pdf_service.extract_safety_relevant_text(pdf_bytes, max_pages=50)
     chunks = pdf_service.chunk_text(text, max_chars=80000)
-    prompt = _build_analysis_prompt(brand, model)
+    prompt = _build_analysis_prompt(brand, model, workplace_context=workplace_context)
 
     # MAP: analizza ogni chunk
     partial = []
@@ -1394,6 +1490,7 @@ async def _generate_fallback(
     allegato_v_context: Optional[str] = None,
     machine_type: Optional[str] = None,
     normative_context: str = "",
+    workplace_context: Optional[dict] = None,
 ) -> SafetyCard:
     """Genera scheda di sicurezza dalla conoscenza AI senza manuale."""
     norme_context = ""
@@ -1437,7 +1534,8 @@ async def _generate_fallback(
             f"anche se il brand+modello non ti sono noti. "
             f"Usa questa classificazione per tutti i rischi, dispositivi, normative e procedure."
         )
-    prompt = FALLBACK_PROMPT_TEMPLATE.format(brand=safe_brand, model=safe_model) + machine_type_context + norme_context + av_context
+    workplace_hints = _workplace_prompt_hints(workplace_context)
+    prompt = FALLBACK_PROMPT_TEMPLATE.format(brand=safe_brand, model=safe_model) + machine_type_context + norme_context + av_context + workplace_hints
     # Anteponi contesto normativo RAG se disponibile
     if normative_context:
         prompt = normative_context + "\n\n---\n\n" + prompt

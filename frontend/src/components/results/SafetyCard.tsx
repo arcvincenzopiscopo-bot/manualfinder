@@ -1046,7 +1046,7 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
           )
         })()}
 
-        {/* Toggle Cantiere / Ufficio */}
+        {/* Toggle Sede operativa / Ufficio */}
         <div style={{
           display: 'flex', borderRadius: 8, overflow: 'hidden',
           border: '1px solid rgba(255,255,255,0.3)', width: 'fit-content', marginTop: 12,
@@ -1062,7 +1062,7 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
                 color: '#fff',
               }}
             >
-              {mode === 'cantiere' ? '🏗️ Cantiere' : '🏢 Ufficio'}
+              {mode === 'cantiere' ? '🏗️ Sede operativa' : '🏢 Ufficio'}
             </button>
           ))}
         </div>
