@@ -31,7 +31,9 @@
       "Bash(grep -n \"pdf_blob\\\\|pdf_content\\\\|file_data\\\\|bytea\" backend/app/services/*.py backend/app/routers/*.py)",
       "Bash(find /c/sviluppo/manualfinder/manualfinder -name \"*.py\" -exec grep -l \"saved_manuals\" {} \\\\;)",
       "Bash(cat /c/sviluppo/manualfinder/manualfinder/.python311/Lib/site-packages/**/migrations.py)",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(find /c/sviluppo/manualfinder/manualfinder/backend/app -name \"*.py\" -exec grep -l \"machine_prompt_rules\" {} \\\\;)",
+      "Bash(grep -B5 -A 40 \"CREATE TABLE IF NOT EXISTS url_filter_rules\\\\|CREATE TABLE IF NOT EXISTS machine_prompt_rules\\\\|CREATE TABLE IF NOT EXISTS saved_manuals\\\\|CREATE TABLE IF NOT EXISTS manual_feedback\" /c/sviluppo/manualfinder/manualfinder/backend/app/services/*.py)"
     ]
   }
 }

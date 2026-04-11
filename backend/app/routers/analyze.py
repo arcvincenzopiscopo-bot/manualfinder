@@ -309,12 +309,12 @@ async def _pipeline(request: FullAnalysisRequest):
         if inail_scored:
             INAIL_MIN_SCORE = 5
             # Passo 1: priorità assoluta ai PDF locali (/manuals/local/).
-            # Sono già verificati dall'admin per categoria e non contengono brand/model
-            # specifici (schede INAIL generiche) → score e classify darebbero falsi negativi
-            # se competessero alla pari con risultati online. Vanno sempre preferiti.
+            # Schede INAIL preapprovate dall'admin: si usano sempre, nessun controllo
+            # score/classify (sono scansionate, generiche di categoria, il brand/model
+            # non ci sarà mai). Regola esplicita dell'utente.
             for inail_entry in inail_scored:
                 _iscore, _ibytes, _iurl = inail_entry
-                if _iurl.startswith("/manuals/local/") and _iscore >= INAIL_MIN_SCORE:
+                if _iurl.startswith("/manuals/local/"):
                     inail_bytes, inail_url = _ibytes, _iurl
                     break
             # Passo 2: nessun locale → usa il miglior PDF online non-unrelated
@@ -521,7 +521,27 @@ async def _pipeline(request: FullAnalysisRequest):
 
             best = None
             rejection_reasons = []
-            for entry in producer_scored:
+            # Set URL dei manuali DB (preapprovati dall'admin): bypassano il quality
+            # threshold e hanno priorità assoluta sui risultati web, anche con score
+            # più basso. Sono stati verificati a mano dall'admin: se presenti, si usano.
+            _db_urls = {
+                c.url for c in ordered_candidates if c.title.startswith("[DB]")
+            }
+            # Pass 1: priorità assoluta ai manuali DB preapprovati.
+            _db_entries = [e for e in producer_scored if e[2] in _db_urls]
+            if _db_entries:
+                # Preferisci specifico (brand+model in titolo) vs categoria
+                def _db_priority(entry):
+                    url = entry[2]
+                    cand = next((c for c in ordered_candidates if c.url == url), None)
+                    if cand is None:
+                        return 0
+                    title = cand.title.lower()
+                    specific = brand.lower() in title and model.lower() in title
+                    return (2 if specific else 1, entry[0])
+                _db_entries.sort(key=_db_priority, reverse=True)
+                best = _db_entries[0]
+            for entry in (producer_scored if best is None else []):
                 score, pdf_data, url, rel_score, pages = entry
                 short_url = url[-60:]
                 # Accetta PDF lunghi anche se scansionati (score=0): sono documenti reali
