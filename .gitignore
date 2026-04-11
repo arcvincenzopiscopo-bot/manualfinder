@@ -81,14 +81,19 @@ coverage/
 *.pdf
 !pdf manuali/*.pdf
 !backend/pdf manuali/*.pdf
+!backend/corpus/raw/normativa/*.pdf
 
 # ── Corpus RAG ───────────────────────────────────────────────
-# corpus/raw/      — PDF grezzi, non committare (grandi, si caricano via admin panel)
+# corpus/raw/      — PDF grezzi root, non committare (grandi, si caricano via admin panel)
 # corpus/chroma_db — i file HNSW binari non sono portabili Windows→Linux;
 #                    la Docker build li rigenera su Linux da pdf manuali/ (git-tracked).
 corpus/raw/
 corpus/chroma_db/
 corpus/chroma_db_backup/
+# backend/corpus/raw/normativa/ — normativa EU git-tracked per Docker build (piccoli PDF)
+# backend/corpus/chroma_db/    — generato dalla Docker build, non committare
+backend/corpus/chroma_db/
+backend/corpus/chroma_db_backup/
 
 # ── Indicizzatore locale — file non necessari nel repo ───────
 **/.req_stamp
