@@ -782,6 +782,12 @@ _AGGREGATOR_DOMAINS_SEED = {
     "manualeIstruzioni.it", # Aggregatore italiano: buona copertura macchine EU
 }
 
+# Alias statici usati nelle funzioni di scoring (fallback ai SEED se il DB non è raggiungibile)
+_INSTITUTIONAL_DOMAINS = _INSTITUTIONAL_DOMAINS_SEED
+_MANUFACTURER_DOMAINS  = _MANUFACTURER_DOMAINS_SEED
+_RENTAL_DOMAINS        = _RENTAL_DOMAINS_SEED
+_AGGREGATOR_DOMAINS    = _AGGREGATOR_DOMAINS_SEED
+
 
 def _get_domains(kind: str, fallback: set) -> frozenset:
     from app.services.config_service import get_domains
