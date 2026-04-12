@@ -55,6 +55,7 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
   const [error, setError] = useState('')
   const [suggestions, setSuggestions] = useState<Suggestions | null>(null)
   const [successUrl, setSuccessUrl] = useState('')
+  const [storageWarning, setStorageWarning] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Il tipo macchina deve essere selezionato dal catalogo (machineTypeId != null)
@@ -80,6 +81,7 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
         setUiState('mismatch')
       } else {
         setSuccessUrl(result.url ?? '')
+        setStorageWarning(result.storage_warning ?? null)
         setUiState('success')
       }
     } catch (e: unknown) {
@@ -312,6 +314,19 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
             <p style={{ fontSize: 16, fontWeight: 800, color: '#16a34a', margin: '0 0 8px' }}>
               Manuale salvato con successo
             </p>
+            {storageWarning ? (
+              <div style={{
+                margin: '0 0 16px', padding: '10px 12px', textAlign: 'left',
+                background: '#fef3c7', border: '1px solid #f59e0b',
+                borderRadius: 8, fontSize: 12, color: '#92400e', lineHeight: 1.5,
+              }}>
+                ⚠ <strong>Storage non persistente:</strong> {storageWarning}
+              </div>
+            ) : (
+              <p style={{ fontSize: 12, color: '#16a34a', margin: '0 0 12px' }}>
+                ☁ Salvato su Supabase Storage — sopravvive ai redeploy
+              </p>
+            )}
             <p style={{ fontSize: 13, color: '#475569', margin: '0 0 20px', lineHeight: 1.5 }}>
               Il manuale è ora disponibile nelle future ricerche per questo tipo di macchina.
             </p>

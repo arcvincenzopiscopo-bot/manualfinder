@@ -201,6 +201,7 @@ export interface PipelineState {
   error: string | null
   isRunning: boolean
   isDone: boolean
+  debugWarnings: string[]  // Warning dal backend: errori provider, crediti esauriti, ecc.
 }
 
 export interface CachedResult {

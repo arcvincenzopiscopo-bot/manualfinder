@@ -994,10 +994,11 @@ async def search_manual(
     serial_number: Optional[str] = None,
     machine_type_id: Optional[int] = None,
     has_local_inail: bool = False,
-) -> List[ManualSearchResult]:
+) -> tuple[List[ManualSearchResult], List[str]]:
     """
     Cerca il manuale con strategia a più livelli.
     Risultati cachati 7 giorni per evitare query ripetute.
+    Ritorna (results, warnings) dove warnings è lista di messaggi di debug visibili all'admin.
 
     Args:
         has_local_inail: se True, il manuale INAIL locale è già disponibile → i livelli
@@ -1009,6 +1010,7 @@ async def search_manual(
     from app.services.cache_service import search_cache
 
     provider = settings.get_search_provider()
+    _warnings: List[str] = []  # Errori/warning da esporre in debug nell'SSE
 
     # ── Cache lookup ─────────────────────────────────────────────────────
     # Includi has_local_inail nella cache key: strategie diverse → risultati diversi
@@ -1029,7 +1031,7 @@ async def search_manual(
             ]
         except Exception:
             pass
-        return [ManualSearchResult(**r) for r in cached]
+        return [ManualSearchResult(**r) for r in cached], []
 
     all_results: List[ManualSearchResult] = []
 
@@ -1090,58 +1092,52 @@ async def search_manual(
             )
             all_results.append(local_result)
 
-    # LIVELLO 2: Cerca libretto INAIL online per tipo di macchina
-    # Saltato se has_local_inail=True: inutile cercare online quando abbiamo già
-    # la scheda prevalidata dall'admin.
+    # LIVELLO 2 + 2b + 2c: eseguiti in PARALLELO per ridurre la latenza totale.
+    # Precedentemente sequenziali: con DDG ogni query può richiedere 8-15s → 7 query × 10s = 70s.
+    # In parallelo: max(singola_query) ≈ 10s totali.
+    _l2_tasks: list = []
+    _l2_labels: list = []  # (tipo, indice) per post-processing
+
+    inail_queries: list = []
+    institutional_queries: list = []
+    datasheet_queries = _build_datasheet_queries(brand, model)
+
     if machine_type and not has_local_inail:
         inail_queries = _build_inail_queries(machine_type, machine_type_id)
-        for query in inail_queries[:2]:  # Prova max 2 query INAIL
-            try:
-                results = await _search_with_provider(query, provider)
-                if results:
-                    # Marca come INAIL e aumenta score
-                    for r in results:
-                        if "inail.it" in r.url.lower():
-                            r.relevance_score = _score_result(r.url, r.title, r.is_pdf, is_inail=True)
-                    all_results.extend(results)
-                    # Se abbiamo trovato risultati INAIL online, siamo soddisfatti
-                    inail_results = [r for r in all_results if "inail.it" in r.url.lower()]
-                    if len(inail_results) >= 2:
-                        break
-            except Exception:
-                continue
+        for q in inail_queries[:2]:
+            _l2_tasks.append(_search_with_provider(q, provider, _warnings))
+            _l2_labels.append("inail")
 
-    # LIVELLO 2b: Fonti istituzionali equivalenti INAIL (SUVA, EU-OSHA, UCIMU, ENAMA)
-    # Se has_local_inail=True: le includiamo comunque come potenziale 3ª fonte, ma le
-    # tagghiamo come "supplemental" così il chiamante può deduplicate rispetto all'INAIL locale.
     if machine_type:
         institutional_queries = _build_institutional_queries(machine_type, machine_type_id)
-        for query in institutional_queries[:3]:
-            try:
-                results = await _search_with_provider(query, provider)
+        for q in institutional_queries[:3]:
+            _l2_tasks.append(_search_with_provider(q, provider, _warnings))
+            _l2_labels.append("institutional")
+
+    for q in datasheet_queries[:2]:
+        _l2_tasks.append(_search_with_provider(q, provider, _warnings))
+        _l2_labels.append("datasheet")
+
+    if _l2_tasks:
+        _l2_results = await asyncio.gather(*_l2_tasks, return_exceptions=True)
+        for label, batch in zip(_l2_labels, _l2_results):
+            if not isinstance(batch, list):
+                continue
+            if label == "inail":
+                for r in batch:
+                    if "inail.it" in r.url.lower():
+                        r.relevance_score = _score_result(r.url, r.title, r.is_pdf, is_inail=True)
+                all_results.extend(batch)
+            elif label == "institutional":
                 if has_local_inail:
-                    # Quando abbiamo già l'INAIL locale, le fonti istituzionali diventano
-                    # 3ª fonte supplementare: abbassa score e tagga per deduplicazione
-                    for r in results:
+                    for r in batch:
                         r.source_type = "supplemental"
                         r.relevance_score = min(r.relevance_score, 60)
-                all_results.extend(results)
-            except Exception:
-                continue
-
-    # LIVELLO 2c: Scheda tecnica commerciale (dati numerici specifici del modello)
-    # Cercata sempre, indipendentemente da INAIL. Risultati taggati source_type="datasheet"
-    # e usati solo per estrarre limiti_operativi (non rischi né procedure).
-    # PREREQUISITO: verificare tasso successo su campione reale prima di aumentare le query.
-    datasheet_queries = _build_datasheet_queries(brand, model)
-    for query in datasheet_queries[:2]:  # max 2 per non rallentare il processo
-        try:
-            results = await _search_with_provider(query, provider)
-            for r in results:
-                r.source_type = "datasheet"
-            all_results.extend(results)
-        except Exception:
-            continue
+                all_results.extend(batch)
+            elif label == "datasheet":
+                for r in batch:
+                    r.source_type = "datasheet"
+                all_results.extend(batch)
 
     # LIVELLO 3a: Fonti dirette indipendenti (in parallelo)
     direct_tasks = [
@@ -1164,7 +1160,7 @@ async def search_manual(
     # Le prime 3 query (filetype:pdf, manuale operatore, sito produttore) in parallelo
     # Riduce la latenza da ~3×2s a ~2s; i rate limit DuckDuckGo non si attivano su 3 req
     _manual_batches = await asyncio.gather(
-        *[_search_with_provider(q, provider) for q in manual_queries[:3]],
+        *[_search_with_provider(q, provider, _warnings) for q in manual_queries[:3]],
         return_exceptions=True,
     )
     for batch in _manual_batches:
@@ -1175,7 +1171,7 @@ async def search_manual(
     if len(pdf_after_batch) < 3:
         for query in manual_queries[3:6]:
             try:
-                results = await _search_with_provider(query, provider)
+                results = await _search_with_provider(query, provider, _warnings)
                 if results:
                     all_results.extend(results)
                     if len([r for r in all_results if r.is_pdf]) >= 4:
@@ -1189,7 +1185,7 @@ async def search_manual(
     if len(pdf_so_far) < 2:
         for query in rental_queries:
             try:
-                results = await _search_with_provider(query, provider)
+                results = await _search_with_provider(query, provider, _warnings)
                 if results:
                     for r in results:
                         if any(d in r.url.lower() for d in _RENTAL_DOMAINS):
@@ -1203,7 +1199,7 @@ async def search_manual(
     if len(pdf_so_far) < 2:
         for query in auction_queries[:3]:
             try:
-                results = await _search_with_provider(query, provider)
+                results = await _search_with_provider(query, provider, _warnings)
                 all_results.extend(results)
             except Exception:
                 continue
@@ -1215,7 +1211,7 @@ async def search_manual(
         multi_queries = _build_multilingual_queries(brand, model)
         for query in multi_queries:
             try:
-                results = await _search_with_provider(query, provider)
+                results = await _search_with_provider(query, provider, _warnings)
                 all_results.extend(results)
             except Exception:
                 continue
@@ -1227,7 +1223,7 @@ async def search_manual(
         serial_queries = _build_serial_queries(brand, model, serial_number)
         for query in serial_queries[:2]:
             try:
-                results = await _search_with_provider(query, provider)
+                results = await _search_with_provider(query, provider, _warnings)
                 all_results.extend(results)
             except Exception:
                 continue
@@ -1242,7 +1238,7 @@ async def search_manual(
                 ante_ce_queries = _build_ante_ce_queries(machine_type, machine_year, is_allegato_v, machine_type_id)
                 for query in ante_ce_queries:
                     try:
-                        results = await _search_with_provider(query, provider)
+                        results = await _search_with_provider(query, provider, _warnings)
                         all_results.extend(results)
                     except Exception:
                         continue
@@ -1277,7 +1273,7 @@ async def search_manual(
             pdf_so_far = [r for r in all_results if r.is_pdf]
             if len(pdf_so_far) < 3:
                 year_query = f"{brand} {model} manual {machine_year_int} filetype:pdf"
-                year_results = await _search_with_provider(year_query, provider)
+                year_results = await _search_with_provider(year_query, provider, _warnings)
                 all_results.extend(year_results)
             all_results = _apply_temporal_score(all_results, machine_year_int)
         except (ValueError, TypeError):
@@ -1303,6 +1299,18 @@ async def search_manual(
 
     deduped = _deduplicate_results(all_results)
 
+    # Warning finale: provider attivo + conteggio PDF trovati
+    pdf_found = [r for r in deduped if r.is_pdf]
+    if not pdf_found:
+        _warnings.append(
+            f"⚠ Nessun PDF trovato (provider: {provider}). "
+            f"Risultati totali: {len(deduped)}. "
+            f"Verifica le variabili d'ambiente API oppure l'IP del server è bloccato da {provider}."
+        )
+    else:
+        logger.info("search_manual [%s] trovati %d PDF su %d risultati per %s %s",
+                    provider, len(pdf_found), len(deduped), brand, model)
+
     # ── Scrittura in cache ───────────────────────────────────────────────
     if deduped:
         try:
@@ -1310,7 +1318,7 @@ async def search_manual(
         except Exception:
             pass
 
-    return deduped
+    return deduped, _warnings
 
 
 def _apply_brand_model_score(
@@ -1498,21 +1506,41 @@ def _apply_temporal_score(
     return results
 
 
-async def _search_with_provider(query: str, provider: str) -> List[ManualSearchResult]:
+class ProviderError(Exception):
+    """Errore specifico del provider di ricerca — porta un messaggio user-friendly."""
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.user_message = message
+
+
+async def _search_with_provider(
+    query: str,
+    provider: str,
+    _warnings: Optional[List[str]] = None,
+) -> List[ManualSearchResult]:
     """
     Esegue la ricerca con il provider specificato.
     Se il provider primario restituisce 0 risultati, fallback automatico a DuckDuckGo.
+    _warnings: lista condivisa dove appendere warning visibili all'admin (opzionale).
     """
-    if provider == "perplexity":
-        results = await _search_perplexity(query)
-    elif provider == "brave":
-        results = await _search_brave(query)
-    elif provider == "google_cse":
-        results = await _search_google_cse(query)
-    elif provider == "gemini_search":
-        results = await _search_gemini_grounding(query)
-    else:
-        results = await _search_duckduckgo(query)
+    try:
+        if provider == "perplexity":
+            results = await _search_perplexity(query)
+        elif provider == "brave":
+            results = await _search_brave(query)
+        elif provider == "tavily":
+            results = await _search_tavily(query)
+        elif provider == "google_cse":
+            results = await _search_google_cse(query)
+        elif provider == "gemini_search":
+            results = await _search_gemini_grounding(query)
+        else:
+            results = await _search_duckduckgo(query)
+    except ProviderError as e:
+        logger.warning("_search_with_provider [%s] ProviderError: %s", provider, e.user_message)
+        if _warnings is not None and e.user_message not in _warnings:
+            _warnings.append(e.user_message)
+        return []
 
     # Fallback a DuckDuckGo se il provider primario non ha trovato niente
     if not results and provider not in ("duckduckgo", None):
@@ -1601,6 +1629,57 @@ async def _search_brave(query: str) -> List[ManualSearchResult]:
     return results
 
 
+async def _search_tavily(query: str) -> List[ManualSearchResult]:
+    """Ricerca Tavily — 1000 query/mese gratis, funziona da IP datacenter."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            "https://api.tavily.com/search",
+            headers={"Authorization": f"Bearer {settings.tavily_api_key}"},
+            json={
+                "query": query,
+                "search_depth": "basic",
+                "max_results": 10,
+                "include_raw_content": False,
+            },
+        )
+        if response.status_code == 402:
+            raise ProviderError(
+                "🔴 Tavily: crediti gratuiti esauriti (HTTP 402). "
+                "Vai su app.tavily.com per ricaricare o cambia piano."
+            )
+        if response.status_code == 429:
+            raise ProviderError(
+                "🟡 Tavily: rate limit raggiunto (HTTP 429). "
+                "Troppe richieste in poco tempo — riprova tra qualche secondo."
+            )
+        if response.status_code == 401:
+            raise ProviderError(
+                "🔴 Tavily: chiave API non valida (HTTP 401). "
+                "Verifica TAVILY_API_KEY su Render."
+            )
+        response.raise_for_status()
+        data = response.json()
+
+    results: List[ManualSearchResult] = []
+    for item in data.get("results", []):
+        url = item.get("url", "")
+        title = item.get("title", "") or url
+        snippet = item.get("content", "")
+        is_pdf = url.lower().endswith(".pdf") or ".pdf" in url.lower()
+        source_type, language = _classify_source(url)
+        is_inail = "inail.it" in url.lower()
+        results.append(ManualSearchResult(
+            url=url,
+            title=title,
+            source_type=source_type,
+            language=language,
+            is_pdf=is_pdf,
+            relevance_score=_score_result(url, title, is_pdf, is_inail),
+            snippet=snippet,
+        ))
+    return results
+
+
 async def _search_google_cse(query: str) -> List[ManualSearchResult]:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(
@@ -1645,12 +1724,20 @@ async def _search_duckduckgo(query: str) -> List[ManualSearchResult]:
         import asyncio
 
         loop = asyncio.get_event_loop()
-        # DDGS è sincrono — lo eseguiamo in un thread separato per non bloccare l'event loop
+        # DDGS è sincrono — lo eseguiamo in un thread separato per non bloccare l'event loop.
+        # timeout=8 nel costruttore DDGS limita la connessione HTTP sottostante.
+        _DDG_TIMEOUT = 8
         def _ddgs_search():
-            with DDGS() as ddgs:
+            with DDGS(timeout=_DDG_TIMEOUT) as ddgs:
                 return list(ddgs.text(query, max_results=12, safesearch="off"))
 
-        hits = await loop.run_in_executor(None, _ddgs_search)
+        # asyncio.wait_for garantisce che il thread non blocchi l'event loop oltre il timeout.
+        # Critico per IP datacenter (Render) spesso bannati da DDG: senza timeout ogni
+        # query si blocca fino al TCP keepalive (~30-60s), accumulando minuti di attesa.
+        hits = await asyncio.wait_for(
+            loop.run_in_executor(None, _ddgs_search),
+            timeout=_DDG_TIMEOUT + 2,
+        )
 
         for hit in hits:
             url = hit.get("href") or hit.get("url") or ""
@@ -1675,9 +1762,12 @@ async def _search_duckduckgo(query: str) -> List[ManualSearchResult]:
         # Fallback: scraping HTML se ddgs non installato
         logger.warning("duckduckgo-search non installato, uso scraping HTML")
         results = await _search_duckduckgo_html(query)
+    except asyncio.TimeoutError:
+        # DDG timeout (IP datacenter bannato) — non tentare HTML fallback, sarebbe altrettanto lento
+        logger.warning("_search_duckduckgo timeout (%ss) per query: %r", _DDG_TIMEOUT + 2, query[:60])
     except Exception as e:
         logger.warning("_search_duckduckgo (ddgs) failed: %s: %s", type(e).__name__, e)
-        # Tenta fallback HTML
+        # Tenta fallback HTML per errori non-timeout (es. parsing, import issue)
         try:
             results = await _search_duckduckgo_html(query)
         except Exception:
@@ -1870,9 +1960,9 @@ async def _search_manualslib(brand: str, model: str) -> List[ManualSearchResult]
         loop = _asyncio.get_event_loop()
         # site: operator non funziona bene su DDG — cerchiamo "manualslib" nel testo
         query = f'manualslib "{brand} {model}" operator manual'
-        ddg_results = await loop.run_in_executor(
-            None,
-            lambda: list(DDGS().text(query, max_results=8, safesearch="off"))
+        ddg_results = await _asyncio.wait_for(
+            loop.run_in_executor(None, lambda: list(DDGS(timeout=8).text(query, max_results=8, safesearch="off"))),
+            timeout=10,
         )
     except Exception:
         pass
@@ -2169,9 +2259,9 @@ async def _search_safemanuals(brand: str, model: str) -> List[ManualSearchResult
         import asyncio as _asyncio
         loop = _asyncio.get_event_loop()
         query = f'safemanuals "{brand} {model}" manual'
-        ddg_results = await loop.run_in_executor(
-            None,
-            lambda: list(DDGS().text(query, max_results=8, safesearch="off"))
+        ddg_results = await _asyncio.wait_for(
+            loop.run_in_executor(None, lambda: list(DDGS(timeout=8).text(query, max_results=8, safesearch="off"))),
+            timeout=10,
         )
     except Exception:
         pass

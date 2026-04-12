@@ -348,7 +348,28 @@ async def upload_manual(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore salvataggio: {e}")
 
-    return {"status": "ok", "filename": result["filename"], "url": result["url"]}
+    storage_warning = None
+    if not storage_url:
+        if settings.supabase_url and settings.supabase_service_key:
+            storage_warning = (
+                "Il PDF è stato salvato solo localmente (il caricamento su Supabase Storage è fallito). "
+                f"Verifica che il bucket '{settings.supabase_storage_bucket}' esista e sia pubblico, "
+                "e che SUPABASE_SERVICE_KEY sia la chiave service_role (non anon)."
+            )
+        else:
+            storage_warning = (
+                "SUPABASE_URL o SUPABASE_SERVICE_KEY non configurati: il PDF è salvato solo "
+                "localmente e andrà perso al prossimo redeploy. "
+                "Aggiungi le variabili d'ambiente su Render e ridistribuisci."
+            )
+
+    return {
+        "status": "ok",
+        "filename": result["filename"],
+        "url": result["url"],
+        "storage_persisted": storage_url is not None,
+        "storage_warning": storage_warning,
+    }
 
 
 # ── Regole prompt per tipo macchina (admin) ──────────────────────────────────

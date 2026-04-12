@@ -19,6 +19,7 @@ const INITIAL_STATE: PipelineState = {
   error: null,
   isRunning: false,
   isDone: false,
+  debugWarnings: [],
 }
 
 export function usePipeline() {
@@ -40,6 +41,8 @@ export function usePipeline() {
 
       if (event.step === 'search' && event.status === 'completed') {
         next.searchResults = (event.data.results as ManualSearchResult[]) ?? []
+        const w = (event.data.debug_warnings as string[]) ?? []
+        if (w.length > 0) next.debugWarnings = [...prev.debugWarnings, ...w]
       }
 
       if (event.step === 'complete' && event.status === 'completed') {

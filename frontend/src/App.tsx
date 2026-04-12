@@ -386,6 +386,20 @@ function AppInner() {
           </>
         )}
 
+        {/* Debug warnings — visibili solo se presenti (errori provider, crediti esauriti, ecc.) */}
+        {pipeline.debugWarnings.length > 0 && (
+          <div style={{
+            margin: '8px 16px', padding: '10px 14px',
+            background: '#fef3c7', border: '1px solid #f59e0b',
+            borderRadius: 8, fontSize: 12, color: '#92400e',
+          }}>
+            <strong>⚙ Debug pipeline:</strong>
+            {pipeline.debugWarnings.map((w, i) => (
+              <div key={i} style={{ marginTop: 4 }}>{w}</div>
+            ))}
+          </div>
+        )}
+
         {/* DONE */}
         {appState === 'done' && pipeline.safetyCard && (
           <SafetyCard card={pipeline.safetyCard} ocr={ocrResult} onNewSearch={handleNewSearch} />

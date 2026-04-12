@@ -174,7 +174,7 @@ async def _pipeline(request: FullAnalysisRequest):
 
     async def _search_with_timeout():
         try:
-            return await asyncio.wait_for(
+            results, warnings = await asyncio.wait_for(
                 search_service.search_manual(
                     brand=brand,
                     model=model,
@@ -187,12 +187,13 @@ async def _pipeline(request: FullAnalysisRequest):
                 ),
                 timeout=120,
             )
+            return results, warnings
         except asyncio.TimeoutError:
             _log.warning("search_manual timeout (120s) per %s %s", brand, model)
-            return []
+            return [], ["⏱ Timeout ricerca (120s): il provider di ricerca non ha risposto in tempo."]
         except Exception as e:
             _log.warning("search_manual errore per %s %s: %s", brand, model, e)
-            return []
+            return [], [f"❌ Errore ricerca: {e}"]
 
     async def _alerts_with_timeout():
         try:
@@ -206,7 +207,7 @@ async def _pipeline(request: FullAnalysisRequest):
         except Exception:
             return []
 
-    search_results, safety_alerts = await asyncio.gather(
+    (search_results, search_warnings), safety_alerts = await asyncio.gather(
         _search_with_timeout(),
         _alerts_with_timeout(),
     )
@@ -244,6 +245,7 @@ async def _pipeline(request: FullAnalysisRequest):
             "found": bool(search_results),
             "local_manual": local_manual_found,
             "safety_alerts": safety_alerts_data,
+            "debug_warnings": search_warnings,  # Lista warning visibili in UI per debug admin
         },
     ))
 

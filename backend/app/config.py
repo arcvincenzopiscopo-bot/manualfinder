@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     brave_search_api_key: Optional[str] = None
     google_cse_api_key: Optional[str] = None
     google_cse_cx: Optional[str] = None
+    # Tavily: 1000 query/mese gratis, nessuna carta — https://app.tavily.com
+    tavily_api_key: Optional[str] = None
 
     # === Selezione livello: "auto" | "1" | "2" ===
     api_tier: str = "auto"
@@ -65,6 +67,8 @@ class Settings(BaseSettings):
             return "perplexity"
         if self.brave_search_api_key:
             return "brave"
+        if self.tavily_api_key:
+            return "tavily"
         if self.google_cse_api_key and self.google_cse_cx:
             return "google_cse"
         if self.gemini_api_key:
