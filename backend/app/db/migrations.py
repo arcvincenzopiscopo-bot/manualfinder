@@ -381,6 +381,86 @@ def _m019_drop_redundant_text_columns(conn) -> None:
     conn.commit()
 
 
+def _m020_config_tables(conn) -> None:
+    """
+    Tabelle generiche per configurazioni modificabili dall'admin (rimpiazza hardcode).
+    - config_lists: liste piatte di stringhe (list_key → set di item).
+    - config_maps: dizionari chiave→valore JSONB (map_key → {k: v}).
+    - domain_classifications: classifica domini per tipo (manufacturer/rental/inail/...).
+    - brand_machine_type_hints: lookup deterministico brand(+prefisso modello) → tipo macchina.
+    - machine_types: nuove colonne inail_search_term e is_emergency.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS config_lists (
+                list_key    TEXT NOT NULL,
+                item        TEXT NOT NULL,
+                meta        JSONB,
+                active      BOOLEAN DEFAULT true,
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (list_key, item)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_config_lists_key
+                ON config_lists(list_key) WHERE active = true
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS config_maps (
+                map_key     TEXT NOT NULL,
+                k           TEXT NOT NULL,
+                v           JSONB NOT NULL,
+                active      BOOLEAN DEFAULT true,
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (map_key, k)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_config_maps_key
+                ON config_maps(map_key) WHERE active = true
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS domain_classifications (
+                id          SERIAL PRIMARY KEY,
+                domain      TEXT NOT NULL,
+                kind        TEXT NOT NULL,
+                brand       TEXT,
+                active      BOOLEAN DEFAULT true,
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(domain, kind, brand)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_domain_class_kind
+                ON domain_classifications(kind) WHERE active = true
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS brand_machine_type_hints (
+                id                SERIAL PRIMARY KEY,
+                brand             TEXT NOT NULL,
+                model_prefix      TEXT,
+                machine_type_text TEXT NOT NULL,
+                machine_type_id   INTEGER REFERENCES machine_types(id) ON DELETE SET NULL,
+                active            BOOLEAN DEFAULT true,
+                created_at        TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(brand, model_prefix)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_brand_hints_brand
+                ON brand_machine_type_hints(brand) WHERE active = true
+        """)
+        cur.execute("""
+            ALTER TABLE machine_types
+                ADD COLUMN IF NOT EXISTS inail_search_term TEXT
+        """)
+        cur.execute("""
+            ALTER TABLE machine_types
+                ADD COLUMN IF NOT EXISTS is_emergency BOOLEAN DEFAULT false
+        """)
+    conn.commit()
+
+
 MIGRATIONS: list[tuple[int, str, Callable]] = [
     (1,  "machine_types core tables",                    _m001_machine_types),
     (2,  "machine_type_hazard table",                    _m002_machine_type_hazard),
@@ -401,6 +481,7 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
     (17, "riferimenti_normativi table",                  _m017_riferimenti_normativi),
     (18, "backfill machine_type_id from text columns",   _m018_backfill_machine_type_ids),
     (19, "drop redundant text columns",                  _m019_drop_redundant_text_columns),
+    (20, "config_lists/maps, domain/brand hints, MT cols", _m020_config_tables),
 ]
 
 

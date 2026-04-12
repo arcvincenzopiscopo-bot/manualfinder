@@ -34,8 +34,8 @@ _email_cache: dict[str, Optional[str]] = {}
 # Pattern regex email
 _EMAIL_RE = re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}')
 
-# Prefissi da scartare (non sono assistenza tecnica)
-_REJECT_PREFIXES = {
+# Prefissi — ora in DB (config_lists). Fallback statici usati se DB non disponibile.
+_FB_REJECT_PREFIXES = {
     "noreply", "no-reply", "donotreply", "do-not-reply",
     "privacy", "gdpr", "dpo", "legal", "compliance",
     "marketing", "press", "media", "pr", "comunicazione",
@@ -43,15 +43,28 @@ _REJECT_PREFIXES = {
     "billing", "fatturazione", "amministrazione",
     "webmaster", "admin",
 }
-
-# Prefissi ad alta priorità per assistenza tecnica italiana
-_IT_PREFIXES = {"italy", "italia", "it.service", "it.support", "it.assistenza", "assistenza.it"}
-_SERVICE_PREFIXES = {
+_FB_IT_PREFIXES = {"italy", "italia", "it.service", "it.support", "it.assistenza", "assistenza.it"}
+_FB_SERVICE_PREFIXES = {
     "service", "assistenza", "support", "supporto", "tecnico", "tecnica",
     "after-sales", "aftersales", "post-vendita", "postvend",
     "customer.service", "customerservice", "helpdesk", "help-desk",
     "workshop", "officina",
 }
+
+
+def _reject_prefixes() -> set:
+    from app.services.config_service import get_list
+    return get_list("email_reject_prefixes", _FB_REJECT_PREFIXES)
+
+
+def _it_prefixes() -> set:
+    from app.services.config_service import get_list
+    return get_list("email_it_prefixes", _FB_IT_PREFIXES)
+
+
+def _service_prefixes() -> set:
+    from app.services.config_service import get_list
+    return get_list("email_service_prefixes", _FB_SERVICE_PREFIXES)
 
 
 def _score_email(email: str) -> int:
@@ -65,17 +78,20 @@ def _score_email(email: str) -> int:
     -1  = da scartare
     """
     local, domain = email.lower().split("@", 1)
+    rej = _reject_prefixes()
     # Scarta
-    if local in _REJECT_PREFIXES or any(local.startswith(p) for p in _REJECT_PREFIXES):
+    if local in rej or any(local.startswith(p) for p in rej):
         return -1
     # Dominio .it
     if domain.endswith(".it"):
         return 100
     # Prefisso Italia
-    if any(local == p or local.startswith(p) for p in _IT_PREFIXES):
+    it_p = _it_prefixes()
+    if any(local == p or local.startswith(p) for p in it_p):
         return 80
     # Prefisso service/assistenza
-    if any(local == p or local.startswith(p) for p in _SERVICE_PREFIXES):
+    svc_p = _service_prefixes()
+    if any(local == p or local.startswith(p) for p in svc_p):
         return 60
     # info@ come fallback
     if local == "info":

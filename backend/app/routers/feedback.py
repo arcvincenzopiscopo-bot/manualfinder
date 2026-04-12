@@ -15,15 +15,21 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Feedback"])
 
-# ── Opzioni problemi disponibili ──────────────────────────────────────────────
-
-PROBLEMI_OPTIONS = [
-    "norme_errate",
-    "checklist_incompleta",
-    "dati_macchina_sbagliati",
-    "prescrizioni_inutilizzabili",
-    "fonte_non_affidabile",
+# ── Opzioni problemi — ora in DB (config_lists:"problemi_options") ──────────
+_FB_PROBLEMI_OPTIONS = [
+    "norme_errate", "checklist_incompleta", "dati_macchina_sbagliati",
+    "prescrizioni_inutilizzabili", "fonte_non_affidabile",
 ]
+
+
+def _problemi_options() -> list:
+    from app.services.config_service import get_list
+    items = get_list("problemi_options", set(_FB_PROBLEMI_OPTIONS))
+    return sorted(items) if items else _FB_PROBLEMI_OPTIONS
+
+
+# Alias di compatibilità
+PROBLEMI_OPTIONS = _FB_PROBLEMI_OPTIONS
 
 
 # ── Modelli request / response ────────────────────────────────────────────────

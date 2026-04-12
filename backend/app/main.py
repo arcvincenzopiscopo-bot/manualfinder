@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from app.routers import analyze, manual, health, manuals, machine_types, rag_admin, feedback
+from app.routers import analyze, manual, health, manuals, machine_types, rag_admin, feedback, admin_config
 from app.config import settings
 
 
@@ -50,6 +50,7 @@ app.include_router(manual.router, prefix="/manual")
 app.include_router(manuals.router, prefix="/manuals")
 app.include_router(machine_types.router)
 app.include_router(rag_admin.router, dependencies=[Depends(require_admin_token)])
+app.include_router(admin_config.router, dependencies=[Depends(require_admin_token)])
 app.include_router(feedback.router, prefix="/feedback")
 
 
@@ -110,6 +111,13 @@ async def on_startup():
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning("seed riferimenti fallito: %s", e)
+    # Seed configurazioni modificabili da admin (config_lists/maps/domains/brand_hints)
+    try:
+        from app.services.config_seeds import bootstrap_all_seeds
+        bootstrap_all_seeds()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("config_seeds bootstrap fallito: %s", e)
     # Invalida cache RAG — corpus potrebbe essere stato aggiornato offline
     try:
         from app.services import rag_service

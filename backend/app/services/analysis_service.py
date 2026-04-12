@@ -738,6 +738,13 @@ async def generate_safety_card(
     machine_type_id: Optional[int] = None,
     # Contesto sopralluogo (cantiere/industria/logistica/altro; + fase solo per cantiere)
     workplace_context: Optional[dict] = None,
+    # True se il manuale "produttore" è un PDF locale di categoria simile (fallback locale)
+    similar_category_local: bool = False,
+    # 3ª fonte: fonte istituzionale supplementare (SUVA, CPT, Formedil, EU-OSHA, UCIMU)
+    # disponibile solo quando has_local_inail=True e la fonte supplemental non è duplicata del locale
+    supplemental_bytes: Optional[bytes] = None,
+    supplemental_url: Optional[str] = None,
+    supplemental_label: Optional[str] = None,
 ) -> SafetyCard:
     """
     Genera la scheda di sicurezza combinando INAIL (normativa) + produttore (raccomandazioni).
@@ -789,6 +796,7 @@ async def generate_safety_card(
         producer_source_label=producer_source_label,
         inail_url=inail_url,
         rag_has_inail=_rag_has_inail,
+        similar_category_local=similar_category_local,
     )
 
     # Smart Selector: determina categoria Allegato V dalla tipologia macchina OCR
@@ -911,6 +919,21 @@ async def generate_safety_card(
                                              is_category_match="categoria" in (producer_source_label or "").lower())
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
+
+    # ── ARRICCHIMENTO 3ª FONTE SUPPLEMENTALE ─────────────────────────────────
+    # Se disponibile una fonte istituzionale supplementare (SUVA, CPT, Formedil, UCIMU ecc.),
+    # la usiamo per arricchire la card già generata con elementi normativi aggiuntivi.
+    # Viene eseguita SOLO per le strategie che usano già l'INAIL locale (local_inail=True),
+    # perché in quel caso la 3ª fonte è stata scaricata e deduplicata in analyze.py.
+    if supplemental_bytes:
+        _supp_label = supplemental_label or "Fonte istituzionale"
+        card = await _enrich_from_supplemental(
+            card=card,
+            supplemental_bytes=supplemental_bytes,
+            supplemental_url=supplemental_url or "",
+            supplemental_label=_supp_label,
+            provider=provider,
+        )
 
     # Popola i campi Allegato V nella scheda
     if is_allegato_v:
@@ -1079,13 +1102,13 @@ except Exception:
 
 # Macchine per cui abilitazione_operatore deve essere sempre null
 # (non coperte dall'Accordo Stato-Regioni 2012 né da altra norma settoriale)
-_NO_PATENTINO_TYPES: frozenset[str] = frozenset({
+# Fallback statici (usati se DB non disponibile)
+_FB_NO_PATENTINO: frozenset[str] = frozenset({
     "compressore", "motocompressore", "compressore d'aria", "compressore aria",
     "gruppo elettrogeno", "generatore", "generatore elettrico",
     "piastra vibrante", "costipatore",
     "rullo compattatore", "rullo compressore", "rullo", "compattatore",
-    "bulldozer", "apripista",
-    "betoniera",
+    "bulldozer", "apripista", "betoniera",
     "saldatrice", "saldatrice mig", "saldatrice tig", "saldatrice ad arco",
     "pressa", "pressa idraulica", "pressa piegatrice", "piegatrice",
     "punzonatrice", "cesoie", "tranciatrice",
@@ -1093,32 +1116,21 @@ _NO_PATENTINO_TYPES: frozenset[str] = frozenset({
     "laser", "macchina taglio laser", "taglio laser",
     "troncatrice", "troncatrice per alluminio",
     "benna a polipo", "benna carico-pietrisco", "benna", "polipo",
-    "pinza demolitrice", "martello demolitore",
-    "vibratore per calcestruzzo",
+    "pinza demolitrice", "martello demolitore", "vibratore per calcestruzzo",
+})
+_FB_NO_VERIFICHE: frozenset[str] = _FB_NO_PATENTINO | frozenset({
+    "dumper", "finitrice", "escavatore", "escavatore idraulico",
 })
 
-# Macchine per cui verifiche_periodiche deve essere sempre null
-# (non rientrano nell'Allegato VII D.Lgs. 81/08 come apparecchi di sollevamento
-#  né come recipienti in pressione)
-_NO_VERIFICHE_TYPES: frozenset[str] = frozenset({
-    "compressore", "motocompressore", "compressore d'aria", "compressore aria",
-    "gruppo elettrogeno", "generatore", "generatore elettrico",
-    "piastra vibrante", "costipatore",
-    "rullo compattatore", "rullo compressore", "rullo", "compattatore",
-    "bulldozer", "apripista",
-    "betoniera",
-    "saldatrice", "saldatrice mig", "saldatrice tig", "saldatrice ad arco",
-    "pressa", "pressa idraulica", "pressa piegatrice", "piegatrice",
-    "punzonatrice", "cesoie", "tranciatrice",
-    "tornio", "fresatrice", "rettificatrice",
-    "laser", "macchina taglio laser", "taglio laser",
-    "troncatrice", "troncatrice per alluminio",
-    "dumper", "finitrice",
-    "benna a polipo", "benna carico-pietrisco", "benna", "polipo",
-    "pinza demolitrice", "martello demolitore",
-    "vibratore per calcestruzzo",
-    "escavatore", "escavatore idraulico",  # puro, senza funzione di sollevamento
-})
+
+def _no_patentino_types() -> frozenset:
+    from app.services.config_service import get_list
+    return frozenset(get_list("no_patentino_types", _FB_NO_PATENTINO))
+
+
+def _no_verifiche_types() -> frozenset:
+    from app.services.config_service import get_list
+    return frozenset(get_list("no_verifiche_types", _FB_NO_VERIFICHE))
 
 
 def _apply_normative_overrides(card, machine_type: Optional[str], machine_type_id: Optional[int] = None) -> None:
@@ -1145,14 +1157,14 @@ def _apply_normative_overrides(card, machine_type: Optional[str], machine_type_i
         return
     mt = machine_type.lower().strip()
 
-    if mt in _NO_PATENTINO_TYPES:
+    if mt in _no_patentino_types():
         card.abilitazione_operatore = None
 
-    if mt in _NO_VERIFICHE_TYPES:
+    if mt in _no_verifiche_types():
         card.verifiche_periodiche = None
 
 
-_EMERGENCY_TYPES = {
+_FB_EMERGENCY_TYPES = {
     "incendio":            ["incendio", "fuoco", "fire"],
     "ribaltamento":        ["ribaltamento", "capovolgimento", "rollover"],
     "cedimento_freni":     ["freni", "idraulico", "cedimento freni", "cedimento idraulico", "brake"],
@@ -1160,6 +1172,11 @@ _EMERGENCY_TYPES = {
     "folgorazione":        ["folgorazione", "elettrico", "electrocution", "scarica"],
     "seppellimento":       ["seppellimento", "crollo", "burial", "collapse"],
 }
+
+
+def _get_emergency_types() -> dict:
+    from app.services.config_service import get_map
+    return get_map("emergency_types", _FB_EMERGENCY_TYPES)
 
 AI_DISCLAIMER_TEXT = (
     "Procedura generata da intelligenza artificiale sulla base delle linee guida INAIL. "
@@ -1184,7 +1201,7 @@ async def _fill_emergency_gaps(
         return any(kw in t for kw in keywords)
 
     missing_types: list[str] = []
-    for etype, keywords in _EMERGENCY_TYPES.items():
+    for etype, keywords in _get_emergency_types().items():
         covered = any(
             _covers_type(p.get("testo", "") if isinstance(p, dict) else str(p), keywords)
             for p in procedures
@@ -1475,6 +1492,138 @@ async def _analyze_dual_source(
         gap_ce_ante=inail_json.get("gap_ce_ante"),
         bozze_prescrizioni=inail_json.get("bozze_prescrizioni") or [],
     )
+
+
+async def _enrich_from_supplemental(
+    card: "SafetyCard",
+    supplemental_bytes: bytes,
+    supplemental_url: str,
+    supplemental_label: str,
+    provider: str,
+) -> "SafetyCard":
+    """
+    Arricchisce una SafetyCard già generata con elementi estratti dalla 3ª fonte (supplemental).
+
+    La 3ª fonte è di tipo normativo/istituzionale (SUVA, CPT, Formedil, EU-OSHA, UCIMU).
+    Si usa lo stesso prompt INAIL (focus normativo).
+    Vengono aggiunti SOLO elementi non già presenti nella card (dedup semantica su testo).
+
+    Strategia merge:
+      - rischi_principali: aggiunge rischi semanticamente nuovi
+      - dispositivi_protezione: aggiunge DPI/protezioni non già presenti (dedup su testo)
+      - checklist: aggiunge voci non già coperte (dedup semantica)
+      - dispositivi_sicurezza: aggiunge dispositivi non già presenti (dedup su nome)
+      - rischi_residui: aggiunge solo nuovi
+      - documenti_da_richiedere: aggiunge solo nuovi (dedup su "documento")
+    Non tocca: raccomandazioni_produttore, limiti_operativi, pittogrammi (competenza produttore).
+    """
+    try:
+        supp_text = pdf_service.extract_full_text(supplemental_bytes)
+        if not supp_text or len(supp_text.strip()) < 100:
+            return card  # PDF scansionato o vuoto — non arricchire
+
+        supp_prompt = _build_inail_prompt()
+        supp_json = await _call_ai_with_text(supp_text, supp_prompt, provider)
+        if not supp_json or isinstance(supp_json, Exception):
+            return card
+
+        def _tag(items: list, fonte: str) -> list:
+            result = []
+            for item in items:
+                if not item:
+                    continue
+                if isinstance(item, dict):
+                    result.append(item if "fonte" in item else {**item, "fonte": fonte})
+                else:
+                    result.append({"testo": str(item), "fonte": fonte})
+            return result
+
+        # ── rischi_principali ─────────────────────────────────────────────────
+        new_rischi = _tag(supp_json.get("rischi_principali") or [], supplemental_label)
+        existing_rischi = card.rischi_principali or []
+        extra_rischi = _semantic_dedup(new_rischi, existing_rischi)
+        card.rischi_principali = existing_rischi + extra_rischi
+
+        # ── dispositivi_protezione ────────────────────────────────────────────
+        new_dpi = _tag(supp_json.get("dispositivi_protezione") or [], supplemental_label)
+        existing_dpi = card.dispositivi_protezione or []
+        existing_dpi_texts = {
+            (i.get("testo") or "").lower().strip()
+            for i in existing_dpi if isinstance(i, dict)
+        }
+        for item in new_dpi:
+            t = (item.get("testo") or "").lower().strip()
+            if t and t not in existing_dpi_texts:
+                existing_dpi_texts.add(t)
+                existing_dpi.append(item)
+        card.dispositivi_protezione = existing_dpi
+
+        # ── checklist ─────────────────────────────────────────────────────────
+        def _norm_cl(items: list) -> list:
+            result = []
+            for i in items:
+                if isinstance(i, str):
+                    result.append({"testo": i, "livello": 2})
+                elif isinstance(i, dict) and i.get("testo"):
+                    result.append(i)
+            return result
+
+        new_cl = _norm_cl(supp_json.get("checklist") or [])
+        existing_cl = card.checklist or []
+        existing_cl_for_dedup = [{"testo": i["testo"]} for i in existing_cl if isinstance(i, dict) and i.get("testo")]
+        new_cl_for_dedup = [{"testo": i["testo"]} for i in new_cl if i.get("testo")]
+        nuove_cl_keys = {d["testo"] for d in _semantic_dedup(new_cl_for_dedup, existing_cl_for_dedup)}
+        extra_cl = [i for i in new_cl if i.get("testo") in nuove_cl_keys]
+        card.checklist = existing_cl + extra_cl
+
+        # ── dispositivi_sicurezza ─────────────────────────────────────────────
+        new_disp = supp_json.get("dispositivi_sicurezza") or []
+        existing_disp = card.dispositivi_sicurezza or []
+        seen_names = {(d.get("nome") or "").lower().strip() for d in existing_disp if isinstance(d, dict)}
+        for d in new_disp:
+            if not isinstance(d, dict) or not d.get("nome"):
+                continue
+            key = d["nome"].lower().strip()
+            if key and key not in seen_names:
+                seen_names.add(key)
+                existing_disp.append({**d, "fonte": supplemental_label})
+        card.dispositivi_sicurezza = existing_disp
+
+        # ── rischi_residui ────────────────────────────────────────────────────
+        new_residui = _tag(supp_json.get("rischi_residui") or [], supplemental_label)
+        existing_residui = card.rischi_residui or []
+        extra_residui = _semantic_dedup(new_residui, existing_residui)
+        card.rischi_residui = existing_residui + extra_residui
+
+        # ── documenti_da_richiedere ───────────────────────────────────────────
+        new_docs = supp_json.get("documenti_da_richiedere") or []
+        existing_docs = card.documenti_da_richiedere or []
+        seen_docs = {
+            (d.get("documento") or d if isinstance(d, str) else "").lower().strip()
+            for d in existing_docs
+        }
+        for doc in new_docs:
+            if isinstance(doc, str):
+                key = doc.lower().strip()
+                if key and key not in seen_docs:
+                    seen_docs.add(key)
+                    existing_docs.append({"documento": doc, "smart_hint": ""})
+            elif isinstance(doc, dict) and doc.get("documento"):
+                key = doc["documento"].lower().strip()
+                if key and key not in seen_docs:
+                    seen_docs.add(key)
+                    existing_docs.append(doc)
+        card.documenti_da_richiedere = existing_docs
+
+        # Nota sulla 3ª fonte
+        supp_note = f"[{supplemental_label}] Fonte istituzionale supplementare integrata."
+        card.note = f"{card.note} | {supp_note}" if card.note else supp_note
+
+    except Exception as _err:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("Arricchimento 3ª fonte fallito: %s", _err)
+
+    return card
 
 
 async def _analyze_pdf_direct(
@@ -1825,7 +1974,12 @@ def _parse_json_response(text: str) -> dict:
     }
 
 
-_NULL_STR_VALUES = {"null", "none", "n/a", "non previsto", "non applicabile"}
+_FB_NULL_STR_VALUES = {"null", "none", "n/a", "non previsto", "non applicabile"}
+
+
+def _null_str_values() -> frozenset:
+    from app.services.config_service import get_list
+    return frozenset(get_list("null_str_values", _FB_NULL_STR_VALUES))
 
 
 def _semantic_dedup(items: list[dict], existing: list[dict], threshold: float = 0.55) -> list[dict]:
@@ -1873,7 +2027,7 @@ def _nullable_str(value) -> Optional[str]:
     if value is None:
         return None
     s = str(value).strip()
-    return None if s.lower() in _NULL_STR_VALUES else s
+    return None if s.lower() in _null_str_values() else s
 
 
 def _build_safety_card(

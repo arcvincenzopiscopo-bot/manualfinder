@@ -631,6 +631,66 @@ def list_local_manuals() -> List[Dict[str, str]]:
     return sorted(manuals, key=lambda x: x["title"])
 
 
+def find_similar_category_local_manuals(
+    machine_type: str,
+    machine_type_id: Optional[int] = None,
+    exclude_filename: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """
+    Trova tutti i PDF locali che appartengono alla stessa categoria di macchina,
+    escludendo quello già assegnato come manuale INAIL locale.
+
+    Usato come fallback quando il manuale specifico del produttore non è disponibile
+    e il manuale INAIL locale è già noto. Restituisce una lista di candidati
+    (non singleton) per permettere il confronto score + AI nel chiamante.
+
+    Algoritmo:
+    1. Determina il canonical della categoria dalla `machine_type_id` (assegnazione DB)
+       oppure dal testo `machine_type`.
+    2. Elenco tutti i PDF fisici in PDF_MANUALS_DIR.
+    3. Esclude `exclude_filename`.
+    4. Per ogni PDF: estrae il canonical dal nome file e verifica corrispondenza
+       con il canonical della categoria cercata (substring match bidirezionale).
+    5. Restituisce i corrispondenti come {filename, filepath, title, source}.
+    """
+    if not PDF_MANUALS_DIR.exists():
+        return []
+
+    # Determina il canonical della categoria da cercare
+    category_canonical: Optional[str] = None
+
+    # Prima tenta via DB: cerca l'assegnazione per machine_type_id
+    if machine_type_id is not None:
+        assignment = get_inail_assignment_by_id(machine_type_id)
+        if assignment:
+            category_canonical = _extract_canonical_from_filename(assignment["filename"])
+
+    # Fallback: usa il testo machine_type
+    if not category_canonical and machine_type and machine_type.strip():
+        category_canonical = _normalize_machine_type(machine_type)
+
+    if not category_canonical:
+        return []
+
+    results = []
+    for f in sorted(PDF_MANUALS_DIR.glob("*.pdf")):
+        if exclude_filename and f.name == exclude_filename:
+            continue
+        canonical = _extract_canonical_from_filename(f.name)
+        if not canonical:
+            continue
+        # Match bidirezionale: categoria cercata contiene il canonical del file, o viceversa
+        if canonical in category_canonical or category_canonical in canonical:
+            results.append({
+                "filename": f.name,
+                "filepath": str(f),
+                "title": f.stem.strip(),
+                "source": "local_category",
+            })
+
+    return results
+
+
 def get_pdf_dir() -> str:
     """Restituisce il percorso della cartella PDF manuali."""
     return str(PDF_MANUALS_DIR)

@@ -4,16 +4,28 @@ Gestisce: download streaming, controllo dimensioni, estrazione testo, chunking.
 """
 import io
 import base64
+import logging
 from typing import Optional, Tuple
 from app.config import settings
 
-# Keywords per identificare pagine di sicurezza rilevanti
-SAFETY_KEYWORDS = [
+_logger = logging.getLogger(__name__)
+
+# Keywords per identificare pagine di sicurezza rilevanti — lette dal DB
+_SAFETY_KEYWORDS_FALLBACK = frozenset({
     "rischio", "pericolo", "sicurezza", "protezione", "dpi", "avvertenza",
     "avviso", "attenzione", "warning", "danger", "risk", "safety", "hazard",
     "proteggere", "indossare", "vietato", "proibito", "dispositivo",
     "guanti", "elmetto", "casco", "occhiali", "stivali", "imbracatura",
-]
+})
+
+
+def _get_safety_keywords() -> frozenset:
+    from app.services.config_service import get_list
+    return frozenset(get_list("safety_keywords", _SAFETY_KEYWORDS_FALLBACK))
+
+
+# Alias di compatibilità per eventuale riferimento esterno
+SAFETY_KEYWORDS = _SAFETY_KEYWORDS_FALLBACK
 
 
 async def head_check_url(url: str, timeout: int = 8) -> tuple[bool, str]:
@@ -128,6 +140,7 @@ def score_pdf_safety_relevance(
     brand: str = "",
     model: str = "",
     machine_type: str = "",
+    machine_type_id: Optional[int] = None,
 ) -> int:
     """
     Assegna un punteggio di pertinenza sicurezza al PDF (0–100).
@@ -228,7 +241,7 @@ def score_pdf_safety_relevance(
     ]
 
     # Keyword a peso normale (vocabolario sicurezza generico)
-    NORMAL_KW = SAFETY_KEYWORDS + [
+    NORMAL_KW = list(_get_safety_keywords()) + [
         "ribaltamento", "investimento", "schiacciamento", "caduta",
         "folgorazione", "esplosione", "incendio", "ustione",
         "rumore", "vibrazione", "polvere", "gas", "vapore",
@@ -381,7 +394,7 @@ def score_pdf_safety_relevance(
             # un manuale di escavatore generico è meglio di un manuale Ricoh.
             if brand_norm and len(brand_norm) >= 3 and not brand_in_full:
                 # Usa keyword multilingua per riconoscere categoria anche in DE/EN/FR
-                cat_keywords = _get_category_keywords(machine_type)
+                cat_keywords = _get_category_keywords(machine_type, machine_type_id)
                 category_match = bool(cat_keywords and any(kw in full_text for kw in cat_keywords))
                 if category_match:
                     raw -= 15   # stessa categoria, brand diverso → penalità lieve
@@ -398,65 +411,24 @@ def score_pdf_safety_relevance(
         return 0
 
 
-# Keyword di categoria in IT/EN/DE/FR per il matching multilingua
-_CATEGORY_MULTILANG: dict[str, list[str]] = {
-    # Perforatrici / Drilling rigs
-    "perforatrice": ["perforatrice", "perforazione", "drill", "drilling", "bohrgerät", "bohranlage", "foreuse", "foreuse hydraulique"],
-    "sonda": ["sonda", "drill rig", "bohrturm", "foreuse"],
-    # Escavatori
-    "escavatore": ["escavatore", "excavator", "bagger", "pelle", "pelleteuse", "minibagger"],
-    "miniescavatore": ["miniescavatore", "mini excavator", "minibagger", "mini-pelle"],
-    # Gru
-    "gru": ["gru", "crane", "kran", "grue"],
-    "autogru": ["autogru", "mobile crane", "mobilkran", "grue mobile", "grue automotrice"],
-    # Piattaforme aeree
-    "piattaforma aerea": ["piattaforma aerea", "aerial", "nacelle", "hubarbeitsbühne", "nacelle élévatrice"],
-    "cestello": ["cestello", "boom lift", "arbeitsbühne", "plateforme"],
-    # Carrelli elevatori
-    "carrello elevatore": ["carrello elevatore", "forklift", "gabelstapler", "chariot élévateur"],
-    # Compressori
-    "compressore": ["compressore", "compressor", "kompressor", "compresseur"],
-    # Betoniere / Pompe
-    "betoniera": ["betoniera", "concrete mixer", "betonmischer", "bétonnière"],
-    "pompa": ["pompa", "pump", "pumpe", "pompe"],
-    # Macchine stradali
-    "finitrice": ["finitrice", "paver", "fertiger", "finisseuse"],
-    "rullo": ["rullo", "roller", "walze", "rouleau compresseur"],
-    # Presse / Macchine utensili
-    "pressa": ["pressa", "press", "presse", "presse plieuse"],
-    "piegatrice": ["piegatrice", "bending", "abkantpresse", "presse plieuse"],
-    # Generatori
-    "generatore": ["generatore", "generator", "generator", "groupe électrogène"],
-    # Sollevamento
-    "paranchi": ["paranchi", "hoist", "hebezeug", "palan"],
-    "sollevatore": ["sollevatore", "lift", "heber", "élévateur"],
-    # Ascensori da cantiere / montacarichi
-    "ascensore": ["ascensore", "ascensore da cantiere", "ascensore di cantiere",
-                   "montacarichi", "construction hoist", "personnel hoist",
-                   "builder's hoist", "material hoist", "bauaufzug",
-                   "personenaufzug", "lastenaufzug", "ascenseur de chantier",
-                   "monte-charge"],
-}
-
-def _get_category_keywords(machine_type: str) -> list[str]:
+def _get_category_keywords(
+    machine_type: str,
+    machine_type_id: Optional[int] = None,
+) -> list[str]:
     """
-    Restituisce le keyword di categoria in tutte le lingue per il machine_type dato.
-    Cerca sia corrispondenza esatta che per sottostringa.
+    Restituisce le keyword di categoria per il machine_type dato, leggendole
+    dalla tabella machine_aliases (più nome canonico machine_types.name).
+    Non ci sono alias hardcoded: ogni variante deve esistere in DB.
     """
-    if not machine_type:
-        return []
-    mt_lower = machine_type.lower().strip()
-    keywords: set[str] = set()
-
-    for key, kws in _CATEGORY_MULTILANG.items():
-        if key in mt_lower or mt_lower in key:
-            keywords.update(kws)
-
-    # Fallback: parole singole dal machine_type (≥4 char) come prima
-    if not keywords:
-        keywords.update(w for w in mt_lower.split() if len(w) >= 4)
-
-    return list(keywords)
+    try:
+        from app.services.machine_type_service import get_category_keywords as _db_kw
+        return _db_kw(machine_type=machine_type or None, machine_type_id=machine_type_id)
+    except Exception as e:
+        _logger.warning("_get_category_keywords: fallback a parole del machine_type: %s", e)
+        if not machine_type:
+            return []
+        mt_lower = machine_type.lower().strip()
+        return sorted({mt_lower, *[w for w in mt_lower.split() if len(w) >= 4]})
 
 
 def classify_pdf_match(
@@ -464,6 +436,7 @@ def classify_pdf_match(
     brand: str,
     model: str,
     machine_type: str = "",
+    machine_type_id: Optional[int] = None,
 ) -> str:
     """
     Classifica la pertinenza del PDF rispetto alla macchina cercata.
@@ -508,14 +481,23 @@ def classify_pdf_match(
         # Cerca categoria in tutte le lingue supportate.
         # Soglia uniforme >= 3 occorrenze: evita falsi positivi su documenti generici
         # multi-categoria (es. "Macchine in edilizia" che cita ogni tipo di macchina 1-2 volte).
-        cat_keywords = _get_category_keywords(machine_type)
+        cat_keywords = _get_category_keywords(machine_type, machine_type_id)
+        total_count = 0
         if cat_keywords:
             total_count = sum(text.count(kw) for kw in cat_keywords)
             if total_count >= 3:
                 return "category"
 
+        _logger.info(
+            "classify_pdf_match → unrelated: machine_type=%r id=%s "
+            "keywords=%d (%s) total_hits=%d brand=%r model=%r text_sample=%d chars",
+            machine_type, machine_type_id, len(cat_keywords),
+            ",".join(cat_keywords[:8]), total_count,
+            brand, model, len(text),
+        )
         return "unrelated"
-    except Exception:
+    except Exception as e:
+        _logger.warning("classify_pdf_match error: %s", e)
         return "unknown"
 
 
@@ -660,7 +642,7 @@ def extract_safety_relevant_text(pdf_bytes: bytes, max_pages: int = 50) -> str:
         page_scores = []
         for i, page in enumerate(doc):
             text = page.get_text().lower()
-            score = sum(1 for kw in SAFETY_KEYWORDS if kw in text)
+            score = sum(1 for kw in _get_safety_keywords() if kw in text)
             page_scores.append((i, score, page.get_text()))
 
         doc.close()
@@ -783,6 +765,86 @@ async def ai_quick_validate(
 
     except Exception:
         return True  # Fallback silenzioso — non blocca la pipeline
+
+
+async def ai_compare_manuals(
+    pdf_a: bytes,
+    pdf_b: bytes,
+    machine_type: str,
+    provider: str,
+) -> int:
+    """
+    Confronto AI tra due PDF di categoria simile: restituisce 0 se A è migliore, 1 se B è migliore.
+
+    Usato quando il manuale specifico del produttore non è disponibile e si trovano
+    più candidati di categoria simile in locale. Usa modello economico (Haiku/Flash)
+    per mantenere basso il costo (~$0.00003 per chiamata).
+    Fallisce silenziosamente → 0 (usa A, già il migliore per score).
+    """
+    import asyncio as _asyncio
+    try:
+        import fitz
+
+        def _first_pages_text(pdf_bytes: bytes, n_pages: int = 4) -> str:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            pages = min(n_pages, len(doc))
+            text = "".join(doc[i].get_text() for i in range(pages)).strip()
+            doc.close()
+            return text
+
+        text_a = _first_pages_text(pdf_a)[:2000]
+        text_b = _first_pages_text(pdf_b)[:2000]
+
+        if not text_a and not text_b:
+            return 0  # Entrambi scansionati: usa A (già ordinato per score)
+
+        prompt = (
+            f"Devi scegliere il manuale più pertinente per la sicurezza di: {machine_type}.\n\n"
+            f"MANUALE A (prime pagine):\n{text_a or '[testo non estraibile - PDF scansionato]'}\n\n"
+            f"MANUALE B (prime pagine):\n{text_b or '[testo non estraibile - PDF scansionato]'}\n\n"
+            "Quale manuale è più rilevante per la sicurezza e l'uso corretto di questa categoria di macchina?\n"
+            "Considera: rischi specifici, procedure operative, norme di sicurezza, componenti tipici.\n"
+            "Rispondi SOLO con una lettera: A oppure B"
+        )
+
+        answer = ""
+        if provider == "anthropic":
+            import anthropic
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            resp = await _asyncio.wait_for(
+                client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=3,
+                    messages=[{"role": "user", "content": prompt}],
+                ),
+                timeout=10,
+            )
+            answer = resp.content[0].text.strip().upper()
+
+        elif provider == "gemini":
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=settings.gemini_api_key)
+            resp = await _asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=3, temperature=0.0,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    ),
+                ),
+                timeout=10,
+            )
+            answer = resp.text.strip().upper()
+
+        else:
+            return 0
+
+        return 1 if answer.startswith("B") else 0
+
+    except Exception:
+        return 0  # Fallback silenzioso — usa A (già il migliore per score)
 
 
 def pdf_to_base64(pdf_bytes: bytes) -> str:

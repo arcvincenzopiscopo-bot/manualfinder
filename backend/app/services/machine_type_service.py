@@ -824,6 +824,58 @@ def admin_get_aliases(machine_type_id: int) -> list[dict]:
         return []
 
 
+def get_category_keywords(
+    machine_type: Optional[str] = None,
+    machine_type_id: Optional[int] = None,
+) -> list[str]:
+    """
+    Ritorna le keyword di categoria (nome canonico + tutti gli alias, normalizzati
+    e lowercased) per il matching multilingua di PDF.
+    Risoluzione:
+      1. Se machine_type_id è fornito, carica nome + alias diretti.
+      2. Altrimenti risolve machine_type → id via _alias_map e carica.
+    Se DB non disponibile o non risolve, ritorna fallback minimale derivato dal
+    machine_type stesso (parole ≥ 4 char).
+    """
+    _ensure_alias_map()
+
+    resolved_id: Optional[int] = machine_type_id
+    if resolved_id is None and machine_type:
+        resolved_id = _alias_map.get(_normalize(machine_type))
+
+    keywords: set[str] = set()
+
+    if resolved_id is not None and settings.database_url:
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT LOWER(name) FROM machine_types WHERE id = %s
+                """, (resolved_id,))
+                row = cur.fetchone()
+                if row and row[0]:
+                    keywords.add(row[0].strip())
+                cur.execute("""
+                    SELECT LOWER(alias_text) FROM machine_aliases
+                    WHERE machine_type_id = %s
+                """, (resolved_id,))
+                for r in cur.fetchall():
+                    if r[0]:
+                        keywords.add(r[0].strip())
+            conn.close()
+        except Exception as e:
+            logger.warning("get_category_keywords: DB lookup failed: %s", e)
+
+    if not keywords and machine_type:
+        mt_lower = machine_type.lower().strip()
+        keywords.add(mt_lower)
+        for w in mt_lower.split():
+            if len(w) >= 4:
+                keywords.add(w)
+
+    return sorted(keywords)
+
+
 def admin_add_alias(machine_type_id: int, alias_text: str) -> dict:
     """Aggiunge un alias manuale a un tipo macchina esistente."""
     if not settings.database_url:
@@ -1187,6 +1239,165 @@ async def _ai_classify_inail_category(machine_name: str, canonical_categories: l
     except Exception as ex:
         logger.warning("_ai_classify_inail_category: errore per '%s': %s", machine_name, ex)
         return None
+
+
+async def _ai_generate_foreign_aliases(machine_name: str, provider: str) -> list[str]:
+    """
+    Chiede all'AI termini tecnici equivalenti in EN, DE, FR, ES per una macchina.
+    Ritorna lista di stringhe (termini + eventuali acronimi). Chiamata diretta
+    al provider senza SYSTEM_PROMPT safety card.
+    """
+    prompt = (
+        f"Sei un esperto di macchinari da cantiere e industriali e dei relativi "
+        f"manuali tecnici multilingua.\n\n"
+        f"Tipo di macchina in italiano: \"{machine_name}\"\n\n"
+        f"Elenca i termini tecnici equivalenti usati sui manuali ufficiali nelle seguenti lingue:\n"
+        f"  - Inglese (EN)\n"
+        f"  - Tedesco (DE)\n"
+        f"  - Francese (FR)\n"
+        f"  - Spagnolo (ES)\n\n"
+        f"Includi sia nomi completi sia forme brevi/acronimi di uso comune nel settore "
+        f"(es. 'forklift', 'MEWP', 'telehandler'). Escludi traduzioni letterali "
+        f"non usate sui manuali reali.\n\n"
+        f"Rispondi SOLO con JSON valido nel formato:\n"
+        f'{{"aliases": ["termine1", "termine2", ...]}}\n'
+        f"Nessun testo aggiuntivo, nessuna spiegazione."
+    )
+    try:
+        if provider == "anthropic":
+            import anthropic
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            response = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                temperature=0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text
+        elif provider == "gemini":
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=settings.gemini_api_key)
+            response = await client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=400,
+                    temperature=0.0,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            raw = response.text
+        else:
+            return []
+
+        from app.services.analysis_service import _parse_json_response
+        parsed = _parse_json_response(raw)
+        if not isinstance(parsed, dict):
+            return []
+        items = parsed.get("aliases") or []
+        return [str(x).strip() for x in items if isinstance(x, (str, int)) and str(x).strip()]
+    except Exception as ex:
+        logger.warning("_ai_generate_foreign_aliases: errore per '%s': %s", machine_name, ex)
+        return []
+
+
+async def admin_autopopulate_aliases(machine_type_id: int, provider: str) -> dict:
+    """
+    Popola la tabella machine_aliases con termini EN/DE/FR/ES per il tipo dato,
+    usando AI (claude-haiku). Alias nuovi salvati con source='ai_i18n'.
+    Idempotente: ON CONFLICT DO NOTHING sul normalized_alias.
+    Ritorna { status, machine_type_id, requested, inserted, skipped_existing, aliases_inserted }.
+    """
+    if not settings.database_url:
+        return {"status": "no_db"}
+
+    # Risolvi nome canonico
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT name FROM machine_types WHERE id = %s", (machine_type_id,))
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return {"status": "not_found"}
+        machine_name = row[0]
+    except Exception as e:
+        logger.error("admin_autopopulate_aliases lookup: %s", e)
+        return {"status": "error", "detail": str(e)}
+
+    # Chiama AI
+    raw_aliases = await _ai_generate_foreign_aliases(machine_name, provider)
+    if not raw_aliases:
+        return {
+            "status": "empty",
+            "machine_type_id": machine_type_id,
+            "requested": 0,
+            "inserted": 0,
+            "skipped_existing": 0,
+            "aliases_inserted": [],
+        }
+
+    # Insert in DB
+    inserted: list[str] = []
+    skipped = 0
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            for alias_text in raw_aliases:
+                norm = _normalize(alias_text)
+                if not norm:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO machine_aliases (machine_type_id, alias_text, normalized_alias, source)
+                    VALUES (%s, %s, %s, 'ai_i18n')
+                    ON CONFLICT (normalized_alias) DO NOTHING
+                    RETURNING id
+                    """,
+                    (machine_type_id, alias_text, norm),
+                )
+                if cur.fetchone():
+                    inserted.append(alias_text)
+                else:
+                    skipped += 1
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error("admin_autopopulate_aliases insert: %s", e)
+        return {"status": "error", "detail": str(e)}
+
+    invalidate_cache()
+    return {
+        "status": "ok",
+        "machine_type_id": machine_type_id,
+        "requested": len(raw_aliases),
+        "inserted": len(inserted),
+        "skipped_existing": skipped,
+        "aliases_inserted": inserted,
+    }
+
+
+def admin_confirm_alias(alias_id: int) -> dict:
+    """Promuove un alias da source='ai_i18n' (o altro) a source='admin' (revisionato)."""
+    if not settings.database_url:
+        return {"status": "no_db"}
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE machine_aliases SET source = 'admin' WHERE id = %s RETURNING id",
+                (alias_id,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        conn.close()
+        if not row:
+            return {"status": "not_found"}
+        return {"status": "ok", "id": row[0]}
+    except Exception as e:
+        logger.error("admin_confirm_alias: %s", e)
+        return {"status": "error", "detail": str(e)}
 
 
 async def admin_populate_inail_hint(provider: str) -> dict:

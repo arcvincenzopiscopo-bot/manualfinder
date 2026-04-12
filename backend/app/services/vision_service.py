@@ -101,58 +101,50 @@ Rispondi SOLO con il JSON valido, senza markdown, senza testo aggiuntivo."""
 GEMINI_MODEL = "gemini-2.5-flash"
 
 
-_GENERIC_TYPES = {
+_FB_GENERIC_TYPES = {
     None, "", "macchinario", "macchina", "attrezzatura", "equipment", "machine",
     "accessorio", "attrezzo", "attachment", "tool",
 }
-
-# Segnali nel machine_type che indicano un accessorio/attrezzatura, non una macchina completa
-_ACCESSORY_SIGNALS = {
+_FB_ACCESSORY_SIGNALS = {
     "testa idraulica", "testa girevole", "rotatore idraulico", "rotatore",
     "benna a polipo", "benna frantoio", "benna carico", "benna",
     "polipo", "pinza demolizione", "pinza", "cesoia demolitrice",
     "martello demolitore idraulico da escavatore",
     "bilancino di sollevamento", "bilancino",
-    "paranco manuale", "paranco",
-    "gancio di sollevamento",
+    "paranco manuale", "paranco", "gancio di sollevamento",
     "attrezzo intercambiabile", "testina di scavo", "scarificatore",
-    "compattatore vibrante da escavatore",
-    "forche da magazzino",
-    "testa saldante",
+    "compattatore vibrante da escavatore", "forche da magazzino", "testa saldante",
+}
+_FB_EN_TO_IT: dict[str, str] = {
+    "reach stacker": "carrello portacontainer", "stacker": "carrello portacontainer",
+    "scissor lift": "piattaforma a forbice", "boom lift": "piattaforma aerea a braccio",
+    "aerial work platform": "piattaforma aerea", "awp": "piattaforma aerea",
+    "forklift": "carrello elevatore", "telehandler": "sollevatore telescopico",
+    "telescopic handler": "sollevatore telescopico", "excavator": "escavatore",
+    "wheel loader": "pala caricatrice", "loader": "pala caricatrice",
+    "bulldozer": "bulldozer", "dumper": "dumper", "compactor": "rullo compattatore",
+    "crane": "gru mobile", "tower crane": "gru a torre",
+    "concrete pump": "pompa calcestruzzo", "paver": "finitrice stradale",
+    "grader": "livellatrice", "trencher": "scavatrice a catena",
+    "skid steer": "minipala", "backhoe": "terna", "backhoe loader": "terna",
+    "generator": "generatore", "compressor": "compressore",
+    "concrete mixer": "betoniera", "mixer": "betoniera", "welder": "saldatrice",
 }
 
-# Normalizzazione EN→IT per tipi macchina restituiti in inglese dall'AI
-_EN_TO_IT_MACHINE_TYPE: dict[str, str] = {
-    "reach stacker": "carrello portacontainer",
-    "stacker": "carrello portacontainer",
-    "scissor lift": "piattaforma a forbice",
-    "boom lift": "piattaforma aerea a braccio",
-    "aerial work platform": "piattaforma aerea",
-    "awp": "piattaforma aerea",
-    "forklift": "carrello elevatore",
-    "telehandler": "sollevatore telescopico",
-    "telescopic handler": "sollevatore telescopico",
-    "excavator": "escavatore",
-    "wheel loader": "pala caricatrice",
-    "loader": "pala caricatrice",
-    "bulldozer": "bulldozer",
-    "dumper": "dumper",
-    "compactor": "rullo compattatore",
-    "crane": "gru mobile",
-    "tower crane": "gru a torre",
-    "concrete pump": "pompa calcestruzzo",
-    "paver": "finitrice stradale",
-    "grader": "livellatrice",
-    "trencher": "scavatrice a catena",
-    "skid steer": "minipala",
-    "backhoe": "terna",
-    "backhoe loader": "terna",
-    "generator": "generatore",
-    "compressor": "compressore",
-    "concrete mixer": "betoniera",
-    "mixer": "betoniera",
-    "welder": "saldatrice",
-}
+
+def _generic_types() -> frozenset:
+    from app.services.config_service import get_list
+    return frozenset(get_list("generic_machine_types", _FB_GENERIC_TYPES - {None, ""})) | {None, ""}
+
+
+def _accessory_signals() -> frozenset:
+    from app.services.config_service import get_list
+    return frozenset(get_list("accessory_signals", _FB_ACCESSORY_SIGNALS))
+
+
+def _en_to_it_map() -> dict:
+    from app.services.config_service import get_map
+    return get_map("en_to_it_machine_type", _FB_EN_TO_IT)
 
 
 def _normalize_machine_type(machine_type: str) -> str:
@@ -160,7 +152,7 @@ def _normalize_machine_type(machine_type: str) -> str:
     if not machine_type:
         return machine_type
     mt = machine_type.lower().strip()
-    return _EN_TO_IT_MACHINE_TYPE.get(mt, machine_type)
+    return _en_to_it_map().get(mt, machine_type)
 
 
 _VALIDATE_PROMPT = (
@@ -266,7 +258,7 @@ async def extract_plate_info(image_base64: str) -> PlateOCRResult:
     # Post-inferenza: rileva accessori/attrezzature per evitare analisi come macchina completa
     if result.machine_type:
         mt_lower = result.machine_type.lower()
-        for sig in _ACCESSORY_SIGNALS:
+        for sig in _accessory_signals():
             if sig in mt_lower:
                 if not result.notes:
                     result.notes = (
@@ -388,10 +380,9 @@ def _add_uncertain_flags(result: PlateOCRResult, variants: list) -> PlateOCRResu
     return result
 
 
-# ── Lookup deterministico brand → tipo macchina ──────────────────────────────
-# Usato PRIMA dell'AI: per brand noti restituisce il tipo corretto senza chiamate.
-# Chiave: brand normalizzato (lower, strip). Valore: tipo INAIL in italiano.
-_BRAND_TYPE_MAP: dict[str, str] = {
+# _BRAND_TYPE_MAP e _MODEL_PREFIX_OVERRIDES sono ora in DB (brand_machine_type_hints).
+# Seed iniziale in config_seeds.py. Usare config_service.get_brand_hints() via _lookup_brand_type().
+_BRAND_TYPE_MAP: dict[str, str] = {  # mantenuto solo come documentazione / riferimento seed
     # ── Macchine per lavorazione legno ────────────────────────────────────────
     "polieri":      "sega circolare",
     "casadei":      "sega circolare",
@@ -543,7 +534,7 @@ _BRAND_TYPE_MAP: dict[str, str] = {
     "casagrande":   "trivella da fondazione",
 }
 
-# Prefissi modello che specificano meglio il tipo per brand multi-prodotto
+# Ora in DB. Mantenuto solo come seed reference.
 _MODEL_PREFIX_OVERRIDES: list[tuple[str, str, str]] = [
     # (brand_lower, model_prefix_lower, tipo)
     ("caterpillar", "320", "escavatore"),
@@ -628,26 +619,33 @@ _MODEL_PREFIX_OVERRIDES: list[tuple[str, str, str]] = [
 
 def _lookup_brand_type(brand: str, model: str) -> Optional[str]:
     """
-    Lookup deterministico: prima controlla prefissi modello specifici,
-    poi fallback sul brand. Restituisce None se brand sconosciuto.
+    Lookup deterministico da DB brand_machine_type_hints.
+    Prima controlla prefissi modello specifici, poi fallback sul brand.
+    Restituisce None se brand sconosciuto.
     """
+    from app.services.config_service import get_brand_hints
     brand_l = brand.strip().lower()
     model_l = model.strip().lower()
 
-    # 1) Controlla sovrascritture per prefisso modello
-    for b, mp, tipo in _MODEL_PREFIX_OVERRIDES:
-        if brand_l == b and model_l.startswith(mp):
-            return tipo
+    hints = get_brand_hints()
 
-    # 2) Fallback brand esatto
-    if brand_l in _BRAND_TYPE_MAP:
-        return _BRAND_TYPE_MAP[brand_l]
+    # 1) Sovrascritture per prefisso modello (model_prefix valorizzato)
+    for h in hints:
+        mp = h.get("model_prefix")
+        if mp and h["brand"] == brand_l and model_l.startswith(mp):
+            return h["machine_type_text"]
+
+    # 2) Fallback brand esatto (model_prefix NULL)
+    for h in hints:
+        if h.get("model_prefix") is None and h["brand"] == brand_l:
+            return h["machine_type_text"]
 
     # 3) Fallback brand parziale (gestisce "Volvo CE" vs "Volvo")
-    for key, tipo in _BRAND_TYPE_MAP.items():
-        if key in brand_l or brand_l in key:
-            if len(key) >= 4:  # evita match troppo corti
-                return tipo
+    for h in hints:
+        if h.get("model_prefix") is None:
+            key = h["brand"]
+            if len(key) >= 4 and (key in brand_l or brand_l in key):
+                return h["machine_type_text"]
 
     return None
 
@@ -674,7 +672,7 @@ async def _infer_machine_type(
         return (lookup, mt_id if score >= 0.82 else None)
 
     # Step 2: DB matching diretto su ocr_hint (se disponibile e affidabile)
-    if ocr_hint and ocr_hint not in _GENERIC_TYPES:
+    if ocr_hint and ocr_hint not in _generic_types():
         mt_id, score, method = match_ocr_text(ocr_hint)
         if mt_id and score >= 0.82:
             name = get_name_by_id(mt_id)

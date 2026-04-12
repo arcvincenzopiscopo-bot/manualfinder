@@ -13,8 +13,9 @@ from app.config import settings
 from app.models.responses import ManualSearchResult
 
 
-# Mappatura tipi macchina -> termini di ricerca INAIL
-INAIL_MACHINE_TYPES = {
+# Mappatura tipi macchina -> termini di ricerca INAIL — ora in DB (config_maps:"inail_machine_types")
+# Mantenuta solo come seed reference per config_seeds.py
+_INAIL_MACHINE_TYPES_SEED = {
     "piattaforma aerea": "piattaforma di lavoro mobile elevabile PLE",
     "piattaforma": "piattaforma di lavoro mobile elevabile PLE",
     "escavatore": "escavatore",
@@ -206,21 +207,25 @@ def _get_inail_machine_type(machine_type: Optional[str], machine_type_id: Option
         except Exception:
             pass
 
-    # 2. Fallback: dizionario hardcodato
+    # 2. Fallback: dizionario da DB (config_maps:"inail_machine_types")
     if not machine_type:
         return None
     from app.services.local_manuals_service import _normalize_machine_type
+    from app.services.config_service import get_map
     mt = _normalize_machine_type(machine_type)
-    if mt in INAIL_MACHINE_TYPES:
-        return INAIL_MACHINE_TYPES[mt]
-    for key, value in INAIL_MACHINE_TYPES.items():
+    inail_map = get_map("inail_machine_types", _INAIL_MACHINE_TYPES_SEED)
+    if mt in inail_map:
+        return inail_map[mt]
+    for key, value in inail_map.items():
         if key in mt or mt in key:
             return value
     # 3. Usa il tipo normalizzato come termine di ricerca
     return mt
 
 
-_EDILIZIA_MACHINE_TYPES = {
+# Ora in DB (config_lists:"edilizia_machine_types" / "officina_machine_types").
+# Fallback statici.
+_FB_EDILIZIA = frozenset({
     "escavatore", "escavatori", "gru", "gru mobile", "gru a torre", "camion gru",
     "carrello elevatore", "muletto", "sollevatore telescopico",
     "pala caricatrice", "pala meccanica", "dumper", "autocarro ribaltabile",
@@ -228,14 +233,22 @@ _EDILIZIA_MACHINE_TYPES = {
     "piattaforma di lavoro mobile elevabile ple", "pompa calcestruzzo",
     "terna", "terne", "retroescavatore", "bulldozer", "apripista",
     "betoniera", "martello demolitore",
-}
-
-# Fonti per macchine utensili da officina (non edilizia)
-_OFFICINA_MACHINE_TYPES = {
+})
+_FB_OFFICINA = frozenset({
     "pressa piegatrice", "piegatrice", "press brake", "cesoie trancia",
     "punzonatrice pressa", "macchina taglio laser", "tornio macchina utensile",
     "fresatrice macchina utensile", "rettificatrice macchina utensile",
-}
+})
+
+
+def _edilizia_types() -> frozenset:
+    from app.services.config_service import get_list
+    return frozenset(get_list("edilizia_machine_types", _FB_EDILIZIA))
+
+
+def _officina_types() -> frozenset:
+    from app.services.config_service import get_list
+    return frozenset(get_list("officina_machine_types", _FB_OFFICINA))
 
 
 def _build_inail_queries(machine_type: Optional[str], machine_type_id: Optional[int] = None) -> List[str]:
@@ -254,11 +267,11 @@ def _build_inail_queries(machine_type: Optional[str], machine_type_id: Optional[
             flags = _get_flags(machine_type_id) or {}
             is_officina = bool(flags.get("is_officina", False))
         except Exception:
-            is_officina = any(k in inail_type_lower for k in _OFFICINA_MACHINE_TYPES)
+            is_officina = any(k in inail_type_lower for k in _officina_types())
     else:
         is_officina = any(k in inail_type_lower for k in _OFFICINA_MACHINE_TYPES)
 
-    is_edilizia = (not is_officina) and any(k in inail_type_lower for k in _EDILIZIA_MACHINE_TYPES)
+    is_edilizia = (not is_officina) and any(k in inail_type_lower for k in _edilizia_types())
 
     queries = [
         f'site:inail.it "{inail_type}" scheda tecnica',
@@ -295,6 +308,8 @@ def _build_inail_queries(machine_type: Optional[str], machine_type_id: Optional[
 
 # Siti ufficiali internazionali del produttore — massima autorità, PDF originali
 # NOTA: definiti a livello di modulo per riuso in _scrape_wayback_machine
+# Ora in DB (domain_classifications kind="manufacturer_primary").
+# Mantenuti come seed reference.
 MANUFACTURER_SITES_PRIMARY = {
     "caterpillar": "cat.com",
     "komatsu":     "komatsu.com",
@@ -365,8 +380,7 @@ MANUFACTURER_SITES_PRIMARY = {
     "abac":        "abac.com",
 }
 
-# Dealer italiani ufficiali — secondari, aggiunti DOPO le query sul sito primario
-# Separati in dict distinto per evitare che sovrascrivano le chiavi primarie
+# Ora in DB (domain_classifications kind="manufacturer_secondary").
 MANUFACTURER_SITES_SECONDARY = {
     "jcb":          "jcbitalia.it",
     "komatsu":      "komatsu-italia.it",
@@ -402,14 +416,18 @@ def _build_manual_queries(brand: str, model: str) -> List[str]:
     ]
 
     # 1) Sito produttore ufficiale — alta priorità
-    if normalized in MANUFACTURER_SITES_PRIMARY:
-        site = MANUFACTURER_SITES_PRIMARY[normalized]
+    from app.services.config_service import get_domain_map_by_brand
+    primary_map   = get_domain_map_by_brand("manufacturer_primary")   or {b: d for b, d in MANUFACTURER_SITES_PRIMARY.items()}
+    secondary_map = get_domain_map_by_brand("manufacturer_secondary") or {b: d for b, d in MANUFACTURER_SITES_SECONDARY.items()}
+
+    if normalized in primary_map:
+        site = primary_map[normalized]
         queries.insert(0, f"{brand} {model} operator manual filetype:pdf site:{site}")
         queries.insert(1, f"{brand} {model} manuale site:{site}")
 
     # 2) Dealer italiano ufficiale
-    if normalized in MANUFACTURER_SITES_SECONDARY:
-        sec = MANUFACTURER_SITES_SECONDARY[normalized]
+    if normalized in secondary_map:
+        sec = secondary_map[normalized]
         queries.append(f"{brand} {model} manuale filetype:pdf site:{sec}")
 
     # 3) Aggregatori specializzati manuali
@@ -650,8 +668,9 @@ async def _scrape_wayback_machine(brand: str, model: str) -> List[ManualSearchRe
     """
     normalized = _normalize_brand(brand)
 
-    # Usa MANUFACTURER_SITES_PRIMARY (unica fonte di verità per i domini)
-    domain = MANUFACTURER_SITES_PRIMARY.get(normalized)
+    from app.services.config_service import get_domain_map_by_brand
+    _primary = get_domain_map_by_brand("manufacturer_primary") or {b: d for b, d in MANUFACTURER_SITES_PRIMARY.items()}
+    domain = _primary.get(normalized)
     if not domain:
         return []
 
@@ -717,7 +736,8 @@ async def _scrape_wayback_machine(brand: str, model: str) -> List[ManualSearchRe
         return []
 
 
-_MANUFACTURER_DOMAINS = {
+# Ora in DB (domain_classifications kind="manufacturer").
+_MANUFACTURER_DOMAINS_SEED = {
     # Macchine movimento terra / sollevamento
     "caterpillar.com", "cat.com", "komatsu.com", "manitou.com", "atlascopco.com",
     "liebherr.com", "volvoce.com", "jcb.com", "casece.com", "deere.com",
@@ -739,12 +759,12 @@ _MANUFACTURER_DOMAINS = {
     "wackerneuson.it", "tadano-italia.com",
 }
 
-_RENTAL_DOMAINS = {
+_RENTAL_DOMAINS_SEED = {
     "loxam.it", "boels.it", "mollonoleggio.com", "lorini.it",
     "kiloutou.it", "riwal.com", "cgt.it",
 }
 
-_INSTITUTIONAL_DOMAINS = {
+_INSTITUTIONAL_DOMAINS_SEED = {
     "inail.it", "formediltorinofsc.it", "puntosicuro.it",
     "salute.regione.emilia-romagna.it", "ats-milano.it",
     # Fonti istituzionali internazionali equivalenti INAIL
@@ -755,7 +775,7 @@ _INSTITUTIONAL_DOMAINS = {
     "enama.it",          # Macchine agricole
 }
 
-_AGGREGATOR_DOMAINS = {
+_AGGREGATOR_DOMAINS_SEED = {
     "manualslib.com",
     "heavyequipments.org",
     "manualmachine.com",    # Sostituisce SafeManuals: PDF scaricabili senza login
@@ -763,22 +783,32 @@ _AGGREGATOR_DOMAINS = {
 }
 
 
+def _get_domains(kind: str, fallback: set) -> frozenset:
+    from app.services.config_service import get_domains
+    d = get_domains(kind)
+    return frozenset(d) if d else frozenset(fallback)
+
+
 def _classify_source(url: str) -> tuple[str, str]:
     """Classifica la sorgente e la lingua stimata dall'URL."""
     url_lower = url.lower()
-    if any(d in url_lower for d in _INSTITUTIONAL_DOMAINS):
+    institutional = _get_domains("institutional", _INSTITUTIONAL_DOMAINS_SEED)
+    manufacturer  = _get_domains("manufacturer",  _MANUFACTURER_DOMAINS_SEED)
+    rental        = _get_domains("rental",        _RENTAL_DOMAINS_SEED)
+    if any(d in url_lower for d in institutional):
         return "inail", "it"
-    if any(d in url_lower for d in _MANUFACTURER_DOMAINS):
+    if any(d in url_lower for d in manufacturer):
         return "manufacturer", "en"
-    if any(d in url_lower for d in _RENTAL_DOMAINS):
+    if any(d in url_lower for d in rental):
         return "web", "it"
     if any(ext in url_lower for ext in [".it/", ".it?", ".it#"]) or url_lower.endswith(".it"):
         return "web", "it"
     return "web", "unknown"
 
 
-# Keyword nel titolo che indicano documento utile per sicurezza
-_TITLE_POSITIVE = [
+# Keyword titolo — ora in DB (config_maps:"title_positive"/"title_negative").
+# Fallback statici usati se DB non disponibile.
+_FB_TITLE_POSITIVE = [
     ("manuale operatore", 25), ("manuale uso e manutenzione", 25),
     ("operator manual", 25), ("user manual", 20), ("manuale d'uso", 20),
     ("istruzioni per l'uso", 20), ("istruzioni d'uso", 20),
@@ -786,21 +816,33 @@ _TITLE_POSITIVE = [
     ("manuale", 15), ("istruzioni", 15), ("manual", 15), ("operator", 12),
     ("sicurezza", 10), ("safety", 10), ("uso", 8), ("maintenance", 8),
     ("scheda tecnica", 5), ("datasheet", 5),
-    # Norme armonizzate specifiche macchine utensili
     ("EN 12622", 8), ("EN 13736", 8), ("EN 693", 8),
 ]
-
-# Keyword nel titolo che indicano documento NON utile (penalità)
-_TITLE_NEGATIVE = [
+_FB_TITLE_NEGATIVE = [
     ("spare parts", -25), ("parts catalog", -25), ("catalogo ricambi", -25),
     ("parts list", -20), ("listino", -20), ("price list", -20),
     ("workshop manual", -15), ("service manual", -15), ("repair manual", -15),
     ("manuale officina", -15), ("manuale riparazione", -15),
-    # Brochure commerciali — non contengono dati di sicurezza
     ("brochure", -20), ("product sheet", -15), ("scheda prodotto", -15),
     ("scheda commerciale", -15), ("flyer", -15), ("volantino", -15),
     ("wiring diagram", -10), ("schema elettrico", -10),
 ]
+
+
+def _title_positive() -> list[tuple[str, int]]:
+    from app.services.config_service import get_map
+    data = get_map("title_positive")
+    if not data:
+        return _FB_TITLE_POSITIVE
+    return [(k, int(v)) for k, v in data.items()]
+
+
+def _title_negative() -> list[tuple[str, int]]:
+    from app.services.config_service import get_map
+    data = get_map("title_negative")
+    if not data:
+        return _FB_TITLE_NEGATIVE
+    return [(k, int(v)) for k, v in data.items()]
 
 
 def _score_result(
@@ -881,12 +923,12 @@ def _score_result(
 
     # ── 4. Qualità titolo/snippet ────────────────────────────────────────
     combined_text = title_lower + " " + snippet_lower
-    for kw, pts in _TITLE_POSITIVE:
+    for kw, pts in _title_positive():
         if kw in combined_text:
             score += pts
             break  # Solo la corrispondenza migliore
 
-    for kw, pts in _TITLE_NEGATIVE:
+    for kw, pts in _title_negative():
         if kw in combined_text:
             score += pts  # pts è negativo
             break
@@ -951,10 +993,17 @@ async def search_manual(
     machine_year: Optional[str] = None,
     serial_number: Optional[str] = None,
     machine_type_id: Optional[int] = None,
+    has_local_inail: bool = False,
 ) -> List[ManualSearchResult]:
     """
     Cerca il manuale con strategia a più livelli.
     Risultati cachati 7 giorni per evitare query ripetute.
+
+    Args:
+        has_local_inail: se True, il manuale INAIL locale è già disponibile → i livelli
+                         INAIL online (1, 2) vengono saltati. Le fonti istituzionali (2b)
+                         vengono incluse ma taggate come "supplemental" per deduplicazione.
+                         I livelli produttore (0, 3a–3j) vengono eseguiti normalmente.
     """
     from app.services import local_manuals_service
     from app.services.cache_service import search_cache
@@ -962,7 +1011,8 @@ async def search_manual(
     provider = settings.get_search_provider()
 
     # ── Cache lookup ─────────────────────────────────────────────────────
-    cache_key = (brand, model, machine_type or "", machine_year or "", serial_number or "")
+    # Includi has_local_inail nella cache key: strategie diverse → risultati diversi
+    cache_key = (brand, model, machine_type or "", machine_year or "", serial_number or "", str(has_local_inail))
     cached = search_cache.get(*cache_key)
     if cached is not None:
         # Applica il filtro blocco anche sui risultati cachati: un URL segnalato
@@ -1014,9 +1064,9 @@ async def search_manual(
         pass  # Non interrompere la ricerca se Supabase non è raggiungibile
 
     # LIVELLO 1: Cerca nel database locale PDF INAIL
-    # Se l'admin ha associato esplicitamente un file al tipo (inail_search_hint = filename),
-    # quel file viene usato come fonte primaria senza passare per MACHINE_ALIASES.
-    if machine_type:
+    # Saltato se has_local_inail=True: il manuale locale è già noto e verrà aggiunto
+    # direttamente in analyze.py prima del download, senza passare per la ricerca.
+    if machine_type and not has_local_inail:
         db_filename: Optional[str] = None
         if machine_type_id:
             try:
@@ -1039,9 +1089,11 @@ async def search_manual(
                 relevance_score=100,  # Priorità massima
             )
             all_results.append(local_result)
-    
+
     # LIVELLO 2: Cerca libretto INAIL online per tipo di macchina
-    if machine_type:
+    # Saltato se has_local_inail=True: inutile cercare online quando abbiamo già
+    # la scheda prevalidata dall'admin.
+    if machine_type and not has_local_inail:
         inail_queries = _build_inail_queries(machine_type, machine_type_id)
         for query in inail_queries[:2]:  # Prova max 2 query INAIL
             try:
@@ -1058,14 +1110,21 @@ async def search_manual(
                         break
             except Exception:
                 continue
-    
+
     # LIVELLO 2b: Fonti istituzionali equivalenti INAIL (SUVA, EU-OSHA, UCIMU, ENAMA)
-    # In parallelo con le query INAIL — stesso livello di autorità
+    # Se has_local_inail=True: le includiamo comunque come potenziale 3ª fonte, ma le
+    # tagghiamo come "supplemental" così il chiamante può deduplicate rispetto all'INAIL locale.
     if machine_type:
         institutional_queries = _build_institutional_queries(machine_type, machine_type_id)
         for query in institutional_queries[:3]:
             try:
                 results = await _search_with_provider(query, provider)
+                if has_local_inail:
+                    # Quando abbiamo già l'INAIL locale, le fonti istituzionali diventano
+                    # 3ª fonte supplementare: abbassa score e tagga per deduplicazione
+                    for r in results:
+                        r.source_type = "supplemental"
+                        r.relevance_score = min(r.relevance_score, 60)
                 all_results.extend(results)
             except Exception:
                 continue

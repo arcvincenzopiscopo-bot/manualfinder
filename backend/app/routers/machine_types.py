@@ -159,6 +159,28 @@ def admin_delete_alias(alias_id: int):
     return machine_type_service.admin_delete_alias(alias_id)
 
 
+@router.post("/{machine_type_id}/autopopulate-aliases", dependencies=_admin)
+async def admin_autopopulate_aliases(machine_type_id: int):
+    """
+    Popola machine_aliases con termini equivalenti in EN/DE/FR/ES generati dall'AI.
+    Alias salvati con source='ai_i18n' (promovibili a 'admin' dopo revisione).
+    """
+    provider = settings.get_analysis_provider()
+    result = await machine_type_service.admin_autopopulate_aliases(machine_type_id, provider)
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Tipo macchina non trovato")
+    return result
+
+
+@router.post("/aliases/{alias_id}/confirm", dependencies=_admin)
+def admin_confirm_alias(alias_id: int):
+    """Promuove un alias a source='admin' (revisionato da admin)."""
+    result = machine_type_service.admin_confirm_alias(alias_id)
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Alias non trovato")
+    return result
+
+
 # ── Admin: aggiorna flags normativi (punto 5) ─────────────────────────────────
 
 @router.patch("/{machine_type_id}/flags", dependencies=_admin)
