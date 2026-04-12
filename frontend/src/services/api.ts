@@ -147,6 +147,8 @@ export interface UploadManualResult {
   status: 'ok' | 'mismatch'
   filename?: string
   url?: string
+  storage_persisted?: boolean
+  storage_warning?: string | null
   suggestions?: { brand: string; model: string; machine_type: string; reason: string }
 }
 
