@@ -115,7 +115,7 @@ const badge = (color: string, bg: string): React.CSSProperties => ({
 // ── Componente principale ─────────────────────────────────────────────────────
 
 export function AdminPanel() {
-  const [tab, setTab] = useState<'stats' | 'pending' | 'diskproposals' | 'aliases' | 'flags' | 'scans' | 'log' | 'corpus' | 'inail' | 'normative' | 'riferimenti'>('stats')
+  const [tab, setTab] = useState<'stats' | 'pending' | 'diskproposals' | 'aliases' | 'flags' | 'scans' | 'log' | 'corpus' | 'inail' | 'normative' | 'riferimenti' | 'config'>('stats')
 
   return (
     <div style={{ background: COLORS.bg, minHeight: '100vh', padding: '0 0 40px' }}>
@@ -2303,34 +2303,34 @@ function TabRiferimenti() {
 
 // ─── Tab Configurazione ────────────────────────────────────────────────────────
 function TabConfig() {
-  const [section, setSection] = React.useState<'lists'|'maps'|'domains'|'brands'>('lists')
-  const [listKeys, setListKeys]     = React.useState<string[]>([])
-  const [mapKeys, setMapKeys]       = React.useState<string[]>([])
-  const [selListKey, setSelListKey] = React.useState('')
-  const [selMapKey, setSelMapKey]   = React.useState('')
-  const [listItems, setListItems]   = React.useState<{item:string,meta:any}[]>([])
-  const [mapEntries, setMapEntries] = React.useState<{k:string,v:any}[]>([])
-  const [domains, setDomains]       = React.useState<{id:number,domain:string,kind:string,brand:string|null,active:boolean}[]>([])
-  const [domainKinds, setDomainKinds] = React.useState<string[]>([])
-  const [selDomainKind, setSelDomainKind] = React.useState('')
-  const [brandHints, setBrandHints] = React.useState<{id:number,brand:string,model_prefix:string|null,machine_type_text:string,active:boolean}[]>([])
-  const [newItem, setNewItem]       = React.useState('')
-  const [newMapK, setNewMapK]       = React.useState('')
-  const [newMapV, setNewMapV]       = React.useState('')
-  const [newDomain, setNewDomain]   = React.useState('')
-  const [newDomainKind, setNewDomainKind] = React.useState('')
-  const [newDomainBrand, setNewDomainBrand] = React.useState('')
-  const [newBrand, setNewBrand]     = React.useState('')
-  const [newBrandType, setNewBrandType] = React.useState('')
-  const [newBrandPrefix, setNewBrandPrefix] = React.useState('')
-  const [saving, setSaving]         = React.useState(false)
-  const [msg, setMsg]               = React.useState<string|null>(null)
-  const [error, setError]           = React.useState<string|null>(null)
+  const [section, setSection] = useState<'lists'|'maps'|'domains'|'brands'>('lists')
+  const [listKeys, setListKeys]     = useState<string[]>([])
+  const [mapKeys, setMapKeys]       = useState<string[]>([])
+  const [selListKey, setSelListKey] = useState('')
+  const [selMapKey, setSelMapKey]   = useState('')
+  const [listItems, setListItems]   = useState<{item:string,meta:any}[]>([])
+  const [mapEntries, setMapEntries] = useState<{k:string,v:any}[]>([])
+  const [domains, setDomains]       = useState<{id:number,domain:string,kind:string,brand:string|null,active:boolean}[]>([])
+  const [domainKinds, setDomainKinds] = useState<string[]>([])
+  const [selDomainKind, setSelDomainKind] = useState('')
+  const [brandHints, setBrandHints] = useState<{id:number,brand:string,model_prefix:string|null,machine_type_text:string,active:boolean}[]>([])
+  const [newItem, setNewItem]       = useState('')
+  const [newMapK, setNewMapK]       = useState('')
+  const [newMapV, setNewMapV]       = useState('')
+  const [newDomain, setNewDomain]   = useState('')
+  const [newDomainKind, setNewDomainKind] = useState('')
+  const [newDomainBrand, setNewDomainBrand] = useState('')
+  const [newBrand, setNewBrand]     = useState('')
+  const [newBrandType, setNewBrandType] = useState('')
+  const [newBrandPrefix, setNewBrandPrefix] = useState('')
+  const [saving, setSaving]         = useState(false)
+  const [msg, setMsg]               = useState<string|null>(null)
+  const [error, setError]           = useState<string|null>(null)
 
   const cfgFetch = (path: string, opts?: RequestInit) =>
     apiFetch('/admin/config' + path, opts)
 
-  React.useEffect(() => {
+  useEffect(() => {
     cfgFetch('/lists').then(r => setListKeys(r.keys || []))
     cfgFetch('/maps').then(r => setMapKeys(r.keys || []))
     cfgFetch('/domains').then(r => { setDomains(r.domains || []); setDomainKinds(r.kinds || []) })

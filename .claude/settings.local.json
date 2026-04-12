@@ -44,7 +44,8 @@
       "Bash(python -c \"import ast; [ast.parse\\(open\\(p, encoding='utf-8'\\).read\\(\\)\\) for p in ['backend/app/services/pdf_service.py','backend/app/services/machine_type_service.py','backend/app/routers/analyze.py']]; print\\('OK'\\)\")",
       "Bash(python -c \"import ast; [ast.parse\\(open\\(p, encoding='utf-8'\\).read\\(\\)\\) for p in ['backend/app/services/machine_type_service.py','backend/app/routers/machine_types.py','backend/app/services/pdf_service.py','backend/app/routers/analyze.py']]; print\\('OK'\\)\")",
       "Bash(npx --no-install tsc --noEmit -p .)",
-      "Bash(grep -n \"def.*analyze\\\\|def.*generate_safety_card\\\\|def.*search\" /c/sviluppo/manualfinder/manualfinder/backend/app/routers/*.py)"
+      "Bash(grep -n \"def.*analyze\\\\|def.*generate_safety_card\\\\|def.*search\" /c/sviluppo/manualfinder/manualfinder/backend/app/routers/*.py)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }
