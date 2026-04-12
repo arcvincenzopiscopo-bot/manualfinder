@@ -1788,7 +1788,7 @@ function TabInailAssignments() {
     setError(null)
     try {
       const [a, av, mt] = await Promise.all([
-        fetch(`${BASE_URL}/machine-types/inail-local-files`, { headers: {} }).then(r => r.json()),
+        fetch(`${BASE_URL}/manuals/local/assignments`).then(r => r.json()),
         fetch(`${BASE_URL}/manuals/local/available-pdfs`).then(r => r.json()),
         fetch(`${BASE_URL}/machine-types`).then(r => r.json()),
       ])

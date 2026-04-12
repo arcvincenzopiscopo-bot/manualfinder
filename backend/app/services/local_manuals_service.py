@@ -501,7 +501,7 @@ def delete_inail_assignment(machine_type_id: int) -> None:
     """Elimina l'assegnazione quaderno INAIL per un tipo macchina."""
     if not settings.database_url:
         return
-    conn = _get_db_conn()
+    conn = _get_conn()
     with conn.cursor() as cur:
         cur.execute(
             "DELETE FROM inail_manual_assignments WHERE machine_type_id = %s",
