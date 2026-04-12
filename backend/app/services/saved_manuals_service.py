@@ -308,17 +308,22 @@ def find_for_search(
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
 
                 # 1) Specifici: brand+model corrispondenti (escludi GENERICO)
+                # Usa ILIKE substring + pg_trgm similarity per tollerare typo OCR
                 cur.execute(
                     """
-                    SELECT *, 'specific' AS _match_type
+                    SELECT *,
+                           'specific' AS _match_type,
+                           (similarity(manual_brand, %s) + similarity(manual_model, %s)) AS _score
                     FROM saved_manuals
-                    WHERE manual_brand ILIKE %s
-                      AND manual_model ILIKE %s
-                      AND manual_brand NOT ILIKE 'GENERICO'
-                    ORDER BY created_at DESC
+                    WHERE manual_brand NOT ILIKE 'GENERICO'
+                      AND (manual_brand ILIKE %s OR similarity(manual_brand, %s) > 0.35)
+                      AND (manual_model ILIKE %s OR similarity(manual_model, %s) > 0.35)
+                    ORDER BY _score DESC, created_at DESC
                     LIMIT 5
                     """,
-                    (f"%{brand}%", f"%{model}%"),
+                    (brand, model,
+                     f"%{brand}%", brand,
+                     f"%{model}%", model),
                 )
                 specific_ids = []
                 for row in cur.fetchall():
@@ -331,6 +336,7 @@ def find_for_search(
                 if machine_type or machine_type_id is not None:
                     exclude = tuple(specific_ids) if specific_ids else ("__none__",)
                     canonical = _canonical_machine_type(machine_type or "")
+                    mt_text = machine_type or ""
                     if machine_type_id is not None:
                         cur.execute(
                             """
@@ -340,7 +346,9 @@ def find_for_search(
                                    OR manual_machine_type ILIKE %s
                                    OR manual_machine_type ILIKE %s
                                    OR search_machine_type ILIKE %s
-                                   OR search_machine_type ILIKE %s)
+                                   OR search_machine_type ILIKE %s
+                                   OR similarity(manual_machine_type, %s) > 0.35
+                                   OR similarity(search_machine_type, %s) > 0.35)
                               AND id::text NOT IN %s
                             ORDER BY
                                 CASE WHEN machine_type_id = %s THEN 0 ELSE 1 END,
@@ -350,8 +358,9 @@ def find_for_search(
                             """,
                             (
                                 machine_type_id,
-                                f"%{machine_type or ''}%", f"%{canonical}%",
-                                f"%{machine_type or ''}%", f"%{canonical}%",
+                                f"%{mt_text}%", f"%{canonical}%",
+                                f"%{mt_text}%", f"%{canonical}%",
+                                mt_text, mt_text,
                                 exclude,
                                 machine_type_id,
                             ),
@@ -364,7 +373,9 @@ def find_for_search(
                             WHERE (manual_machine_type ILIKE %s
                                    OR manual_machine_type ILIKE %s
                                    OR search_machine_type ILIKE %s
-                                   OR search_machine_type ILIKE %s)
+                                   OR search_machine_type ILIKE %s
+                                   OR similarity(manual_machine_type, %s) > 0.35
+                                   OR similarity(search_machine_type, %s) > 0.35)
                               AND id::text NOT IN %s
                             ORDER BY
                                 CASE WHEN manual_brand ILIKE 'GENERICO' THEN 0 ELSE 1 END,
@@ -372,8 +383,9 @@ def find_for_search(
                             LIMIT 5
                             """,
                             (
-                                f"%{machine_type}%", f"%{canonical}%",
-                                f"%{machine_type}%", f"%{canonical}%",
+                                f"%{mt_text}%", f"%{canonical}%",
+                                f"%{mt_text}%", f"%{canonical}%",
+                                mt_text, mt_text,
                                 exclude,
                             ),
                         )
