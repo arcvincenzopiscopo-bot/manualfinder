@@ -19,11 +19,15 @@ const STRATEGY_STYLE: Record<string, { bg: string; border: string; color: string
 export function DisclaimerBanner({ source }: Props) {
   const [dismissed, setDismissed] = useState(false)
 
-  if (!source || !source.disclaimer || dismissed) return null
+  if (!source || dismissed) return null
   // Mostra solo per strategie non-specifiche (C, D, E, F)
   if (source.strategy === 'A' || source.strategy === 'B') return null
+  if (!source.disclaimer) return null
 
   const style = STRATEGY_STYLE[source.strategy] ?? STRATEGY_STYLE['F']
+
+  // Per strategy F con corpus RAG, icona diversa (meno allarmante)
+  const icon = source.strategy === 'F' && source.rag_has_inail ? 'ℹ️' : '⚠️'
 
   return (
     <div style={{
@@ -39,7 +43,7 @@ export function DisclaimerBanner({ source }: Props) {
       color: style.color,
       lineHeight: 1.5,
     }}>
-      <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>⚠️</span>
+      <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>{icon}</span>
       <span style={{ flex: 1 }}>{source.disclaimer}</span>
       <button
         onClick={() => setDismissed(true)}

@@ -25,8 +25,10 @@ export interface SourceMetadata {
   badge_label: string
   badge_color: string
   disclaimer: string
-  affidabilita: number  // 0-100
+  affidabilita: number       // 0-100
   fonte_tipo: string
+  inail_is_local?: boolean   // true = PDF INAIL dalla cartella locale (prevalidato admin)
+  rag_has_inail?: boolean    // true = corpus RAG contiene quaderni INAIL indicizzati per questo tipo
 }
 
 export interface MachineType {

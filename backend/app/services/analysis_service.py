@@ -773,11 +773,22 @@ async def generate_safety_card(
     )
 
     # Determina strategia fonte A–F (source_manager) — usata per badge UI e log
+    # Raccoglie anche metadati RAG per indicare all'utente se il corpus INAIL era disponibile
+    _rag_has_inail = False
+    try:
+        from app.services.hybrid_retriever import get_normative_metadata as _get_rag_meta
+        _rag_meta = _get_rag_meta(machine_type or "")
+        _rag_has_inail = bool(_rag_meta.get("has_inail", False))
+    except Exception:
+        pass
+
     from app.services.source_manager import resolve_sources, source_context_to_dict
     _source_ctx = resolve_sources(
         inail_bytes=inail_bytes,
         producer_bytes=producer_bytes,
         producer_source_label=producer_source_label,
+        inail_url=inail_url,
+        rag_has_inail=_rag_has_inail,
     )
 
     # Smart Selector: determina categoria Allegato V dalla tipologia macchina OCR

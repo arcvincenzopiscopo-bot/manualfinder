@@ -760,8 +760,6 @@ function TabAliases() {
 
 // ── Tab 4: Flags normativi ────────────────────────────────────────────────────
 
-type InailFile = { filename: string; title: string; exists: boolean }
-
 function TabFlags() {
   const [types, setTypes]           = useState<MachineType[]>([])
   const [selected, setSelected]     = useState<MachineType | null>(null)
@@ -773,7 +771,6 @@ function TabFlags() {
   const [msg, setMsg]               = useState<string | null>(null)
   const [error, setError]           = useState<string | null>(null)
   const [searchQ, setSearchQ]       = useState('')
-  const [inailFiles, setInailFiles] = useState<InailFile[]>([])
   // Hazard state
   const [hazardCat, setHazardCat]   = useState('')
   const [hazardTesto, setHazardTesto] = useState('')
@@ -787,7 +784,6 @@ function TabFlags() {
 
   const loadTypes = useCallback(() => {
     apiFetch('').then(setTypes).catch(e => setError(e.message))
-    apiFetch('/inail-local-files').then(setInailFiles).catch(() => {})
   }, [])
 
   useEffect(() => { loadTypes() }, [loadTypes])
@@ -1000,39 +996,17 @@ function TabFlags() {
                 </label>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <label style={{ ...labelStyle, marginBottom: 0 }}>Quaderno INAIL locale associato (opzionale)</label>
-                <button
-                  type="button"
-                  title="Ricarica lista file dalla cartella"
-                  onClick={() => apiFetch('/inail-local-files').then(setInailFiles).catch(() => {})}
-                  style={{ background: 'none', border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer', padding: '2px 6px', fontSize: 13, color: '#64748b' }}
-                >
-                  🔄
-                </button>
-              </div>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12 }}>
-                <select style={{ ...input, marginBottom: 0, background: '#fff', flex: 1 }} value={hint} onChange={e => setHint(e.target.value)}>
-                  <option value="">— Nessun file associato</option>
-                  {inailFiles.map(f => (
-                    <option key={f.filename} value={f.filename} disabled={!f.exists}>
-                      {f.title}{!f.exists ? ' ⚠ file mancante' : ''}
-                    </option>
-                  ))}
-                </select>
-                {hint && (
-                  <button
-                    type="button"
-                    title="Rimuovi associazione quaderno INAIL"
-                    onClick={() => setHint('')}
-                    style={{ background: 'none', border: '1px solid #dc2626', borderRadius: 4,
-                      cursor: 'pointer', padding: '6px 10px', fontSize: 13, color: '#dc2626',
-                      whiteSpace: 'nowrap', flexShrink: 0 }}
-                  >
-                    ✕ Rimuovi
-                  </button>
-                )}
-              </div>
+              <label style={{ ...labelStyle, marginBottom: 4 }}>Termine di ricerca INAIL (online)</label>
+              <input
+                style={{ ...input, marginBottom: 4 }}
+                placeholder="es. PLE piattaforma lavoro elevabile"
+                value={hint}
+                onChange={e => setHint(e.target.value)}
+              />
+              <p style={{ fontSize: 11, color: COLORS.muted, margin: '0 0 12px' }}>
+                Usato per cercare quaderni e schede su inail.it. Lascia vuoto per usare il nome tipo.
+                Per associare un PDF locale usa la tab "📋 Manuali INAIL".
+              </p>
 
               <label style={{ ...labelStyle, marginBottom: 4 }}>Vita utile stimata (anni)</label>
               <input
@@ -1841,13 +1815,24 @@ function TabInailAssignments() {
         body: JSON.stringify({ machine_type_id: form.machine_type_id, pdf_filename: form.pdf_filename, display_title: form.display_title || null }),
       })
       if (!r.ok) throw new Error(await r.text())
-      setSaveMsg('Assegnazione salvata')
+      setSaveMsg('✅ Assegnazione salvata')
       setForm({ machine_type_id: '', pdf_filename: '', display_title: '' })
       load()
     } catch (e: unknown) {
       setSaveMsg(e instanceof Error ? e.message : 'Errore')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleDelete = async (machineTypeId: number, typeName: string) => {
+    if (!confirm(`Eliminare l'assegnazione per "${typeName}"?`)) return
+    try {
+      const r = await fetch(`${BASE_URL}/manuals/local/assignments/${machineTypeId}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error(await r.text())
+      load()
+    } catch (e: unknown) {
+      alert(`Errore: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
@@ -1892,21 +1877,29 @@ function TabInailAssignments() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${COLORS.border}` }}>
-              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>ID</th>
               <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Tipo macchina</th>
-              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>PDF</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>PDF locale</th>
               <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Titolo</th>
-              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Su disco</th>
+              <th style={{ textAlign: 'center', padding: '6px 8px', color: COLORS.muted }}>Su disco</th>
+              <th style={{ padding: '6px 8px' }}></th>
             </tr>
           </thead>
           <tbody>
             {assignments.map(a => (
               <tr key={a.machine_type_id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
-                <td style={{ padding: '6px 8px', color: COLORS.muted }}>{a.machine_type_id}</td>
                 <td style={{ padding: '6px 8px', fontWeight: 600 }}>{a.machine_type_name ?? '—'}</td>
                 <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11 }}>{a.pdf_filename}</td>
-                <td style={{ padding: '6px 8px' }}>{a.display_title ?? '—'}</td>
-                <td style={{ padding: '6px 8px' }}>{a.exists_on_disk ? '✅' : '❌'}</td>
+                <td style={{ padding: '6px 8px', color: COLORS.muted }}>{a.display_title ?? '—'}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'center' }}>{a.exists_on_disk ? '✅' : '⚠️'}</td>
+                <td style={{ padding: '4px 8px' }}>
+                  <button
+                    style={btn('danger', true)}
+                    onClick={() => handleDelete(a.machine_type_id, a.machine_type_name ?? String(a.machine_type_id))}
+                    title="Elimina assegnazione"
+                  >
+                    🗑
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -2075,7 +2068,8 @@ function TabRiferimenti() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editId, setEditId] = useState<number | null>(null)
-  const [editIds, setEditIds] = useState<string>('')  // comma-separated IDs or empty for universal
+  const [editSelectedIds, setEditSelectedIds] = useState<Set<number>>(new Set())
+  const [editGlobal, setEditGlobal] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const load = useCallback(async () => {
@@ -2099,16 +2093,29 @@ function TabRiferimenti() {
 
   const startEdit = (ref: RiferimentoAdmin) => {
     setEditId(ref.id)
-    setEditIds(ref.machine_type_ids ? ref.machine_type_ids.join(', ') : '')
+    if (ref.machine_type_ids == null) {
+      setEditGlobal(true)
+      setEditSelectedIds(new Set())
+    } else {
+      setEditGlobal(false)
+      setEditSelectedIds(new Set(ref.machine_type_ids))
+    }
+  }
+
+  const toggleType = (id: number) => {
+    setEditSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   const handleSave = async () => {
     if (editId === null) return
     setSaving(true)
     try {
-      const ids = editIds.trim()
-        ? editIds.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
-        : null
+      const ids = editGlobal ? null : (editSelectedIds.size > 0 ? Array.from(editSelectedIds) : null)
       const r = await fetch(`${BASE_URL}/machine-types/riferimenti/${editId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -2131,13 +2138,13 @@ function TabRiferimenti() {
     <div>
       <SectionTitle>Riferimenti normativi D.Lgs 81/08</SectionTitle>
       <p style={{ fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
-        Modifica i tipi macchina associati a ciascun riferimento. IDs separati da virgola; vuoto = universale.
+        Ogni riferimento può essere limitato a specifici tipi macchina o applicato a tutti (Globale).
+        Clicca ✏ per modificare l'associazione con i tipi macchina.
       </p>
       <div style={card}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${COLORS.border}` }}>
-              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Chiave</th>
               <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Norma</th>
               <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Tipi macchina</th>
               <th style={{ padding: '6px 8px' }}></th>
@@ -2146,39 +2153,64 @@ function TabRiferimenti() {
           <tbody>
             {refs.map(ref => (
               <tr key={ref.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
-                <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11, color: COLORS.muted }}>{ref.norma_key}</td>
-                <td style={{ padding: '6px 8px' }}>
+                <td style={{ padding: '6px 8px', maxWidth: 280 }}>
                   <div style={{ fontWeight: 600 }}>{ref.norma}</div>
                   <div style={{ fontSize: 11, color: COLORS.muted }}>{ref.titolo}</div>
+                  <div style={{ fontSize: 10, color: '#94a3b8', fontFamily: 'monospace', marginTop: 2 }}>{ref.norma_key}</div>
                 </td>
-                <td style={{ padding: '6px 8px', maxWidth: 200 }}>
+                <td style={{ padding: '6px 8px' }}>
                   {editId === ref.id ? (
-                    <input
-                      style={{ ...input, fontSize: 11, padding: '4px 6px' }}
-                      value={editIds}
-                      onChange={e => setEditIds(e.target.value)}
-                      placeholder="IDs separati da virgola, vuoto = globale"
-                    />
+                    <div style={{ maxWidth: 320 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, fontSize: 12, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={editGlobal} onChange={e => setEditGlobal(e.target.checked)} />
+                        <strong>Globale</strong> (tutti i tipi macchina)
+                      </label>
+                      {!editGlobal && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxHeight: 160, overflowY: 'auto', padding: 4, border: `1px solid ${COLORS.border}`, borderRadius: 6 }}>
+                          {types.map(t => (
+                            <label key={t.id} style={{
+                              display: 'flex', alignItems: 'center', gap: 4, fontSize: 11,
+                              cursor: 'pointer', padding: '2px 6px', borderRadius: 10,
+                              background: editSelectedIds.has(t.id) ? '#dbeafe' : '#f1f5f9',
+                              color: editSelectedIds.has(t.id) ? COLORS.primary : COLORS.text,
+                              border: `1px solid ${editSelectedIds.has(t.id) ? '#93c5fd' : COLORS.border}`,
+                              fontWeight: editSelectedIds.has(t.id) ? 700 : 400,
+                            }}>
+                              <input
+                                type="checkbox"
+                                checked={editSelectedIds.has(t.id)}
+                                onChange={() => toggleType(t.id)}
+                                style={{ display: 'none' }}
+                              />
+                              {t.name}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   ) : (
-                    ref.machine_type_ids == null
-                      ? <span style={badge(COLORS.primary, '#eff6ff')}>Globale</span>
-                      : ref.machine_type_ids.map(id => (
-                        <span key={id} style={{ ...badge(COLORS.muted, '#f1f5f9'), marginRight: 3 }}>
-                          {typeMap[id] ?? `#${id}`}
-                        </span>
-                      ))
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                      {ref.machine_type_ids == null
+                        ? <span style={badge(COLORS.primary, '#eff6ff')}>Globale</span>
+                        : ref.machine_type_ids.map(id => (
+                          <span key={id} style={{ ...badge(COLORS.muted, '#f1f5f9'), marginRight: 2 }}>
+                            {typeMap[id] ?? `#${id}`}
+                          </span>
+                        ))
+                      }
+                    </div>
                   )}
                 </td>
-                <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
+                <td style={{ padding: '4px 8px', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
                   {editId === ref.id ? (
                     <>
                       <button style={{ ...btn('success', true), marginRight: 4 }} onClick={handleSave} disabled={saving}>
-                        {saving ? '…' : '✓'}
+                        {saving ? '…' : '✓ Salva'}
                       </button>
                       <button style={btn('ghost', true)} onClick={() => setEditId(null)}>✕</button>
                     </>
                   ) : (
-                    <button style={btn('ghost', true)} onClick={() => startEdit(ref)}>✏</button>
+                    <button style={btn('ghost', true)} onClick={() => startEdit(ref)}>✏ Modifica</button>
                   )}
                 </td>
               </tr>

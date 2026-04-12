@@ -502,6 +502,13 @@ async def upsert_inail_assignment(body: dict):
     return {"ok": True}
 
 
+@router.delete("/local/assignments/{machine_type_id}")
+async def delete_inail_assignment(machine_type_id: int):
+    """[Admin] Elimina assegnazione quaderno INAIL per un tipo macchina."""
+    local_manuals_service.delete_inail_assignment(machine_type_id)
+    return {"ok": True}
+
+
 @router.get("/uploaded/{filename}")
 async def get_uploaded_manual(filename: str):
     """Serve un PDF caricato dagli ispettori dalla cartella manuali_locali/."""

@@ -497,6 +497,20 @@ def upsert_inail_assignment(
     conn.close()
 
 
+def delete_inail_assignment(machine_type_id: int) -> None:
+    """Elimina l'assegnazione quaderno INAIL per un tipo macchina."""
+    if not settings.database_url:
+        return
+    conn = _get_db_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM inail_manual_assignments WHERE machine_type_id = %s",
+            (machine_type_id,),
+        )
+    conn.commit()
+    conn.close()
+
+
 def list_all_pdf_files() -> List[Dict[str, str]]:
     """
     Lista tutti i PDF fisicamente presenti nella cartella manuali.

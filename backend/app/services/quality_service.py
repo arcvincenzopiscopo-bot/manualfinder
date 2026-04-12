@@ -36,7 +36,7 @@ def _db_available() -> bool:
     return bool(settings.database_url)
 
 
-# ── Dati seed per should_have_manual (usati SOLO da _seed_machine_type_flags_if_needed) ──
+# ── Dati seed per i flag machine_types (usati SOLO da _seed_machine_type_flags_if_needed) ──
 # A runtime si usano i flag da machine_types DB tramite get_flags(machine_type_id).
 
 _SHOULD_HAVE_MANUAL_SEED = {
@@ -48,10 +48,17 @@ _SHOULD_HAVE_MANUAL_SEED = {
     "pressa piegatrice",
 }
 
+# Macchine utensili da officina — non da cantiere/edilizia
+_IS_OFFICINA_SEED = {
+    "pressa piegatrice", "punzonatrice", "macchina taglio laser",
+    "sega circolare", "centro di lavoro CNC", "tornio", "fresatrice",
+    "saldatrice",
+}
+
 
 def _seed_machine_type_flags_if_needed() -> None:
     """
-    Popola should_have_manual su machine_types, solo se tutti a false (primo run).
+    Popola should_have_manual e is_officina su machine_types, solo se tutti a false (primo run).
     Idempotente: eseguita solo se necessario.
     """
     if not _db_available():
@@ -61,25 +68,43 @@ def _seed_machine_type_flags_if_needed() -> None:
         conn = _get_conn()
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM machine_types WHERE should_have_manual = true")
-            already = cur.fetchone()[0]
-        if already > 0:
+            already_manual = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM machine_types WHERE is_officina = true")
+            already_officina = cur.fetchone()[0]
+        if already_manual > 0 and already_officina > 0:
             conn.close()
-            logger.info("quality_service: should_have_manual già valorizzato (%d tipi)", already)
+            logger.info(
+                "quality_service: flag già valorizzati (should_have_manual=%d, is_officina=%d)",
+                already_manual, already_officina,
+            )
             return
         from app.services.machine_type_service import resolve_machine_type_id
-        updated = 0
+        updated_manual = updated_officina = 0
         with conn.cursor() as cur:
-            for type_name in _SHOULD_HAVE_MANUAL_SEED:
-                mt_id = resolve_machine_type_id(type_name)
-                if mt_id:
-                    cur.execute(
-                        "UPDATE machine_types SET should_have_manual = true WHERE id = %s",
-                        (mt_id,),
-                    )
-                    updated += 1
+            if already_manual == 0:
+                for type_name in _SHOULD_HAVE_MANUAL_SEED:
+                    mt_id = resolve_machine_type_id(type_name)
+                    if mt_id:
+                        cur.execute(
+                            "UPDATE machine_types SET should_have_manual = true WHERE id = %s",
+                            (mt_id,),
+                        )
+                        updated_manual += 1
+            if already_officina == 0:
+                for type_name in _IS_OFFICINA_SEED:
+                    mt_id = resolve_machine_type_id(type_name)
+                    if mt_id:
+                        cur.execute(
+                            "UPDATE machine_types SET is_officina = true WHERE id = %s",
+                            (mt_id,),
+                        )
+                        updated_officina += 1
         conn.commit()
         conn.close()
-        logger.info("quality_service: seed should_have_manual completato (%d tipi aggiornati)", updated)
+        logger.info(
+            "quality_service: seed flag completato (should_have_manual=%d, is_officina=%d)",
+            updated_manual, updated_officina,
+        )
     except Exception as e:
         logger.warning("quality_service: _seed_machine_type_flags_if_needed fallito: %s", e)
 

@@ -180,21 +180,43 @@ def _normalize_brand(brand: str) -> str:
     return brand_map.get(brand, brand)
 
 
-def _get_inail_machine_type(machine_type: Optional[str]) -> Optional[str]:
+def _get_inail_machine_type(machine_type: Optional[str], machine_type_id: Optional[int] = None) -> Optional[str]:
     """Ottieni il termine di ricerca INAIL per il tipo di macchina.
-    Normalizza prima i termini inglesi in italiano."""
+
+    Priorità:
+    1. machine_types.inail_search_hint dal DB (gestito dall'admin) — se non è un filename .pdf
+    2. INAIL_MACHINE_TYPES hardcodato (fallback retrocompatibile)
+    3. Tipo normalizzato
+    """
+    # 1. Prova DB via machine_type_id (o risoluzione text→id)
+    mt_id = machine_type_id
+    if not mt_id and machine_type:
+        try:
+            from app.services.machine_type_service import resolve_machine_type_id as _resolve_id
+            mt_id = _resolve_id(machine_type)
+        except Exception:
+            pass
+    if mt_id:
+        try:
+            from app.services.machine_type_service import get_type_by_id
+            mt_info = get_type_by_id(mt_id) or {}
+            hint = mt_info.get("inail_search_hint") or ""
+            if hint and not hint.lower().endswith(".pdf"):
+                return hint
+        except Exception:
+            pass
+
+    # 2. Fallback: dizionario hardcodato
     if not machine_type:
         return None
     from app.services.local_manuals_service import _normalize_machine_type
     mt = _normalize_machine_type(machine_type)
-    # Cerca corrispondenza diretta
     if mt in INAIL_MACHINE_TYPES:
         return INAIL_MACHINE_TYPES[mt]
-    # Cerca corrispondenza parziale
     for key, value in INAIL_MACHINE_TYPES.items():
         if key in mt or mt in key:
             return value
-    # Usa il tipo normalizzato come termine di ricerca
+    # 3. Usa il tipo normalizzato come termine di ricerca
     return mt
 
 
@@ -216,15 +238,27 @@ _OFFICINA_MACHINE_TYPES = {
 }
 
 
-def _build_inail_queries(machine_type: Optional[str]) -> List[str]:
+def _build_inail_queries(machine_type: Optional[str], machine_type_id: Optional[int] = None) -> List[str]:
     """Genera query specifiche per ricerca INAIL per tipo di macchina."""
-    inail_type = _get_inail_machine_type(machine_type)
+    inail_type = _get_inail_machine_type(machine_type, machine_type_id)
     if not inail_type:
         return []
 
     inail_type_lower = inail_type.lower()
-    is_edilizia = any(k in inail_type_lower for k in _EDILIZIA_MACHINE_TYPES)
-    is_officina = any(k in inail_type_lower for k in _OFFICINA_MACHINE_TYPES)
+
+    # is_officina: usa il flag DB se disponibile, altrimenti fallback testuale
+    is_officina = False
+    if machine_type_id:
+        try:
+            from app.services.machine_type_service import get_flags as _get_flags
+            flags = _get_flags(machine_type_id) or {}
+            is_officina = bool(flags.get("is_officina", False))
+        except Exception:
+            is_officina = any(k in inail_type_lower for k in _OFFICINA_MACHINE_TYPES)
+    else:
+        is_officina = any(k in inail_type_lower for k in _OFFICINA_MACHINE_TYPES)
+
+    is_edilizia = (not is_officina) and any(k in inail_type_lower for k in _EDILIZIA_MACHINE_TYPES)
 
     queries = [
         f'site:inail.it "{inail_type}" scheda tecnica',
@@ -396,13 +430,13 @@ def _build_manual_queries(brand: str, model: str) -> List[str]:
     return queries
 
 
-def _build_ante_ce_queries(machine_type: Optional[str], year: str, is_allegato_v: bool = False) -> List[str]:
+def _build_ante_ce_queries(machine_type: Optional[str], year: str, is_allegato_v: bool = False, machine_type_id: Optional[int] = None) -> List[str]:
     """
     Query specializzate per macchine pre-Direttiva Macchine.
     - ante-1996 (is_allegato_v=True): Allegato V D.Lgs.81, D.P.R. 547/55, nessuna CE
     - ante-2006: Direttiva 98/37/CE, D.Lgs. 626/94
     """
-    inail_type = _get_inail_machine_type(machine_type) if machine_type else None
+    inail_type = _get_inail_machine_type(machine_type, machine_type_id) if machine_type else None
     base_type = inail_type or machine_type or "attrezzatura"
 
     queries = [
@@ -475,12 +509,12 @@ def _build_rental_queries(brand: str, model: str) -> List[str]:
     ]
 
 
-def _build_institutional_queries(machine_type: Optional[str]) -> List[str]:
+def _build_institutional_queries(machine_type: Optional[str], machine_type_id: Optional[int] = None) -> List[str]:
     """
     Query per fonti istituzionali equivalenti o complementari a INAIL:
     SUVA (CH-IT), EU-OSHA, DGUV (DE), UCIMU (macchine utensili), ENAMA (agricole).
     """
-    inail_type = _get_inail_machine_type(machine_type) if machine_type else None
+    inail_type = _get_inail_machine_type(machine_type, machine_type_id) if machine_type else None
     base = inail_type or machine_type or "macchinario"
 
     queries = [
@@ -1008,7 +1042,7 @@ async def search_manual(
     
     # LIVELLO 2: Cerca libretto INAIL online per tipo di macchina
     if machine_type:
-        inail_queries = _build_inail_queries(machine_type)
+        inail_queries = _build_inail_queries(machine_type, machine_type_id)
         for query in inail_queries[:2]:  # Prova max 2 query INAIL
             try:
                 results = await _search_with_provider(query, provider)
@@ -1028,7 +1062,7 @@ async def search_manual(
     # LIVELLO 2b: Fonti istituzionali equivalenti INAIL (SUVA, EU-OSHA, UCIMU, ENAMA)
     # In parallelo con le query INAIL — stesso livello di autorità
     if machine_type:
-        institutional_queries = _build_institutional_queries(machine_type)
+        institutional_queries = _build_institutional_queries(machine_type, machine_type_id)
         for query in institutional_queries[:3]:
             try:
                 results = await _search_with_provider(query, provider)
@@ -1146,7 +1180,7 @@ async def search_manual(
             year_int = int(machine_year)
             if year_int < 2006:
                 is_allegato_v = year_int < 1996
-                ante_ce_queries = _build_ante_ce_queries(machine_type, machine_year, is_allegato_v)
+                ante_ce_queries = _build_ante_ce_queries(machine_type, machine_year, is_allegato_v, machine_type_id)
                 for query in ante_ce_queries:
                     try:
                         results = await _search_with_provider(query, provider)
