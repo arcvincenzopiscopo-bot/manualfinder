@@ -27,6 +27,19 @@ async function apiFetch(path: string, opts?: RequestInit) {
   return r.json()
 }
 
+async function rawFetch(path: string, opts?: RequestInit) {
+  const token = localStorage.getItem('admin_token') || ''
+  const r = await fetch(`${BASE_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+    ...opts,
+  })
+  if (!r.ok) {
+    const t = await r.text().catch(() => r.statusText)
+    throw new Error(`HTTP ${r.status}: ${t}`)
+  }
+  return r.json()
+}
+
 // ── Tipi locali ───────────────────────────────────────────────────────────────
 
 interface Stats {
@@ -2330,7 +2343,7 @@ function TabConfig() {
   const [error, setError]           = useState<string|null>(null)
 
   const cfgFetch = (path: string, opts?: RequestInit) =>
-    apiFetch('/admin/config' + path, opts)
+    rawFetch('/admin/config' + path, opts)
 
   useEffect(() => {
     cfgFetch('/lists').then(r => setListKeys(r.keys || []))
