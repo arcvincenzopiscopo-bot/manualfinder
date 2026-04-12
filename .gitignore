@@ -65,6 +65,9 @@ desktop.ini
 # ── IDE ──────────────────────────────────────────────────────
 .vscode/
 .idea/
+
+# ── Claude Code (memoria locale, non committare) ─────────────
+.claude/
 *.swp
 *.swo
 *~
