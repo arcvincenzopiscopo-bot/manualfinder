@@ -118,6 +118,24 @@ async def on_startup():
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning("config_seeds bootstrap fallito: %s", e)
+    # Costruisce il ChromaDB index se non esiste (primo avvio dopo deploy).
+    # In precedenza era nel Dockerfile (RUN python ...) ma spostato qui per ridurre
+    # i tempi di build: la compilazione C++ di chroma-hnswlib è già cachata nel layer pip,
+    # mentre l'indicizzazione richiede solo ~2 min al primo avvio e non blocca il deploy.
+    try:
+        import asyncio
+        import logging as _log
+        from pathlib import Path
+        _chroma_dir = Path(__file__).parent.parent / "corpus" / "chroma_db"
+        if not _chroma_dir.exists() or not any(_chroma_dir.iterdir()):
+            _log.getLogger(__name__).info("ChromaDB non trovato — avvio indicizzazione corpus...")
+            loop = asyncio.get_event_loop()
+            from app.services.corpus_indexer import index_all_corpus
+            await loop.run_in_executor(None, index_all_corpus)
+            _log.getLogger(__name__).info("ChromaDB indicizzazione completata.")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("ChromaDB indexing fallito: %s", e)
     # Invalida cache RAG — corpus potrebbe essere stato aggiornato offline
     try:
         from app.services import rag_service

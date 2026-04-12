@@ -1,0 +1,32 @@
+# Dipendenze locali — non copiare nel container
+venv/
+.venv/
+
+# Cache Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ChromaDB index — viene ricostruito al primo avvio su Linux
+# (i binari HNSW di Windows non sono portabili su Linux)
+corpus/chroma_db/
+
+# PDF caricati dagli ispettori — persistiti su Supabase Storage
+manuali_locali/
+
+# Configurazione locale
+.env
+.env.*
+
+# Log
+*.log
+uvicorn.log
+
+# Test e script di sviluppo
+test_*.py
+
+# Git
+.git/
+.gitignore
