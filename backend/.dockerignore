@@ -9,9 +9,10 @@ __pycache__/
 *.pyo
 *.pyd
 
-# ChromaDB index — viene ricostruito al primo avvio su Linux
-# (i binari HNSW di Windows non sono portabili su Linux)
+# ChromaDB index — viene ricostruito durante il docker build (RUN python ...)
+# (i binari HNSW di Windows non sono portabili su Linux — gitignored ma esplicitiamo)
 corpus/chroma_db/
+corpus/__pycache__/
 
 # PDF caricati dagli ispettori — persistiti su Supabase Storage
 manuali_locali/
