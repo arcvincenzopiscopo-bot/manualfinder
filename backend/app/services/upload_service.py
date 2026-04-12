@@ -1,13 +1,16 @@
 """
 Servizio per l'upload di manuali PDF da parte degli ispettori.
-Gestisce: validazione, verifica AI congruenza, salvataggio filesystem + Supabase.
+Gestisce: validazione, verifica AI congruenza, salvataggio filesystem + Supabase Storage.
 """
 import json
+import logging
 import re
 import time
 from pathlib import Path
 from typing import Optional
 from app.config import settings
+
+_logger = logging.getLogger(__name__)
 
 # Cartella upload — relativa a backend/
 _BACKEND_ROOT = Path(__file__).parent.parent.parent
@@ -158,18 +161,59 @@ def _compress_pdf(pdf_bytes: bytes) -> bytes:
         return pdf_bytes  # fallback: usa originale se compressione fallisce
 
 
+async def _upload_to_supabase_storage(pdf_bytes: bytes, filename: str) -> Optional[str]:
+    """
+    Carica il PDF su Supabase Storage e restituisce l'URL pubblico.
+    Richiede che supabase_url e supabase_service_key siano configurati.
+    Restituisce None se il caricamento fallisce o la configurazione manca.
+    """
+    if not settings.supabase_url or not settings.supabase_service_key:
+        return None
+    import httpx
+    bucket = settings.supabase_storage_bucket
+    storage_path = f"uploads/{filename}"
+    upload_url = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/{bucket}/{storage_path}"
+    headers = {
+        "Authorization": f"Bearer {settings.supabase_service_key}",
+        "Content-Type": "application/pdf",
+        "x-upsert": "true",  # sovrascrive se esiste già
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.put(upload_url, content=pdf_bytes, headers=headers)
+            if r.status_code in (200, 201):
+                public_url = (
+                    f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/"
+                    f"{bucket}/{storage_path}"
+                )
+                _logger.info("PDF caricato su Supabase Storage: %s", public_url)
+                return public_url
+            _logger.warning(
+                "Supabase Storage upload fallito: HTTP %s — %s", r.status_code, r.text[:200]
+            )
+    except Exception as e:
+        _logger.warning("Supabase Storage upload errore: %s", e)
+    return None
+
+
 def save_uploaded_pdf(
     pdf_bytes: bytes,
     brand: str,
     model: str,
     machine_type: str,
+    machine_type_id: Optional[int] = None,
     manual_year: Optional[str] = None,
     manual_language: str = "it",
     is_generic: bool = False,
     notes: Optional[str] = None,
+    _storage_url: Optional[str] = None,   # URL pubblico Supabase Storage (passato dall'endpoint async)
+    _precomputed_filename: Optional[str] = None,  # filename già generato dall'endpoint
+    _precompressed_bytes: Optional[bytes] = None,  # bytes già compressi dall'endpoint
 ) -> dict:
     """
-    Salva il PDF nella cartella manuali_locali/ (con compressione massima) e registra su Supabase.
+    Salva il PDF nella cartella manuali_locali/ (con compressione massima) e registra su Supabase DB.
+    Se _storage_url è fornito (caricato su Supabase Storage dall'endpoint async), usa quello come URL
+    persistente invece del percorso locale (sopravvive ai redeploy su Render).
     Ritorna { filename, url, db_id }.
     """
     if not pdf_bytes.startswith(b"%PDF"):
@@ -177,20 +221,25 @@ def save_uploaded_pdf(
 
     _ensure_upload_dir()
 
-    compressed_bytes = _compress_pdf(pdf_bytes)
+    compressed_bytes = _precompressed_bytes if _precompressed_bytes is not None else _compress_pdf(pdf_bytes)
 
-    filename = _sanitize_filename(brand, model, machine_type)
+    filename = _precomputed_filename if _precomputed_filename else _sanitize_filename(brand, model, machine_type)
     filepath = UPLOAD_DIR / filename
     filepath.write_bytes(compressed_bytes)
 
-    url = f"/manuals/uploaded/{filename}"
+    # Usa l'URL pubblico Supabase Storage se disponibile (persistente su cloud),
+    # altrimenti fallback al percorso locale (funziona in dev o se Storage non è configurato)
+    url = _storage_url if _storage_url else f"/manuals/uploaded/{filename}"
 
-    # Registra su Supabase
+    # Registra su Supabase DB
     db_id = None
     try:
         from app.services import saved_manuals_service
         from app.services.machine_type_service import resolve_machine_type_id
-        mt_id = resolve_machine_type_id(machine_type) if machine_type else None
+        # Usa machine_type_id già risolto se fornito, altrimenti risolvi dal testo
+        mt_id = machine_type_id if machine_type_id is not None else (
+            resolve_machine_type_id(machine_type) if machine_type else None
+        )
         record = {
             "manual_brand": "GENERICO" if is_generic else brand,
             "manual_model": "CATEGORIA" if is_generic else model,

@@ -156,6 +156,7 @@ export async function uploadManual(file: File, meta: UploadManualMeta): Promise<
   fd.append('brand', meta.brand)
   fd.append('model', meta.model)
   fd.append('machine_type', meta.machine_type)
+  if (meta.machine_type_id != null) fd.append('machine_type_id', String(meta.machine_type_id))
   if (meta.manual_year) fd.append('manual_year', meta.manual_year)
   fd.append('manual_language', meta.manual_language ?? 'it')
   fd.append('is_generic', String(meta.is_generic ?? false))

@@ -84,6 +84,11 @@ async def download_pdf(url: str) -> Tuple[Optional[bytes], str]:
                 filepath = upload_service.UPLOAD_DIR / filename
 
             if not filepath.exists():
+                # Il file non esiste sul filesystem locale — probabile perché il server è stato
+                # riavviato/ridistribuito (filesystem efimero su Render). Se il manuale era
+                # caricato prima dell'integrazione Supabase Storage, l'URL nel DB punta a un
+                # percorso locale non più valido. Il manuale DB viene quindi saltato silenziosamente.
+                _logger.warning("File uploaded non trovato (filesystem efimero?): %s", filename)
                 return None, f"File locale non trovato: {filename}"
 
             pdf_bytes = filepath.read_bytes()

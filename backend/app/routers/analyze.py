@@ -149,13 +149,15 @@ async def _pipeline(request: FullAnalysisRequest):
     if machine_year:
         try:
             year_int = int(machine_year)
-            is_ante_ce = year_int < 2006
-            is_allegato_v = year_int < 1996  # Prima della prima Direttiva Macchine
+            # Marcatura CE obbligatoria dal 21/09/1996 (DPR 459/96 — recepimento Dir. 89/392/CEE)
+            # Direttiva Macchine aggiornata: 98/37/CE (1998) → 2006/42/CE (29/12/2009)
+            is_allegato_v = year_int < 1996  # Prima della prima Direttiva Macchine — nessuna CE
+            is_ante_ce = 1996 <= year_int < 2006  # CE presente ma sotto vecchia direttiva 98/37/CE
             search_msg += f", anno {machine_year}"
             if is_allegato_v:
                 search_msg += " ⚠ Allegato V D.Lgs.81"
             elif is_ante_ce:
-                search_msg += " ⚠ ante-CE"
+                search_msg += " ⚠ Dir. 98/37/CE (ante 2006/42/CE)"
         except (ValueError, TypeError):
             pass
     search_msg += "..."

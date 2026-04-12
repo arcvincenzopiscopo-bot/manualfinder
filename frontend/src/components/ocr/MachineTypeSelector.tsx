@@ -22,10 +22,10 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
   // Carica catalogo al mount (una volta sola)
   useEffect(() => {
     setLoadingCatalog(true)
-    getMachineTypes().then(data => {
-      setTypes(data)
-      setLoadingCatalog(false)
-    })
+    getMachineTypes()
+      .then(data => setTypes(data.filter(t => typeof t.name === 'string' && t.name.length > 0)))
+      .catch(() => {})
+      .finally(() => setLoadingCatalog(false))
   }, [])
 
   // Sincronizza il testo quando il valore cambia esternamente (OCR inference)
@@ -34,10 +34,11 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
   }, [value])
 
   // Filtra la lista in base al testo digitato
-  const filtered = query.trim().length === 0
+  const safeQuery = typeof query === 'string' ? query : ''
+  const filtered = safeQuery.trim().length === 0
     ? types
     : types.filter(t =>
-        t.name.toLowerCase().includes(query.toLowerCase().trim())
+        typeof t.name === 'string' && t.name.toLowerCase().includes(safeQuery.toLowerCase().trim())
       )
 
   // Reset "proposta inviata" se l'utente cambia il testo
@@ -50,7 +51,7 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
 
   // Mostra il suggerimento "Non trovi?" ogni volta che c'è testo libero non nel catalogo,
   // incluso quando il valore è pre-compilato dall'OCR (senza bisogno di focus)
-  const showSuggest = !matchedType && !loadingCatalog && query.trim().length > 2 && !showList
+  const showSuggest = !matchedType && !loadingCatalog && safeQuery.trim().length > 2 && !showList
   const confidenceColor = matchedType
     ? '#166534'   // verde — match DB confermato
     : value.trim()
@@ -86,8 +87,8 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
   }
 
   const handleSuggest = async () => {
-    if (!query.trim()) return
-    await suggestMachineType(query.trim())
+    if (!safeQuery.trim()) return
+    await suggestMachineType(safeQuery.trim())
     setSuggestionSent(true)
   }
 
@@ -120,7 +121,7 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
       <input
         ref={inputRef}
         type="text"
-        value={loading ? '' : query}
+        value={loading ? '' : safeQuery}
         onChange={handleInputChange}
         onFocus={() => setShowList(true)}
         onBlur={handleBlur}
@@ -201,7 +202,7 @@ export function MachineTypeSelector({ value, valueId, onChange, disabled, loadin
           justifyContent: 'space-between',
           gap: 8,
         }}>
-          <span>Non trovi "<strong>{query}</strong>" nel catalogo?</span>
+          <span>Non trovi "<strong>{safeQuery}</strong>" nel catalogo?</span>
           <button
             onMouseDown={handleSuggest}
             style={{

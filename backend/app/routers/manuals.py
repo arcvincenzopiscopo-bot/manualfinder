@@ -261,6 +261,7 @@ async def upload_manual(
     brand: str = Form(...),
     model: str = Form(...),
     machine_type: str = Form(...),
+    machine_type_id: Optional[int] = Form(None),
     manual_year: Optional[str] = Form(None),
     manual_language: str = Form("it"),
     is_generic: bool = Form(False),
@@ -270,7 +271,7 @@ async def upload_manual(
     """
     Carica un manuale PDF fornito dall'ispettore.
     Valida che sia un PDF nativo (non scansione), verifica congruenza con AI,
-    salva in manuali_locali/ e registra su Supabase.
+    salva in manuali_locali/ + Supabase Storage (se configurato) e registra su Supabase DB.
     """
     from app.config import settings
     from app.services.pdf_service import is_native_pdf
@@ -319,17 +320,28 @@ async def upload_manual(
                 },
             }
 
-    # 6) Salva file + Supabase
+    # 5b) Comprimi una volta sola per riutilizzare sia per Storage che per filesystem
+    compressed_bytes = upload_service._compress_pdf(pdf_bytes)
+    filename = upload_service._sanitize_filename(brand, model, machine_type)
+
+    # 6) Carica su Supabase Storage (se configurato) — URL persistente che sopravvive ai redeploy
+    storage_url = await upload_service._upload_to_supabase_storage(compressed_bytes, filename)
+
+    # 7) Salva file su filesystem locale + registra su Supabase DB
     try:
         result = upload_service.save_uploaded_pdf(
             pdf_bytes=pdf_bytes,
             brand=brand,
             model=model,
             machine_type=machine_type,
+            machine_type_id=machine_type_id,
             manual_year=manual_year,
             manual_language=manual_language,
             is_generic=is_generic,
             notes=notes,
+            _storage_url=storage_url,
+            _precomputed_filename=filename,
+            _precompressed_bytes=compressed_bytes,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

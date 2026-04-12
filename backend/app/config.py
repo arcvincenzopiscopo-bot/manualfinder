@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     # === Upload manuali ===
     upload_dir: str = "manuali_locali"  # relativo a backend/ — cartella dove vengono salvati i PDF caricati dagli ispettori
 
+    # === Supabase Storage (per persistenza PDF su cloud) ===
+    # Se configurati, i PDF caricati dagli ispettori vengono anche caricati su Supabase Storage
+    # e l'URL pubblico viene usato al posto del percorso locale (sopravvive ai redeploy su Render).
+    # supabase_url: es. https://xxxx.supabase.co (senza slash finale)
+    # supabase_service_key: service_role key del progetto (non anon key)
+    # supabase_storage_bucket: nome del bucket pubblico (default: "manuali")
+    supabase_url: Optional[str] = None
+    supabase_service_key: Optional[str] = None
+    supabase_storage_bucket: str = "manuali"
+
     # === Server ===
     # In produzione su Render, sovrascrivere con l'URL reale del frontend via variabile ALLOWED_ORIGINS
     allowed_origins: str = "http://localhost:5173,https://manualfinder.vercel.app,https://manualfinder-frontend.onrender.com"

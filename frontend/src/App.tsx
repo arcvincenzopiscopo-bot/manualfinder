@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Component } from 'react'
+import type { ReactNode, ErrorInfo } from 'react'
 import { usePipeline } from './hooks/usePipeline'
 import { useOfflineCache } from './hooks/useOfflineCache'
 import { ocrPlate, checkHealth } from './services/api'
@@ -11,8 +12,46 @@ import { ErrorBanner } from './components/ui/ErrorBanner'
 import { OfflineBadge } from './components/ui/OfflineBadge'
 import { UploadManualModal } from './components/upload/UploadManualModal'
 import { AdminPanel } from './components/admin/AdminPanel'
-import { WorkplaceContextDialog, loadWorkplaceContext, saveWorkplaceContext, clearWorkplaceContext, workplaceContextLabel } from './components/ui/WorkplaceContextDialog'
+import { WorkplaceContextDialog, loadWorkplaceContext, clearWorkplaceContext, workplaceContextLabel } from './components/ui/WorkplaceContextDialog'
 import type { PlateOCRResult, WorkplaceContext } from './types'
+
+// ── Error Boundary ────────────────────────────────────────────────────────────
+interface EBState { hasError: boolean; message: string }
+class AppErrorBoundary extends Component<{ children: ReactNode }, EBState> {
+  state: EBState = { hasError: false, message: '' }
+  static getDerivedStateFromError(err: Error): EBState {
+    return { hasError: true, message: err.message ?? 'Errore imprevisto' }
+  }
+  componentDidCatch(err: Error, info: ErrorInfo) {
+    console.error('[AppErrorBoundary]', err, info)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          maxWidth: 480, margin: '0 auto', padding: '40px 20px', fontFamily: '-apple-system, sans-serif',
+          textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+          <h2 style={{ color: '#1e293b', marginBottom: 8 }}>Si è verificato un errore</h2>
+          <p style={{ color: '#64748b', fontSize: 14, marginBottom: 24, lineHeight: 1.6 }}>
+            {this.state.message}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              padding: '12px 24px', background: '#1e40af', color: '#fff',
+              border: 'none', borderRadius: 8, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            Ricarica l'app
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 type AppState = 'idle' | 'preview' | 'ocr_loading' | 'confirming' | 'running' | 'done' | 'error'
 
@@ -53,7 +92,7 @@ function useBackendReady() {
   return ready
 }
 
-export default function App() {
+function AppInner() {
   const { state: pipeline, run, reset } = usePipeline()
   const { cached, isOnline, save } = useOfflineCache()
   const backendReady = useBackendReady()
@@ -186,16 +225,21 @@ export default function App() {
         top: 0,
         zIndex: 10,
       }}>
-        <div style={{
-          width: 36, height: 36,
-          background: '#1e40af', borderRadius: 8,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 20,
-        }}>🔍</div>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1e293b' }}>ManualFinder</h1>
-          <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>Sicurezza macchinari da cantiere</p>
-        </div>
+        <a
+          href="https://manualfinder-1.onrender.com/"
+          style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none' }}
+        >
+          <div style={{
+            width: 36, height: 36,
+            background: '#1e40af', borderRadius: 8,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 20,
+          }}>🔍</div>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1e293b' }}>ManualFinder</h1>
+            <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>Sicurezza macchinari da cantiere</p>
+          </div>
+        </a>
         {/* Indicatore stato + contesto + Upload */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           {appState !== 'idle' && appState !== 'done' && (
@@ -369,6 +413,14 @@ export default function App() {
         )}
       </main>
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <AppInner />
+    </AppErrorBoundary>
   )
 }
 

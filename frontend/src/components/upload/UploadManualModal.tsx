@@ -57,7 +57,8 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
   const [successUrl, setSuccessUrl] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const canSubmit = !!file && machineType.trim().length > 0 && (isGeneric || (brand.trim().length > 0 && model.trim().length > 0))
+  // Il tipo macchina deve essere selezionato dal catalogo (machineTypeId != null)
+  const canSubmit = !!file && machineTypeId != null && (isGeneric || (brand.trim().length > 0 && model.trim().length > 0))
 
   const doUpload = async (force: boolean, overrides?: Partial<{ brand: string; model: string; machine_type: string }>) => {
     if (!file) return
@@ -181,6 +182,15 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
                 valueId={machineTypeId}
                 onChange={(name, id) => { setMachineType(name); setMachineTypeId(id) }}
               />
+              {machineType.trim().length > 0 && machineTypeId == null && (
+                <div style={{
+                  marginTop: 6, padding: '8px 10px',
+                  background: '#fff7ed', border: '1px solid #fed7aa',
+                  borderRadius: 6, fontSize: 12, color: '#9a3412',
+                }}>
+                  ⚠ Seleziona un tipo dal catalogo per poter caricare. Se il tipo non è presente, usa il pulsante <strong>Proponi</strong> e attendi l'approvazione dell'admin.
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>

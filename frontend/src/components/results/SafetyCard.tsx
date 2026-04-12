@@ -1170,6 +1170,11 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
         <VerifichePeriodicheBanner testo={card.verifiche_periodiche} />
       )}
 
+      {/* Focus rischi di categoria INAIL — visibile in entrambe le viste */}
+      {card.focus_rischi_categoria && (
+        <FocusRischiSection testo={card.focus_rischi_categoria} categoria={card.categoria_inail ?? undefined} />
+      )}
+
       {/* ── VISTA CANTIERE ─────────────────────────────────────────── */}
       {(viewMode === 'cantiere' || isPrinting) && (
         <div data-section="cantiere">
@@ -1187,11 +1192,6 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
         <div data-section="ufficio">
           {/* Normative applicabili (collapsed di default) */}
           <NormativeSection items={card.normative_applicabili ?? []} />
-
-          {/* Focus rischi di categoria INAIL — null = non ancora popolato, non EmptySection */}
-          {card.focus_rischi_categoria && (
-            <FocusRischiSection testo={card.focus_rischi_categoria} categoria={card.categoria_inail ?? undefined} />
-          )}
 
           {/* Rischi principali */}
           {card.rischi_principali?.length > 0
