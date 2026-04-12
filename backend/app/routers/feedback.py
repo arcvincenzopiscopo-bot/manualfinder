@@ -32,6 +32,7 @@ class CardFeedbackRequest(BaseModel):
     brand: str
     model: str
     machine_type: Optional[str] = None
+    machine_type_id: Optional[int] = None
     rating: int = Field(..., ge=1, le=5, description="Rating 1-5")
     problemi: List[str] = []
     note: Optional[str] = None
@@ -96,17 +97,26 @@ async def submit_card_feedback(body: CardFeedbackRequest):
     if settings.database_url:
         try:
             import psycopg2
+            # Auto-resolve machine_type_id se non fornito
+            mt_id = body.machine_type_id
+            if mt_id is None and body.machine_type:
+                try:
+                    from app.services.machine_type_service import resolve_machine_type_id
+                    mt_id = resolve_machine_type_id(body.machine_type)
+                except Exception:
+                    pass
             conn = psycopg2.connect(settings.database_url)
             try:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
                         INSERT INTO card_feedback
-                            (brand, model, machine_type, rating, problemi, note, strategy, fonte_tipo)
+                            (brand, model, machine_type_id,
+                             rating, problemi, note, strategy, fonte_tipo)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
-                            body.brand, body.model, body.machine_type,
+                            body.brand, body.model, mt_id,
                             body.rating, body.problemi or [], body.note,
                             body.strategy, body.fonte_tipo,
                         ),

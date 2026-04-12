@@ -115,7 +115,7 @@ const badge = (color: string, bg: string): React.CSSProperties => ({
 // ── Componente principale ─────────────────────────────────────────────────────
 
 export function AdminPanel() {
-  const [tab, setTab] = useState<'stats' | 'pending' | 'diskproposals' | 'aliases' | 'flags' | 'scans' | 'log' | 'corpus'>('stats')
+  const [tab, setTab] = useState<'stats' | 'pending' | 'diskproposals' | 'aliases' | 'flags' | 'scans' | 'log' | 'corpus' | 'inail' | 'normative' | 'riferimenti'>('stats')
 
   return (
     <div style={{ background: COLORS.bg, minHeight: '100vh', padding: '0 0 40px' }}>
@@ -156,6 +156,9 @@ export function AdminPanel() {
           { id: 'scans',   label: '📨 Ricerche' },
           { id: 'log',     label: '🗂 Log scansioni' },
           { id: 'corpus',  label: '📚 Corpus RAG' },
+          { id: 'inail',   label: '📋 Manuali INAIL' },
+          { id: 'normative', label: '⚖ Normative' },
+          { id: 'riferimenti', label: '📖 Riferimenti' },
         ] as const).map(t => (
           <button
             key={t.id}
@@ -186,6 +189,9 @@ export function AdminPanel() {
         {tab === 'scans'   && <TabScans />}
         {tab === 'log'     && <TabLog />}
         {tab === 'corpus'  && <TabCorpus />}
+        {tab === 'inail'   && <TabInailAssignments />}
+        {tab === 'normative' && <TabNormative />}
+        {tab === 'riferimenti' && <TabRiferimenti />}
       </div>
     </div>
   )
@@ -1780,4 +1786,407 @@ function fmtDate(iso: string) {
   } catch {
     return iso
   }
+}
+
+// ── Tab: Manuali INAIL ────────────────────────────────────────────────────────
+
+interface InailAssignment {
+  machine_type_id: number
+  machine_type_name: string
+  pdf_filename: string
+  display_title: string | null
+  is_active: boolean
+  exists_on_disk: boolean
+}
+
+function TabInailAssignments() {
+  const [assignments, setAssignments] = useState<InailAssignment[]>([])
+  const [available, setAvailable] = useState<string[]>([])
+  const [types, setTypes] = useState<MachineType[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [form, setForm] = useState<{ machine_type_id: number | ''; pdf_filename: string; display_title: string }>({ machine_type_id: '', pdf_filename: '', display_title: '' })
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [a, av, mt] = await Promise.all([
+        fetch(`${BASE_URL}/machine-types/inail-local-files`, { headers: {} }).then(r => r.json()),
+        fetch(`${BASE_URL}/manuals/local/available-pdfs`).then(r => r.json()),
+        fetch(`${BASE_URL}/machine-types`).then(r => r.json()),
+      ])
+      setAssignments(Array.isArray(a) ? a.filter((x: InailAssignment) => x.machine_type_id != null) : [])
+      setAvailable(Array.isArray(av) ? av.map((x: { filename: string }) => x.filename) : [])
+      setTypes(Array.isArray(mt) ? mt : [])
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Errore caricamento')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const handleSave = async () => {
+    if (!form.machine_type_id || !form.pdf_filename) return
+    setSaving(true)
+    setSaveMsg(null)
+    try {
+      const r = await fetch(`${BASE_URL}/manuals/local/assignments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machine_type_id: form.machine_type_id, pdf_filename: form.pdf_filename, display_title: form.display_title || null }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      setSaveMsg('Assegnazione salvata')
+      setForm({ machine_type_id: '', pdf_filename: '', display_title: '' })
+      load()
+    } catch (e: unknown) {
+      setSaveMsg(e instanceof Error ? e.message : 'Errore')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <LoadingSpinner />
+  if (error) return <ErrorBox message={error} onRetry={load} />
+
+  return (
+    <div>
+      <SectionTitle>Assegnazioni quaderni INAIL locali</SectionTitle>
+
+      {/* Form nuova assegnazione */}
+      <div style={{ ...card, marginBottom: 20 }}>
+        <p style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 700, color: COLORS.text }}>Nuova assegnazione</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+          <div>
+            <label style={labelStyle}>Tipo macchina</label>
+            <select style={input} value={form.machine_type_id} onChange={e => setForm(f => ({ ...f, machine_type_id: Number(e.target.value) || '' }))}>
+              <option value="">— seleziona —</option>
+              {types.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>PDF</label>
+            <select style={input} value={form.pdf_filename} onChange={e => setForm(f => ({ ...f, pdf_filename: e.target.value }))}>
+              <option value="">— seleziona —</option>
+              {available.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={labelStyle}>Titolo (opzionale)</label>
+          <input style={input} value={form.display_title} onChange={e => setForm(f => ({ ...f, display_title: e.target.value }))} placeholder="es. Scheda INAIL — PLE" />
+        </div>
+        <button style={btn('primary')} onClick={handleSave} disabled={saving || !form.machine_type_id || !form.pdf_filename}>
+          {saving ? 'Salvataggio…' : 'Salva assegnazione'}
+        </button>
+        {saveMsg && <span style={{ marginLeft: 10, fontSize: 12, color: saveMsg.startsWith('Errore') ? COLORS.danger : COLORS.success }}>{saveMsg}</span>}
+      </div>
+
+      {/* Tabella assegnazioni */}
+      <div style={card}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: `2px solid ${COLORS.border}` }}>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>ID</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Tipo macchina</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>PDF</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Titolo</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Su disco</th>
+            </tr>
+          </thead>
+          <tbody>
+            {assignments.map(a => (
+              <tr key={a.machine_type_id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+                <td style={{ padding: '6px 8px', color: COLORS.muted }}>{a.machine_type_id}</td>
+                <td style={{ padding: '6px 8px', fontWeight: 600 }}>{a.machine_type_name ?? '—'}</td>
+                <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11 }}>{a.pdf_filename}</td>
+                <td style={{ padding: '6px 8px' }}>{a.display_title ?? '—'}</td>
+                <td style={{ padding: '6px 8px' }}>{a.exists_on_disk ? '✅' : '❌'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {assignments.length === 0 && <p style={{ color: COLORS.muted, fontSize: 13, marginTop: 8 }}>Nessuna assegnazione — il seed viene eseguito all'avvio se la tabella è vuota.</p>}
+      </div>
+    </div>
+  )
+}
+
+// ── Tab: Normative ────────────────────────────────────────────────────────────
+
+interface Norma {
+  id: number
+  machine_type_id: number | null
+  norm_text: string
+  display_order: number
+  is_active: boolean
+  machine_type_name?: string | null
+}
+
+function TabNormative() {
+  const [norms, setNorms] = useState<Norma[]>([])
+  const [types, setTypes] = useState<MachineType[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [form, setForm] = useState<{ machine_type_id: number | ''; norm_text: string; display_order: number }>({ machine_type_id: '', norm_text: '', display_order: 0 })
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [n, mt] = await Promise.all([
+        apiFetch('/normative/admin'),
+        fetch(`${BASE_URL}/machine-types`).then(r => r.json()),
+      ])
+      setNorms(Array.isArray(n) ? n : [])
+      setTypes(Array.isArray(mt) ? mt : [])
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Errore caricamento')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const handleAdd = async () => {
+    if (!form.norm_text.trim()) return
+    setSaving(true)
+    setSaveMsg(null)
+    try {
+      const r = await fetch(`${BASE_URL}/machine-types/normative`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          machine_type_id: form.machine_type_id || null,
+          norm_text: form.norm_text.trim(),
+          display_order: form.display_order,
+        }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      setSaveMsg('Norma aggiunta')
+      setForm({ machine_type_id: '', norm_text: '', display_order: 0 })
+      load()
+    } catch (e: unknown) {
+      setSaveMsg(e instanceof Error ? e.message : 'Errore')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('Eliminare questa norma?')) return
+    try {
+      await fetch(`${BASE_URL}/machine-types/normative/${id}`, { method: 'DELETE' })
+      load()
+    } catch { /* silenzioso */ }
+  }
+
+  if (loading) return <LoadingSpinner />
+  if (error) return <ErrorBox message={error} onRetry={load} />
+
+  const typeMap: Record<number, string> = Object.fromEntries(types.map(t => [t.id, t.name]))
+
+  return (
+    <div>
+      <SectionTitle>Normative per tipo macchina</SectionTitle>
+
+      <div style={{ ...card, marginBottom: 20 }}>
+        <p style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 700, color: COLORS.text }}>Aggiungi norma</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px', gap: 10, marginBottom: 10 }}>
+          <div>
+            <label style={labelStyle}>Tipo macchina (vuoto = globale)</label>
+            <select style={input} value={form.machine_type_id} onChange={e => setForm(f => ({ ...f, machine_type_id: Number(e.target.value) || '' }))}>
+              <option value="">— Globale (tutti i tipi) —</option>
+              {types.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Ordine</label>
+            <input type="number" style={input} value={form.display_order} onChange={e => setForm(f => ({ ...f, display_order: Number(e.target.value) }))} />
+          </div>
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <label style={labelStyle}>Testo norma *</label>
+          <input style={input} value={form.norm_text} onChange={e => setForm(f => ({ ...f, norm_text: e.target.value }))} placeholder="es. EN ISO 3691-1:2015+A1:2020 — Carrelli industriali" />
+        </div>
+        <button style={btn('primary')} onClick={handleAdd} disabled={saving || !form.norm_text.trim()}>
+          {saving ? 'Salvataggio…' : 'Aggiungi norma'}
+        </button>
+        {saveMsg && <span style={{ marginLeft: 10, fontSize: 12, color: saveMsg.startsWith('Errore') ? COLORS.danger : COLORS.success }}>{saveMsg}</span>}
+      </div>
+
+      <div style={card}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: `2px solid ${COLORS.border}` }}>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>ID</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Tipo</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Norma</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Ord</th>
+              <th style={{ padding: '6px 8px' }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {norms.map(n => (
+              <tr key={n.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+                <td style={{ padding: '6px 8px', color: COLORS.muted }}>{n.id}</td>
+                <td style={{ padding: '6px 8px' }}>
+                  {n.machine_type_id == null
+                    ? <span style={badge(COLORS.primary, '#eff6ff')}>Globale</span>
+                    : typeMap[n.machine_type_id] ?? `#${n.machine_type_id}`}
+                </td>
+                <td style={{ padding: '6px 8px' }}>{n.norm_text}</td>
+                <td style={{ padding: '6px 8px', color: COLORS.muted }}>{n.display_order}</td>
+                <td style={{ padding: '4px 8px' }}>
+                  <button style={btn('danger', true)} onClick={() => handleDelete(n.id)}>✕</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {norms.length === 0 && <p style={{ color: COLORS.muted, fontSize: 13, marginTop: 8 }}>Nessuna norma — il seed viene eseguito all'avvio.</p>}
+      </div>
+    </div>
+  )
+}
+
+// ── Tab: Riferimenti normativi ────────────────────────────────────────────────
+
+interface RiferimentoAdmin {
+  id: number
+  norma_key: string
+  norma: string
+  titolo: string
+  machine_type_ids: number[] | null
+  is_active: boolean
+}
+
+function TabRiferimenti() {
+  const [refs, setRefs] = useState<RiferimentoAdmin[]>([])
+  const [types, setTypes] = useState<MachineType[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [editId, setEditId] = useState<number | null>(null)
+  const [editIds, setEditIds] = useState<string>('')  // comma-separated IDs or empty for universal
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [r, mt] = await Promise.all([
+        apiFetch('/riferimenti/admin'),
+        fetch(`${BASE_URL}/machine-types`).then(res => res.json()),
+      ])
+      setRefs(Array.isArray(r) ? r : [])
+      setTypes(Array.isArray(mt) ? mt : [])
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Errore caricamento')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const startEdit = (ref: RiferimentoAdmin) => {
+    setEditId(ref.id)
+    setEditIds(ref.machine_type_ids ? ref.machine_type_ids.join(', ') : '')
+  }
+
+  const handleSave = async () => {
+    if (editId === null) return
+    setSaving(true)
+    try {
+      const ids = editIds.trim()
+        ? editIds.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
+        : null
+      const r = await fetch(`${BASE_URL}/machine-types/riferimenti/${editId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machine_type_ids: ids }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      setEditId(null)
+      load()
+    } catch { /* silenzioso */ } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <LoadingSpinner />
+  if (error) return <ErrorBox message={error} onRetry={load} />
+
+  const typeMap: Record<number, string> = Object.fromEntries(types.map(t => [t.id, t.name]))
+
+  return (
+    <div>
+      <SectionTitle>Riferimenti normativi D.Lgs 81/08</SectionTitle>
+      <p style={{ fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
+        Modifica i tipi macchina associati a ciascun riferimento. IDs separati da virgola; vuoto = universale.
+      </p>
+      <div style={card}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: `2px solid ${COLORS.border}` }}>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Chiave</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Norma</th>
+              <th style={{ textAlign: 'left', padding: '6px 8px', color: COLORS.muted }}>Tipi macchina</th>
+              <th style={{ padding: '6px 8px' }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {refs.map(ref => (
+              <tr key={ref.id} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+                <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11, color: COLORS.muted }}>{ref.norma_key}</td>
+                <td style={{ padding: '6px 8px' }}>
+                  <div style={{ fontWeight: 600 }}>{ref.norma}</div>
+                  <div style={{ fontSize: 11, color: COLORS.muted }}>{ref.titolo}</div>
+                </td>
+                <td style={{ padding: '6px 8px', maxWidth: 200 }}>
+                  {editId === ref.id ? (
+                    <input
+                      style={{ ...input, fontSize: 11, padding: '4px 6px' }}
+                      value={editIds}
+                      onChange={e => setEditIds(e.target.value)}
+                      placeholder="IDs separati da virgola, vuoto = globale"
+                    />
+                  ) : (
+                    ref.machine_type_ids == null
+                      ? <span style={badge(COLORS.primary, '#eff6ff')}>Globale</span>
+                      : ref.machine_type_ids.map(id => (
+                        <span key={id} style={{ ...badge(COLORS.muted, '#f1f5f9'), marginRight: 3 }}>
+                          {typeMap[id] ?? `#${id}`}
+                        </span>
+                      ))
+                  )}
+                </td>
+                <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
+                  {editId === ref.id ? (
+                    <>
+                      <button style={{ ...btn('success', true), marginRight: 4 }} onClick={handleSave} disabled={saving}>
+                        {saving ? '…' : '✓'}
+                      </button>
+                      <button style={btn('ghost', true)} onClick={() => setEditId(null)}>✕</button>
+                    </>
+                  ) : (
+                    <button style={btn('ghost', true)} onClick={() => startEdit(ref)}>✏</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {refs.length === 0 && <p style={{ color: COLORS.muted, fontSize: 13, marginTop: 8 }}>Nessun riferimento — il seed viene eseguito all'avvio.</p>}
+      </div>
+    </div>
+  )
 }

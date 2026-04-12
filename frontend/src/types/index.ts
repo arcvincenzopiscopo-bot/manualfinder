@@ -162,6 +162,8 @@ export interface SafetyCard {
   categoria_inail?: string | null
   // Metadati fonte strategia A–F
   source_metadata?: SourceMetadata | null
+  // ID nel catalogo machine_types (disponibile dopo la pipeline)
+  machine_type_id?: number | null
 }
 
 // Contestualizzazione sopralluogo (persistita in localStorage)

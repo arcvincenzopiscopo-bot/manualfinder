@@ -36,59 +36,52 @@ def _db_available() -> bool:
     return bool(settings.database_url)
 
 
-# ── Lookup tables per regole normative ───────────────────────────────────────
+# ── Dati seed per should_have_manual (usati SOLO da _seed_machine_type_flags_if_needed) ──
+# A runtime si usano i flag da machine_types DB tramite get_flags(machine_type_id).
 
-_SHOULD_HAVE_MANUAL = {
-    "escavatore", "escavatori", "gru mobile", "gru a torre", "gru su autocarro",
-    "carrello elevatore", "muletto", "sollevatore telescopico", "telehandler",
-    "piattaforma aerea", "ple", "piattaforma elevabile",
-    "pompa calcestruzzo", "autobetonpompa",
-    "pala caricatrice", "pala meccanica",
-    "pressa piegatrice", "piegatrice",
+_SHOULD_HAVE_MANUAL_SEED = {
+    "escavatore", "gru mobile", "gru a torre", "gru su autocarro",
+    "carrello elevatore", "sollevatore telescopico",
+    "piattaforma aerea",
+    "pompa calcestruzzo",
+    "pala caricatrice",
+    "pressa piegatrice",
 }
 
-_NO_PATENTINO = {
-    # Accordo Stato-Regioni 22/02/2012 NON copre queste macchine
-    "compressore", "motocompressore", "gruppo elettrogeno", "generatore",
-    "piastra vibrante", "costipatore",
-    "bulldozer", "apripista",          # non elencato esplicitamente nell'Accordo 2012
-    "betoniera",                        # ≠ pompa calcestruzzo (quest'ultima è coperta)
-    "saldatrice", "saldatrice mig", "saldatrice tig",
-    "pressa", "pressa idraulica", "pressa piegatrice", "piegatrice",
-    "punzonatrice", "cesoie", "tranciatrice",
-    "tornio", "fresatrice", "rettificatrice",
-    "laser", "macchina taglio laser",
-}
 
-_SHOULD_HAVE_VERIFICHE = {
-    # D.Lgs. 81/08 Allegato VII — solo apparecchi di sollevamento
-    "carrello elevatore", "carrello elevatore telescopico", "carrello elevatore a contrappeso",
-    "muletto", "sollevatore telescopico", "telehandler",
-    "gru", "gru mobile", "gru a torre", "gru su autocarro", "camion gru", "gru su camion",
-    "argano", "verricello", "paranco", "paranchi",
-    "piattaforma aerea", "ple", "piattaforma elevabile", "piattaforma a forbice",
-    "piattaforma a braccio", "ascensore da cantiere", "montacarichi", "elevatore a bandiera",
-    # terna/retroescavatore escluse: macchine movimento terra, non in Allegato VII
-    "pompa calcestruzzo", "autobetonpompa",  # braccio autopompa = apparecchio sollevamento
-}
-
-_NO_VERIFICHE = {
-    # Macchine movimento terra: non sono apparecchi di sollevamento, non in Allegato VII
-    "escavatore", "escavatore idraulico", "escavatori",
-    "pala caricatrice", "pala meccanica", "pala gommata", "pala cingolata",
-    "terna", "terne", "retroescavatore",
-    "minipala", "mini pala", "skid steer",
-    "rullo compattatore", "rullo compressore", "rullo vibrante", "rullo",
-    "livellatrice", "grader",
-    "finitrice", "finitrice stradale",
-    "dumper", "autoribaltabile",
-    "bulldozer", "apripista",
-    "trattore agricolo", "trattore",
-    # Altre attrezzature non soggette a Allegato VII
-    "piastra vibrante", "costipatore",
-    "compressore", "motocompressore",
-    "saldatrice", "betoniera",
-}
+def _seed_machine_type_flags_if_needed() -> None:
+    """
+    Popola should_have_manual su machine_types, solo se tutti a false (primo run).
+    Idempotente: eseguita solo se necessario.
+    """
+    if not _db_available():
+        return
+    try:
+        import psycopg2
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM machine_types WHERE should_have_manual = true")
+            already = cur.fetchone()[0]
+        if already > 0:
+            conn.close()
+            logger.info("quality_service: should_have_manual già valorizzato (%d tipi)", already)
+            return
+        from app.services.machine_type_service import resolve_machine_type_id
+        updated = 0
+        with conn.cursor() as cur:
+            for type_name in _SHOULD_HAVE_MANUAL_SEED:
+                mt_id = resolve_machine_type_id(type_name)
+                if mt_id:
+                    cur.execute(
+                        "UPDATE machine_types SET should_have_manual = true WHERE id = %s",
+                        (mt_id,),
+                    )
+                    updated += 1
+        conn.commit()
+        conn.close()
+        logger.info("quality_service: seed should_have_manual completato (%d tipi aggiornati)", updated)
+    except Exception as e:
+        logger.warning("quality_service: _seed_machine_type_flags_if_needed fallito: %s", e)
 
 
 # ── Valutazione qualità ───────────────────────────────────────────────────────
@@ -102,9 +95,9 @@ def evaluate(
     producer_pages: int = 0,
     inail_url: Optional[str] = None,
     producer_url: Optional[str] = None,
+    machine_type_id: Optional[int] = None,
 ) -> list[dict]:
     issues: list[dict] = []
-    mt = (machine_type or "").lower().strip()
 
     def _issue(type_: str, severity: str, message: str):
         issues.append({"type": type_, "severity": severity, "message": message})
@@ -124,18 +117,30 @@ def evaluate(
         _issue("empty_dispositivi", "low",
                "Nessun dispositivo di sicurezza estratto dal documento")
 
-    if fonte_tipo == "fallback_ai" and mt in _SHOULD_HAVE_MANUAL:
+    # Recupera flag normativi dal DB tramite ID (fail-safe)
+    flags: dict = {}
+    if machine_type_id is not None:
+        try:
+            from app.services.machine_type_service import get_flags
+            flags = get_flags(machine_type_id)
+        except Exception:
+            pass
+
+    should_have_manual = flags.get("should_have_manual", False)
+    requires_patentino = flags.get("requires_patentino", True)   # conservativo se sconosciuto
+    requires_verifiche = flags.get("requires_verifiche", None)   # None = sconosciuto
+
+    if fonte_tipo == "fallback_ai" and should_have_manual:
         _issue("expected_manual_not_found", "medium",
                f"Nessun manuale trovato per '{machine_type}' — atteso per questa categoria")
 
-    if producer_match_type == "category" and mt in _SHOULD_HAVE_MANUAL and producer_pages < 40:
+    if producer_match_type == "category" and should_have_manual and producer_pages < 40:
         _issue("low_quality_category_pdf", "medium",
                f"Manuale produttore di categoria simile e corto ({producer_pages} pag.) "
                "— rischio di contenuto non specifico per il modello")
 
     # "unrelated" è un falso positivo se la fonte usata è fallback_ai o inail:
     # significa che il PDF è stato correttamente scartato dalla pipeline.
-    # L'issue è reale solo se il PDF unrelated è stato effettivamente analizzato.
     if producer_match_type == "unrelated" and fonte_tipo not in ("fallback_ai", "inail"):
         _issue("unrelated_producer_pdf", "high",
                "Il PDF produttore è stato classificato come 'unrelated' ma è stato usato lo stesso")
@@ -157,21 +162,24 @@ def evaluate(
     abilitazione = getattr(safety_card, "abilitazione_operatore", None) or ""
     verifiche = getattr(safety_card, "verifiche_periodiche", None)
 
-    if mt in _NO_PATENTINO and abilitazione:
+    # Check abilitazione: solo quando abbiamo un ID e sappiamo che NON richiede patentino
+    if machine_type_id is not None and not requires_patentino and abilitazione:
         ab_lower = abilitazione.lower()
         if "accordo stato" in ab_lower or "accordo s-r" in ab_lower or "patentino" in ab_lower:
             _issue("wrong_abilitazione_cited", "medium",
                    f"'{machine_type}' NON è coperta dall'Accordo S-R 2012 ma l'abilitazione la cita: "
                    f"{abilitazione[:120]}")
 
-    if verifiche is None and mt in _SHOULD_HAVE_VERIFICHE:
-        _issue("missing_verifiche_allegato7", "high",
-               f"'{machine_type}' è soggetta a verifiche Allegato VII ma il campo è NULL")
+    # Check verifiche: solo quando abbiamo un ID con flag esplicito
+    if machine_type_id is not None and requires_verifiche is not None:
+        if verifiche is None and requires_verifiche:
+            _issue("missing_verifiche_allegato7", "high",
+                   f"'{machine_type}' è soggetta a verifiche Allegato VII ma il campo è NULL")
+        if verifiche is not None and not requires_verifiche:
+            _issue("spurious_verifiche", "low",
+                   f"'{machine_type}' NON è soggetta ad Allegato VII ma verifiche_periodiche è valorizzato")
 
-    if verifiche is not None and mt in _NO_VERIFICHE:
-        _issue("spurious_verifiche", "low",
-               f"'{machine_type}' NON è soggetta ad Allegato VII ma verifiche_periodiche è valorizzato")
-
+    mt = (machine_type or "").lower().strip()
     rischi = getattr(safety_card, "rischi_principali", None) or []
     if rischi and mt:
         first_risk_text = ""
@@ -208,8 +216,17 @@ def log_analysis(
     producer_pages: int = 0,
     inail_url: Optional[str] = None,
     producer_url: Optional[str] = None,
+    machine_type_id: Optional[int] = None,
 ) -> None:
     try:
+        # Auto-resolve machine_type_id se non fornito
+        if machine_type_id is None and machine_type:
+            try:
+                from app.services.machine_type_service import resolve_machine_type_id
+                machine_type_id = resolve_machine_type_id(machine_type)
+            except Exception:
+                pass
+
         issues = evaluate(
             brand=brand, model=model, machine_type=machine_type,
             safety_card=safety_card,
@@ -217,12 +234,14 @@ def log_analysis(
             producer_pages=producer_pages,
             inail_url=inail_url,
             producer_url=producer_url,
+            machine_type_id=machine_type_id,
         )
 
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "macchina": f"{brand} {model}",
             "machine_type": machine_type or "",
+            "machine_type_id": machine_type_id,
             "fonte_tipo": getattr(safety_card, "fonte_tipo", ""),
             "producer_url": (producer_url or "")[:120],
             "inail_url": (inail_url or "")[:120],
@@ -264,19 +283,20 @@ def _db_insert(entry: dict) -> None:
             cur.execute(
                 """
                 INSERT INTO quality_log (
-                    ts, macchina, machine_type, fonte_tipo,
+                    ts, macchina, machine_type, machine_type_id, fonte_tipo,
                     producer_url, inail_url, producer_match, producer_pages,
                     n_rischi, n_checklist, has_abilitazione, has_verifiche,
                     issues, n_issues, has_high
                 ) VALUES (
-                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s
                 )
                 """,
                 (
-                    entry["ts"], entry["macchina"], entry["machine_type"], entry["fonte_tipo"],
+                    entry["ts"], entry["macchina"], entry["machine_type"],
+                    entry.get("machine_type_id"), entry["fonte_tipo"],
                     entry["producer_url"], entry["inail_url"], entry["producer_match"], entry["producer_pages"],
                     entry["n_rischi"], entry["n_checklist"], entry["has_abilitazione"], entry["has_verifiche"],
                     json.dumps(entry["issues"]), entry["n_issues"], entry["has_high"],

@@ -288,16 +288,24 @@ def _save_improved_rule(machine_type: str, rule: dict) -> None:
     """Salva la regola migliorata. Usa ON CONFLICT DO UPDATE per aggiornare l'esistente."""
     import psycopg2
     try:
+        mt_id = None
+        try:
+            from app.services.machine_type_service import resolve_machine_type_id as _resolve
+            mt_id = _resolve(machine_type)
+        except Exception:
+            pass
         conn = psycopg2.connect(settings.database_url)
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO machine_prompt_rules
-                    (machine_type, extra_context, specific_risks, normative_refs,
+                    (machine_type, machine_type_id, extra_context, specific_risks, normative_refs,
                      inspection_focus, quality_notes, is_active, source,
                      improvement_count, last_improved_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, true, 'ai_improved', 1, now(), now())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, true, 'ai_improved', 1, now(), now())
                 ON CONFLICT (machine_type) DO UPDATE SET
+                    machine_type_id   = COALESCE(EXCLUDED.machine_type_id,
+                                                 machine_prompt_rules.machine_type_id),
                     extra_context     = EXCLUDED.extra_context,
                     specific_risks    = EXCLUDED.specific_risks,
                     normative_refs    = EXCLUDED.normative_refs,
@@ -305,7 +313,7 @@ def _save_improved_rule(machine_type: str, rule: dict) -> None:
                     quality_notes     = EXCLUDED.quality_notes,
                     source            = CASE
                                           WHEN machine_prompt_rules.source = 'manual'
-                                          THEN 'manual'  -- non toccare le regole manuali
+                                          THEN 'manual'
                                           ELSE 'ai_improved'
                                         END,
                     improvement_count = COALESCE(machine_prompt_rules.improvement_count, 0) + 1,
@@ -314,6 +322,7 @@ def _save_improved_rule(machine_type: str, rule: dict) -> None:
                 """,
                 (
                     machine_type.lower().strip(),
+                    mt_id,
                     rule.get("extra_context"),
                     rule.get("specific_risks"),
                     rule.get("normative_refs"),

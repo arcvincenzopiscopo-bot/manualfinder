@@ -1,18 +1,30 @@
 """
-Mapping deterministico machine_type → normative applicabili vigenti.
-Aggiornare manualmente quando escono nuove norme o recepimenti italiani.
-"""
-from typing import List
+Normative applicabili per tipo macchina.
 
-# Normative sempre applicabili a qualsiasi macchinario
-_ALWAYS_APPLICABLE: List[str] = [
+Design post-migrazione:
+  - Le normative sono in DB (tabella machine_type_normative).
+  - _NORMATIVE_MAP_SEED e _ALWAYS_APPLICABLE_SEED: usati SOLO da
+    _seed_normative_if_empty() al primo avvio; non usati a runtime.
+  - get_normative(machine_type) / get_normative_by_id(id): leggono da DB con cache.
+"""
+from typing import List, Optional
+import logging
+import threading
+import time as _time
+
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dati seed — usati SOLO dalla funzione di seed al primo avvio
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ALWAYS_APPLICABLE_SEED: List[str] = [
     "Direttiva Macchine 2006/42/CE (D.Lgs. 17/2010)",
     "UNI EN ISO 12100:2010 — Sicurezza del macchinario: principi generali di progettazione",
     "D.Lgs. 81/2008 — Testo Unico Sicurezza sul Lavoro",
 ]
 
-# Mapping: chiave (lowercase) → normative specifiche per il tipo
-_NORMATIVE_MAP: dict[str, List[str]] = {
+_NORMATIVE_MAP_SEED: dict[str, List[str]] = {
     "piattaforma aerea": [
         "EN 280:2013+A1:2015 — PLE con braccio mobile",
         "EN 1570-1:2011+A1:2014 — Tavole elevatori",
@@ -113,12 +125,6 @@ _NORMATIVE_MAP: dict[str, List[str]] = {
         "D.Lgs. 81/2008 Allegato V e VII",
         "Accordo Stato-Regioni 22/02/2012 — Abilitazione operatori pompe calcestruzzo",
     ],
-    "autoribaltabile": [
-        "EN 474-1:2006+A4:2013",
-        "EN 474-6:2006+A1:2009 — Dumper",
-        "D.Lgs. 81/2008 Allegato V",
-        "Accordo Stato-Regioni 22/02/2012 — Abilitazione operatori dumper",
-    ],
     "dumper": [
         "EN 474-1:2006+A4:2013",
         "EN 474-6:2006+A1:2009 — Dumper",
@@ -151,23 +157,162 @@ _NORMATIVE_MAP: dict[str, List[str]] = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Seed — chiamata da main.py al primo avvio (idempotente)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _seed_normative_if_empty() -> None:
+    """
+    Popola machine_type_normative da _NORMATIVE_MAP_SEED.
+    Eseguito solo se la tabella è vuota.
+    """
+    try:
+        from app.config import settings
+        import psycopg2
+        if not settings.database_url:
+            return
+        conn = psycopg2.connect(settings.database_url)
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM machine_type_normative")
+            count = cur.fetchone()[0]
+        if count > 0:
+            conn.close()
+            logger.info("machine_normative: tabella già popolata (%d norme)", count)
+            return
+        from app.services.machine_type_service import resolve_machine_type_id
+        inserted = 0
+        with conn.cursor() as cur:
+            # Norme globali (machine_type_id = NULL)
+            for i, norm in enumerate(_ALWAYS_APPLICABLE_SEED):
+                cur.execute(
+                    """
+                    INSERT INTO machine_type_normative (machine_type_id, norm_text, display_order)
+                    VALUES (NULL, %s, %s)
+                    """,
+                    (norm, i),
+                )
+                inserted += 1
+            # Norme specifiche per tipo
+            for type_name, norms in _NORMATIVE_MAP_SEED.items():
+                mt_id = resolve_machine_type_id(type_name)
+                if mt_id is None:
+                    logger.warning("machine_normative: seed — nessun ID per '%s'", type_name)
+                    continue
+                for i, norm in enumerate(norms):
+                    cur.execute(
+                        """
+                        INSERT INTO machine_type_normative (machine_type_id, norm_text, display_order)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (mt_id, norm, i),
+                    )
+                    inserted += 1
+        conn.commit()
+        conn.close()
+        logger.info("machine_normative: seed completato (%d norme inserite)", inserted)
+    except Exception as e:
+        logger.warning("machine_normative: _seed_normative_if_empty fallito: %s", e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cache in-memory
+# ─────────────────────────────────────────────────────────────────────────────
+
+_cache_by_id: dict[Optional[int], List[str]] = {}  # None = norme globali
+_cache_global: Optional[List[str]] = None
+_cache_ts: float = 0.0
+_cache_lock = threading.Lock()
+_CACHE_TTL = 900  # 15 minuti
+
+
+def _is_cache_valid() -> bool:
+    return _time.monotonic() - _cache_ts < _CACHE_TTL
+
+
+def _load_cache() -> None:
+    """Ricarica cache da DB."""
+    global _cache_by_id, _cache_global, _cache_ts
+    try:
+        from app.config import settings
+        import psycopg2
+        if not settings.database_url:
+            return
+        conn = psycopg2.connect(settings.database_url)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT machine_type_id, norm_text FROM machine_type_normative "
+                "WHERE is_active = true ORDER BY machine_type_id NULLS FIRST, display_order"
+            )
+            rows = cur.fetchall()
+        conn.close()
+        new_cache: dict[Optional[int], List[str]] = {}
+        for mt_id, norm_text in rows:
+            key = mt_id  # None per globali
+            if key not in new_cache:
+                new_cache[key] = []
+            new_cache[key].append(norm_text)
+        with _cache_lock:
+            _cache_by_id = new_cache
+            _cache_global = new_cache.get(None, [])
+            _cache_ts = _time.monotonic()
+    except Exception as e:
+        logger.debug("machine_normative: _load_cache fallito: %s", e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API pubblica
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_normative_by_id(machine_type_id: int) -> List[str]:
+    """
+    Restituisce le normative per il tipo macchina identificato da ID.
+    Include le norme globali (machine_type_id = NULL).
+    Cache in-memory 15 min.
+    """
+    with _cache_lock:
+        if not _is_cache_valid():
+            pass
+        elif None in _cache_by_id:  # cache valida e popolata
+            global_norms = _cache_global or []
+            specific = _cache_by_id.get(machine_type_id, [])
+            seen = set()
+            result = []
+            for n in global_norms + specific:
+                if n not in seen:
+                    seen.add(n)
+                    result.append(n)
+            return result
+
+    # Cache non valida o vuota: ricarica
+    _load_cache()
+
+    with _cache_lock:
+        global_norms = _cache_global or _ALWAYS_APPLICABLE_SEED
+        specific = _cache_by_id.get(machine_type_id, [])
+        seen = set()
+        result = []
+        for n in global_norms + specific:
+            if n not in seen:
+                seen.add(n)
+                result.append(n)
+        return result
+
+
 def get_normative(machine_type: str) -> List[str]:
     """
-    Restituisce le normative applicabili per il tipo macchina specificato.
-    Include sempre le normative di base + quelle specifiche per categoria.
-    Fallisce silenziosamente restituendo solo le normative base.
+    Restituisce le normative applicabili per il tipo macchina (testo libero).
+    Risolve il testo a ID tramite machine_type_service, poi delega a get_normative_by_id().
+    Fallback: solo norme globali.
     """
-    mt = (machine_type or "").lower().strip()
-    specific: List[str] = []
-    for key, norms in _NORMATIVE_MAP.items():
-        if key in mt or mt in key:
-            specific = norms
-            break
-    # Evita duplicati (alcune normative base sono già nel mapping specifico)
-    seen = set()
-    result = []
-    for n in _ALWAYS_APPLICABLE + specific:
-        if n not in seen:
-            seen.add(n)
-            result.append(n)
-    return result
+    try:
+        from app.services.machine_type_service import resolve_machine_type_id
+        mt_id = resolve_machine_type_id(machine_type or "")
+        if mt_id is not None:
+            return get_normative_by_id(mt_id)
+    except Exception:
+        pass
+    # Fallback: norme globali dal seed
+    with _cache_lock:
+        if _is_cache_valid() and _cache_global:
+            return list(_cache_global)
+    return list(_ALWAYS_APPLICABLE_SEED)

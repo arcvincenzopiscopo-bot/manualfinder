@@ -1,11 +1,26 @@
 """
-Dizionario hardcoded degli articoli D.Lgs 81/08 rilevanti per le macchine.
-Zero RAG, zero embedding — testo esatto degli articoli, zero rischio allucinazioni.
+Riferimenti normativi applicabili per tipo macchina.
 
-Usato da hybrid_retriever.py come prima fonte normativa (la più affidabile).
+Design post-migrazione:
+  - I riferimenti sono in DB (tabella riferimenti_normativi).
+  - _RIFERIMENTI_SEED: usato SOLO da _seed_riferimenti_if_empty() al primo avvio;
+    non usato a runtime.
+  - get_riferimenti_per_tipo(text) / get_riferimenti_by_id(id): leggono da DB con cache.
+  - get_riferimento_by_keywords() / format_for_prompt(): invariati, operano su dicts Python.
 """
+from typing import List, Optional
+import logging
+import threading
+import time as _time
 
-RIFERIMENTI: dict = {
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dati seed — usati SOLO dalla funzione di seed al primo avvio
+# tipo_macchina: ["*"] → machine_type_ids = NULL (valido per tutti)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RIFERIMENTI_SEED: dict = {
 
     "idoneita_attrezzatura": {
         "norma": "D.Lgs 81/08 Art. 70",
@@ -633,23 +648,195 @@ RIFERIMENTI: dict = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Seed — chiamata da main.py al primo avvio (idempotente)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _seed_riferimenti_if_empty() -> None:
+    """
+    Popola riferimenti_normativi da _RIFERIMENTI_SEED.
+    tipo_macchina=["*"] → machine_type_ids = NULL (valido per tutti).
+    Eseguito solo se la tabella è vuota.
+    """
+    try:
+        from app.config import settings
+        import psycopg2
+        if not settings.database_url:
+            return
+        conn = psycopg2.connect(settings.database_url)
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM riferimenti_normativi")
+            count = cur.fetchone()[0]
+        if count > 0:
+            conn.close()
+            logger.info("riferimenti_normativi: tabella già popolata (%d riferimenti)", count)
+            return
+        from app.services.machine_type_service import resolve_machine_type_id
+        inserted = 0
+        with conn.cursor() as cur:
+            for norma_key, rif in _RIFERIMENTI_SEED.items():
+                tipi = rif.get("tipo_macchina", ["*"])
+                if tipi == ["*"]:
+                    machine_type_ids = None
+                else:
+                    ids = []
+                    for tipo_text in tipi:
+                        mt_id = resolve_machine_type_id(tipo_text)
+                        if mt_id is not None and mt_id not in ids:
+                            ids.append(mt_id)
+                    machine_type_ids = ids if ids else None
+                cur.execute(
+                    """
+                    INSERT INTO riferimenti_normativi
+                        (norma_key, norma, titolo, testo, keywords, machine_type_ids)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (norma_key) DO NOTHING
+                    """,
+                    (
+                        norma_key,
+                        rif["norma"],
+                        rif["titolo"],
+                        rif["testo"],
+                        rif.get("keywords", []),
+                        machine_type_ids,
+                    ),
+                )
+                inserted += 1
+        conn.commit()
+        conn.close()
+        logger.info("riferimenti_normativi: seed completato (%d riferimenti inseriti)", inserted)
+    except Exception as e:
+        logger.warning("riferimenti_normativi: _seed_riferimenti_if_empty fallito: %s", e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cache in-memory
+# ─────────────────────────────────────────────────────────────────────────────
+
+_cache_all: Optional[List[dict]] = None   # tutti i riferimenti attivi
+_cache_ts: float = 0.0
+_cache_lock = threading.Lock()
+_CACHE_TTL = 900  # 15 minuti
+
+
+def _is_cache_valid() -> bool:
+    return _time.monotonic() - _cache_ts < _CACHE_TTL
+
+
+def _load_cache() -> None:
+    """Ricarica cache da DB."""
+    global _cache_all, _cache_ts
+    try:
+        from app.config import settings
+        import psycopg2
+        if not settings.database_url:
+            return
+        conn = psycopg2.connect(settings.database_url)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT norma_key, norma, titolo, testo, keywords, machine_type_ids
+                FROM riferimenti_normativi
+                WHERE is_active = true
+                ORDER BY id
+                """
+            )
+            rows = cur.fetchall()
+        conn.close()
+        result = []
+        for norma_key, norma, titolo, testo, keywords, machine_type_ids in rows:
+            result.append({
+                "norma_key": norma_key,
+                "norma": norma,
+                "titolo": titolo,
+                "testo": testo,
+                "keywords": keywords or [],
+                "machine_type_ids": machine_type_ids,  # None = universale
+            })
+        with _cache_lock:
+            _cache_all = result
+            _cache_ts = _time.monotonic()
+    except Exception as e:
+        logger.debug("riferimenti_normativi: _load_cache fallito: %s", e)
+
+
+def _get_cached() -> List[dict]:
+    """Restituisce la cache (ricaricando se necessario)."""
+    with _cache_lock:
+        if _is_cache_valid() and _cache_all is not None:
+            return _cache_all
+    _load_cache()
+    with _cache_lock:
+        return _cache_all or []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API pubblica
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_riferimenti_by_id(machine_type_id: int) -> List[dict]:
+    """
+    Restituisce i riferimenti applicabili per ID tipo macchina.
+    Include i riferimenti universali (machine_type_ids = NULL) e quelli
+    specifici per il tipo (machine_type_id in machine_type_ids).
+    Cache in-memory 15 min.
+    """
+    all_rifs = _get_cached()
+    if not all_rifs:
+        # Fallback: filtra dal seed
+        result = []
+        for rif in _RIFERIMENTI_SEED.values():
+            tipi = rif.get("tipo_macchina", ["*"])
+            if tipi == ["*"]:
+                result.append(rif)
+        return result
+
+    return [
+        r for r in all_rifs
+        if r["machine_type_ids"] is None
+        or machine_type_id in (r["machine_type_ids"] or [])
+    ]
+
+
 def get_riferimenti_per_tipo(machine_type: str) -> list[dict]:
     """
     Restituisce tutti i riferimenti applicabili a un tipo macchina.
-    Include sempre quelli con tipo_macchina=["*"] più quelli
-    specifici per il tipo richiesto (match parziale case-insensitive).
+    Risolve il testo a ID tramite machine_type_service, poi delega a get_riferimenti_by_id().
+    Fallback: tutti i riferimenti universali (machine_type_ids = NULL).
     """
     if not machine_type:
-        return [ref for ref in RIFERIMENTI.values() if "*" in ref["tipo_macchina"]]
+        all_rifs = _get_cached()
+        if all_rifs:
+            return [r for r in all_rifs if r["machine_type_ids"] is None]
+        return [r for r in _RIFERIMENTI_SEED.values() if "*" in r.get("tipo_macchina", [])]
 
+    try:
+        from app.services.machine_type_service import resolve_machine_type_id
+        mt_id = resolve_machine_type_id(machine_type)
+        if mt_id is not None:
+            return get_riferimenti_by_id(mt_id)
+    except Exception:
+        pass
+
+    # Fallback: cache o seed, solo universali + match testuale
+    all_rifs = _get_cached()
+    if all_rifs:
+        machine_lower = machine_type.lower()
+        result = []
+        for r in all_rifs:
+            if r["machine_type_ids"] is None:
+                result.append(r)
+        return result
+
+    # Fallback definitivo: ricerca testuale nel seed
     machine_lower = machine_type.lower()
     result = []
-    for ref in RIFERIMENTI.values():
-        tipi = ref["tipo_macchina"]
+    for rif in _RIFERIMENTI_SEED.values():
+        tipi = rif.get("tipo_macchina", ["*"])
         if "*" in tipi:
-            result.append(ref)
+            result.append(rif)
         elif any(t.lower() in machine_lower or machine_lower in t.lower() for t in tipi):
-            result.append(ref)
+            result.append(rif)
     return result
 
 
@@ -660,13 +847,18 @@ def get_riferimento_by_keywords(keywords: list[str]) -> list[dict]:
     """
     kw_lower = [k.lower() for k in keywords]
     result = []
-    seen = set()
-    for key, ref in RIFERIMENTI.items():
+    seen: set = set()
+
+    all_rifs = _get_cached()
+    source = all_rifs if all_rifs else list(_RIFERIMENTI_SEED.values())
+
+    for rif in source:
+        key = rif.get("norma_key") or rif.get("norma", "")
         if key in seen:
             continue
-        ref_kw = [k.lower() for k in ref["keywords"]]
+        ref_kw = [k.lower() for k in (rif.get("keywords") or [])]
         if any(k in ref_kw for k in kw_lower):
-            result.append(ref)
+            result.append(rif)
             seen.add(key)
     return result
 

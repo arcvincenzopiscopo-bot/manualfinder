@@ -75,6 +75,41 @@ async def on_startup():
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning("machine_type_service init fallito: %s", e)
+    # Esporta alias hardcodati in machine_aliases DB
+    try:
+        from app.services.local_manuals_service import _seed_local_aliases_into_db
+        _seed_local_aliases_into_db()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("seed local aliases fallito: %s", e)
+    # Esporta mappa quaderni INAIL in inail_manual_assignments DB
+    try:
+        from app.services.local_manuals_service import _seed_inail_assignments_if_empty
+        _seed_inail_assignments_if_empty()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("seed inail assignments fallito: %s", e)
+    # Aggiorna flags normativi (should_have_manual, is_officina) in machine_types
+    try:
+        from app.services.quality_service import _seed_machine_type_flags_if_needed
+        _seed_machine_type_flags_if_needed()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("seed machine type flags fallito: %s", e)
+    # Esporta normative in machine_type_normative DB
+    try:
+        from app.data.machine_normative import _seed_normative_if_empty
+        _seed_normative_if_empty()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("seed normative fallito: %s", e)
+    # Esporta riferimenti normativi in riferimenti_normativi DB
+    try:
+        from app.data.riferimenti_normativi import _seed_riferimenti_if_empty
+        _seed_riferimenti_if_empty()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("seed riferimenti fallito: %s", e)
     # Invalida cache RAG — corpus potrebbe essere stato aggiornato offline
     try:
         from app.services import rag_service

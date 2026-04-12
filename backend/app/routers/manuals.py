@@ -14,10 +14,16 @@ router = APIRouter()
 
 
 @router.get("/local")
-async def get_local_manuals(machine_type: Optional[str] = Query(None, description="Tipo di macchina per filtrare")) -> List[dict]:
+async def get_local_manuals(
+    machine_type: Optional[str] = Query(None, description="Tipo di macchina per filtrare"),
+    machine_type_id: Optional[int] = Query(None, description="ID tipo macchina (prioritario su machine_type)"),
+) -> List[dict]:
     """Restituisce la lista di tutti i manuali locali disponibili, o filtra per tipo macchina."""
-    if machine_type:
-        manual = local_manuals_service.find_local_manual(machine_type)
+    if machine_type_id is not None or machine_type:
+        manual = local_manuals_service.find_local_manual(
+            machine_type=machine_type or "",
+            machine_type_id=machine_type_id,
+        )
         if manual:
             return [manual]
         return []
@@ -54,7 +60,9 @@ async def submit_feedback(
     brand: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
     machine_type: Optional[str] = Form(None),
+    machine_type_id: Optional[int] = Form(None),
     useful_for_type: Optional[str] = Form(None),
+    useful_for_type_id: Optional[int] = Form(None),
     notes: Optional[str] = Form(None),
 ):
     """
@@ -64,13 +72,24 @@ async def submit_feedback(
       wrong_category       — è un manuale ma per un tipo di macchina diverso da quello cercato
       useful_other_category— manuale utile per un altro tipo macchina (specificare in useful_for_type)
     """
+    # Auto-resolve ID se non forniti
+    try:
+        from app.services.machine_type_service import resolve_machine_type_id as _resolve
+        if machine_type_id is None and machine_type:
+            machine_type_id = _resolve(machine_type)
+        if useful_for_type_id is None and useful_for_type:
+            useful_for_type_id = _resolve(useful_for_type)
+    except Exception:
+        pass
     saved_manuals_service.save_feedback(
         url=url,
         feedback_type=feedback_type,
         brand=brand,
         model=model,
         machine_type=machine_type,
+        machine_type_id=machine_type_id,
         useful_for_type=useful_for_type,
+        useful_for_type_id=useful_for_type_id,
         notes=notes,
     )
 
@@ -161,7 +180,7 @@ async def get_filter_rules(limit: int = Query(100, ge=1, le=500)):
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT id, rule_type, rule_value, context_machine_type,
+                    SELECT id, rule_type, rule_value, context_machine_type_id,
                            reason, feedback_count, source_urls, is_active, created_at
                     FROM url_filter_rules
                     ORDER BY feedback_count DESC, created_at DESC
@@ -183,6 +202,19 @@ async def save_manual(body: SaveManualRequest):
     """Salva un link manuale confermato dall'ispettore su Supabase."""
     try:
         data = body.model_dump(exclude_none=True)
+        # Auto-resolve machine_type_id dal testo se non fornito
+        try:
+            from app.services.machine_type_service import resolve_machine_type_id
+            if data.get("machine_type_id") is None and data.get("manual_machine_type"):
+                resolved = resolve_machine_type_id(data["manual_machine_type"])
+                if resolved:
+                    data["machine_type_id"] = resolved
+            if data.get("search_machine_type_id") is None and data.get("search_machine_type"):
+                resolved = resolve_machine_type_id(data["search_machine_type"])
+                if resolved:
+                    data["search_machine_type_id"] = resolved
+        except Exception:
+            pass
         result = saved_manuals_service.save_manual(data)
         # Converti UUID e datetime in stringhe per la serializzazione JSON
         result["id"] = str(result["id"])
@@ -197,6 +229,7 @@ async def save_manual(body: SaveManualRequest):
 @router.get("/saved")
 async def get_saved_manuals(
     machine_type: Optional[str] = Query(None),
+    machine_type_id: Optional[int] = Query(None),
     brand: Optional[str] = Query(None),
     model: Optional[str] = Query(None),
     limit: int = Query(30, ge=1, le=100),
@@ -205,6 +238,7 @@ async def get_saved_manuals(
     try:
         results = saved_manuals_service.search_saved(
             machine_type=machine_type,
+            machine_type_id=machine_type_id,
             brand=brand,
             model=model,
             limit=limit,
@@ -342,16 +376,24 @@ async def upsert_prompt_rule(body: dict):
     machine_type = body.get("machine_type", "").strip().lower()
     if not machine_type:
         raise HTTPException(status_code=400, detail="machine_type obbligatorio")
+    mt_id = None
+    try:
+        from app.services.machine_type_service import resolve_machine_type_id as _resolve
+        mt_id = _resolve(machine_type)
+    except Exception:
+        pass
     try:
         with saved_manuals_service._get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO machine_prompt_rules
-                        (machine_type, extra_context, specific_risks, normative_refs,
+                        (machine_type, machine_type_id, extra_context, specific_risks, normative_refs,
                          inspection_focus, is_active, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, now())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, now())
                     ON CONFLICT (machine_type) DO UPDATE SET
+                        machine_type_id  = COALESCE(EXCLUDED.machine_type_id,
+                                                    machine_prompt_rules.machine_type_id),
                         extra_context    = EXCLUDED.extra_context,
                         specific_risks   = EXCLUDED.specific_risks,
                         normative_refs   = EXCLUDED.normative_refs,
@@ -361,6 +403,7 @@ async def upsert_prompt_rule(body: dict):
                     """,
                     (
                         machine_type,
+                        mt_id,
                         body.get("extra_context"),
                         body.get("specific_risks"),
                         body.get("normative_refs"),
@@ -427,6 +470,36 @@ async def delete_prompt_rule(machine_type: str):
         return {"status": "ok", "disabled": updated > 0}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/local/available-pdfs")
+async def list_available_pdfs():
+    """[Admin] Lista dei PDF presenti nella cartella manuali locali (per dropdown assegnazione)."""
+    return local_manuals_service.list_all_pdf_files()
+
+
+@router.get("/local/assignments")
+async def list_inail_assignments():
+    """[Admin] Lista assegnazioni quaderni INAIL (machine_type_id → pdf_filename)."""
+    return local_manuals_service.list_inail_assignments()
+
+
+@router.post("/local/assignments")
+async def upsert_inail_assignment(body: dict):
+    """
+    [Admin] Crea o aggiorna assegnazione quaderno INAIL.
+    Body: { machine_type_id: int, pdf_filename: str, display_title: str | null }
+    """
+    mt_id = body.get("machine_type_id")
+    pdf = body.get("pdf_filename", "").strip()
+    if not mt_id or not pdf:
+        raise HTTPException(status_code=422, detail="machine_type_id e pdf_filename sono obbligatori")
+    local_manuals_service.upsert_inail_assignment(
+        machine_type_id=int(mt_id),
+        pdf_filename=pdf,
+        display_title=body.get("display_title"),
+    )
+    return {"ok": True}
 
 
 @router.get("/uploaded/{filename}")

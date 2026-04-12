@@ -16,15 +16,19 @@ def _get_conn():
 
 def _canonical_machine_type(mt: str) -> str:
     """
-    Normalizza un machine_type alla chiave canonica via MACHINE_ALIASES.
+    Normalizza un machine_type al nome canonico tramite machine_aliases DB.
     Import lazy per evitare cicli. Ritorna la stringa normalizzata se non mappata.
     """
     try:
-        from app.services.local_manuals_service import MACHINE_ALIASES, _normalize_machine_type
-        norm = _normalize_machine_type(mt or "")
-        return MACHINE_ALIASES.get(norm, norm)
+        from app.services.machine_type_service import resolve_machine_type_id, get_name_by_id
+        mt_id = resolve_machine_type_id(mt or "")
+        if mt_id:
+            name = get_name_by_id(mt_id)
+            if name:
+                return name
     except Exception:
-        return (mt or "").lower().strip()
+        pass
+    return (mt or "").lower().strip()
 
 
 import time as _time
@@ -37,6 +41,10 @@ _blocked_urls_ts: float = 0.0
 # Blocco contestuale: sono manuali ma per categoria diversa — (url, machine_type)
 _context_blocked_cache: set[tuple[str, str]] = set()
 _context_blocked_ts: float = 0.0
+
+# Blocco contestuale per ID FK — (url, machine_type_id)
+_context_blocked_id_cache: set[tuple[str, int]] = set()
+_context_blocked_id_ts: float = 0.0
 
 _BLOCKED_CACHE_TTL = 900  # 15 minuti
 
@@ -99,6 +107,35 @@ def get_context_blocked_urls() -> set[tuple[str, str]]:
         return _context_blocked_cache
 
 
+def get_context_blocked_url_ids() -> set[tuple[str, int]]:
+    """
+    Restituisce il set di (url, machine_type_id) per feedback 'wrong_category'.
+    Versione ID-based di get_context_blocked_urls(). Cache TTL 15 min.
+    """
+    global _context_blocked_id_cache, _context_blocked_id_ts
+    now = _time.monotonic()
+    if now - _context_blocked_id_ts < _BLOCKED_CACHE_TTL:
+        return _context_blocked_id_cache
+    if not settings.database_url:
+        return set()
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT url, machine_type_id FROM manual_feedback
+                    WHERE feedback_type = 'wrong_category'
+                      AND machine_type_id IS NOT NULL
+                    """
+                )
+                pairs = {(row[0], row[1]) for row in cur.fetchall()}
+        _context_blocked_id_cache = pairs
+        _context_blocked_id_ts = now
+        return pairs
+    except Exception:
+        return _context_blocked_id_cache
+
+
 def delete_manual_by_url(url: str) -> bool:
     """
     Rimuove un manuale da saved_manuals dato l'URL.
@@ -137,7 +174,9 @@ def save_feedback(
     brand: Optional[str] = None,
     model: Optional[str] = None,
     machine_type: Optional[str] = None,
+    machine_type_id: Optional[int] = None,
     useful_for_type: Optional[str] = None,
+    useful_for_type_id: Optional[int] = None,
     notes: Optional[str] = None,
 ) -> None:
     """
@@ -156,11 +195,13 @@ def save_feedback(
                 cur.execute(
                     """
                     INSERT INTO manual_feedback
-                        (url, brand, model, machine_type, feedback_type, useful_for_type, notes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        (url, brand, model, machine_type, machine_type_id,
+                         feedback_type, useful_for_type_id, notes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING
                     """,
-                    (url, brand, model, machine_type, feedback_type, useful_for_type, notes),
+                    (url, brand, model, machine_type, machine_type_id,
+                     feedback_type, useful_for_type_id, notes),
                 )
                 conn.commit()
     except Exception:
@@ -210,18 +251,23 @@ def save_manual(data: dict) -> dict:
 
 def search_saved(
     machine_type: Optional[str] = None,
+    machine_type_id: Optional[int] = None,
     brand: Optional[str] = None,
     model: Optional[str] = None,
     limit: int = 30,
 ) -> list:
     """
     Cerca manuali salvati per tipo macchina, brand o modello.
+    machine_type_id ha priorità su machine_type (testo).
     Restituisce max `limit` risultati ordinati dal più recente.
     """
     conditions = []
     params = []
 
-    if machine_type:
+    if machine_type_id is not None:
+        conditions.append("(machine_type_id = %s OR manual_machine_type ILIKE %s)")
+        params.extend([machine_type_id, f"%{machine_type or ''}%"])
+    elif machine_type:
         conditions.append("manual_machine_type ILIKE %s")
         params.append(f"%{machine_type}%")
     if brand:
@@ -245,6 +291,7 @@ def find_for_search(
     brand: str,
     model: str,
     machine_type: Optional[str],
+    machine_type_id: Optional[int] = None,
 ) -> List[dict]:
     """
     Usato dalla pipeline di ricerca per trovare manuali salvati rilevanti.
@@ -280,33 +327,56 @@ def find_for_search(
                     results.append(r)
 
                 # 2) Generici per categoria o machine_type match (escludi già trovati).
-                # Cerca su entrambi manual_machine_type E search_machine_type, e usa sia
-                # la forma originale che quella canonicalizzata via MACHINE_ALIASES — così
-                # varianti come "ascensore da/di cantiere" matchano record inseriti con
-                # l'altra preposizione.
-                if machine_type:
+                # Preferisce match per ID FK, poi fallback testo ILIKE.
+                if machine_type or machine_type_id is not None:
                     exclude = tuple(specific_ids) if specific_ids else ("__none__",)
-                    canonical = _canonical_machine_type(machine_type)
-                    cur.execute(
-                        """
-                        SELECT *, 'generic' AS _match_type
-                        FROM saved_manuals
-                        WHERE (manual_machine_type ILIKE %s
-                               OR manual_machine_type ILIKE %s
-                               OR search_machine_type ILIKE %s
-                               OR search_machine_type ILIKE %s)
-                          AND id::text NOT IN %s
-                        ORDER BY
-                            CASE WHEN manual_brand ILIKE 'GENERICO' THEN 0 ELSE 1 END,
-                            created_at DESC
-                        LIMIT 5
-                        """,
-                        (
-                            f"%{machine_type}%", f"%{canonical}%",
-                            f"%{machine_type}%", f"%{canonical}%",
-                            exclude,
-                        ),
-                    )
+                    canonical = _canonical_machine_type(machine_type or "")
+                    if machine_type_id is not None:
+                        cur.execute(
+                            """
+                            SELECT *, 'generic' AS _match_type
+                            FROM saved_manuals
+                            WHERE (machine_type_id = %s
+                                   OR manual_machine_type ILIKE %s
+                                   OR manual_machine_type ILIKE %s
+                                   OR search_machine_type ILIKE %s
+                                   OR search_machine_type ILIKE %s)
+                              AND id::text NOT IN %s
+                            ORDER BY
+                                CASE WHEN machine_type_id = %s THEN 0 ELSE 1 END,
+                                CASE WHEN manual_brand ILIKE 'GENERICO' THEN 0 ELSE 1 END,
+                                created_at DESC
+                            LIMIT 5
+                            """,
+                            (
+                                machine_type_id,
+                                f"%{machine_type or ''}%", f"%{canonical}%",
+                                f"%{machine_type or ''}%", f"%{canonical}%",
+                                exclude,
+                                machine_type_id,
+                            ),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT *, 'generic' AS _match_type
+                            FROM saved_manuals
+                            WHERE (manual_machine_type ILIKE %s
+                                   OR manual_machine_type ILIKE %s
+                                   OR search_machine_type ILIKE %s
+                                   OR search_machine_type ILIKE %s)
+                              AND id::text NOT IN %s
+                            ORDER BY
+                                CASE WHEN manual_brand ILIKE 'GENERICO' THEN 0 ELSE 1 END,
+                                created_at DESC
+                            LIMIT 5
+                            """,
+                            (
+                                f"%{machine_type}%", f"%{canonical}%",
+                                f"%{machine_type}%", f"%{canonical}%",
+                                exclude,
+                            ),
+                        )
                     results.extend(dict(r) for r in cur.fetchall())
 
         # Rimuove URL segnalati dagli ispettori come non idonei
@@ -316,7 +386,14 @@ def find_for_search(
             results = [r for r in results if r.get("url") not in blocked_abs]
 
         # wrong_category → blocco contestuale: solo per il machine_type in cui è stato segnalato
-        if machine_type and results:
+        if machine_type_id is not None and results:
+            ctx_blocked_ids = get_context_blocked_url_ids()
+            if ctx_blocked_ids:
+                results = [
+                    r for r in results
+                    if (r.get("url"), machine_type_id) not in ctx_blocked_ids
+                ]
+        elif machine_type and results:
             mt_lower = machine_type.lower().strip()
             ctx_blocked = get_context_blocked_urls()
             if ctx_blocked:

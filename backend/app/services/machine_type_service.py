@@ -419,6 +419,60 @@ def get_name_by_id(machine_type_id: int) -> Optional[str]:
     return row["name"] if row else None
 
 
+def resolve_machine_type_id(machine_type_text: str) -> Optional[int]:
+    """
+    Risolve testo libero → machine_type_id usando _alias_map in memoria.
+    Fail-safe: restituisce None se non trovato o errore. Zero query DB extra.
+    """
+    if not machine_type_text or not machine_type_text.strip():
+        return None
+    try:
+        _ensure_alias_map()
+        norm = _normalize(machine_type_text)
+        return _alias_map.get(norm)
+    except Exception:
+        return None
+
+
+def get_flags(machine_type_id: int) -> dict:
+    """
+    Ritorna tutti i flag normativi del tipo macchina:
+      requires_patentino, requires_verifiche, should_have_manual, is_officina.
+    Fail-safe: se ID non trovato o DB non disponibile → conservativo (True/True/False/False).
+    """
+    _ensure_alias_map()
+    cached = _type_flags.get(machine_type_id)
+    if cached is not None and "should_have_manual" in cached:
+        return cached
+    # Prova DB direttamente (include nuovi flag v15)
+    if settings.database_url:
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT requires_patentino, requires_verifiche, "
+                    "       COALESCE(should_have_manual, false), COALESCE(is_officina, false) "
+                    "FROM machine_types WHERE id = %s",
+                    (machine_type_id,),
+                )
+                row = cur.fetchone()
+            conn.close()
+            if row:
+                flags = {
+                    "requires_patentino": row[0],
+                    "requires_verifiche": row[1],
+                    "should_have_manual": row[2],
+                    "is_officina": row[3],
+                }
+                _type_flags[machine_type_id] = flags
+                return flags
+        except Exception:
+            pass
+    # Fallback conservativo
+    return {"requires_patentino": True, "requires_verifiche": True,
+            "should_have_manual": False, "is_officina": False}
+
+
 def get_type_flags(machine_type_id: int) -> dict:
     """
     Ritorna {requires_patentino: bool, requires_verifiche: bool}.
@@ -1149,9 +1203,9 @@ async def admin_populate_inail_hint(provider: str) -> dict:
     if not settings.database_url:
         return {"error": "no_db"}
 
-    from app.services.local_manuals_service import find_local_manual, LOCAL_MANUALS_MAP
+    from app.services.local_manuals_service import find_local_manual, list_inail_assignments
 
-    canonical_categories = list(LOCAL_MANUALS_MAP.keys())
+    canonical_categories = [a["machine_type_name"] for a in list_inail_assignments()]
 
     # Recupera machine_types senza inail_search_hint
     try:
@@ -1187,12 +1241,6 @@ async def admin_populate_inail_hint(provider: str) -> dict:
                 ai_category = await _ai_classify_inail_category(name, canonical_categories, provider)
                 if ai_category:
                     manual2 = find_local_manual(ai_category)
-                    if not manual2:
-                        # Prova anche la corrispondenza case-insensitive nella mappa
-                        ai_cat_lower = ai_category.lower().strip()
-                        matched_key = next((k for k in LOCAL_MANUALS_MAP if k.lower() == ai_cat_lower), None)
-                        if matched_key:
-                            manual2 = find_local_manual(matched_key)
                     if manual2:
                         filename = manual2["filename"]
 

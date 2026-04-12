@@ -13,10 +13,12 @@ class SaveManualRequest(BaseModel):
     search_brand: Optional[str] = None
     search_model: Optional[str] = None
     search_machine_type: Optional[str] = None
+    search_machine_type_id: Optional[int] = None  # FK → machine_types.id
     # Manuale reale trovato (può essere di un modello simile)
     manual_brand: str
     manual_model: str
     manual_machine_type: str
+    machine_type_id: Optional[int] = None  # FK → machine_types.id per manual_machine_type
     manual_year: Optional[str] = None
     manual_language: str = "en"
     # Link

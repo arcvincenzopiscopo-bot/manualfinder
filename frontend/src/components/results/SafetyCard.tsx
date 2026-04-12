@@ -1254,7 +1254,7 @@ export function SafetyCard({ card, ocr, onNewSearch }: Props) {
       )}
 
       {/* Fonte manuale */}
-      <ManualLink url={card.fonte_manuale} inailUrl={card.fonte_inail} tipo={card.fonte_tipo} brand={card.brand} model={card.model} machineType={card.machine_type ?? undefined} />
+      <ManualLink url={card.fonte_manuale} inailUrl={card.fonte_inail} tipo={card.fonte_tipo} brand={card.brand} model={card.model} machineType={card.machine_type ?? undefined} machineTypeId={card.machine_type_id ?? undefined} />
 
       {/* Footer con data */}
       <p style={{

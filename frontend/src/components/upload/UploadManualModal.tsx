@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { uploadManual } from '../../services/api'
+import { MachineTypeSelector } from '../ocr/MachineTypeSelector'
 
 interface Props {
   onClose: () => void
@@ -7,6 +8,7 @@ interface Props {
   defaultBrand?: string
   defaultModel?: string
   defaultMachineType?: string
+  defaultMachineTypeId?: number | null
 }
 
 type ModalState = 'form' | 'uploading' | 'mismatch' | 'success' | 'error'
@@ -39,12 +41,13 @@ const labelStyle: React.CSSProperties = {
   letterSpacing: '0.03em',
 }
 
-export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '', defaultMachineType = '' }: Props) {
+export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '', defaultMachineType = '', defaultMachineTypeId = null }: Props) {
   const [uiState, setUiState] = useState<ModalState>('form')
   const [file, setFile] = useState<File | null>(null)
   const [brand, setBrand] = useState(defaultBrand)
   const [model, setModel] = useState(defaultModel)
   const [machineType, setMachineType] = useState(defaultMachineType)
+  const [machineTypeId, setMachineTypeId] = useState<number | null>(defaultMachineTypeId)
   const [year, setYear] = useState('')
   const [language, setLanguage] = useState('it')
   const [isGeneric, setIsGeneric] = useState(false)
@@ -64,6 +67,7 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
         brand: overrides?.brand ?? brand,
         model: overrides?.model ?? model,
         machine_type: overrides?.machine_type ?? machineType,
+        machine_type_id: machineTypeId,
         manual_year: year || undefined,
         manual_language: language,
         is_generic: isGeneric,
@@ -172,8 +176,11 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
             )}
 
             <div style={{ marginBottom: 10 }}>
-              <label style={labelStyle}>Tipo di macchina *</label>
-              <input style={inputStyle} value={machineType} onChange={e => setMachineType(e.target.value)} placeholder="es. carrello elevatore" />
+              <MachineTypeSelector
+                value={machineType}
+                valueId={machineTypeId}
+                onChange={(name, id) => { setMachineType(name); setMachineTypeId(id) }}
+              />
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>

@@ -120,19 +120,26 @@ def _save_generated_rule(machine_type: str, rule: dict, source: str = "auto_gene
     if not settings.database_url:
         return
     try:
+        mt_id = None
+        try:
+            from app.services.machine_type_service import resolve_machine_type_id as _resolve
+            mt_id = _resolve(machine_type)
+        except Exception:
+            pass
         import psycopg2
         conn = psycopg2.connect(settings.database_url)
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO machine_prompt_rules
-                    (machine_type, extra_context, specific_risks, normative_refs,
+                    (machine_type, machine_type_id, extra_context, specific_risks, normative_refs,
                      inspection_focus, is_active, source, updated_at)
-                VALUES (%s, %s, %s, %s, %s, true, %s, now())
+                VALUES (%s, %s, %s, %s, %s, %s, true, %s, now())
                 ON CONFLICT (machine_type) DO NOTHING
                 """,
                 (
                     machine_type.lower().strip(),
+                    mt_id,
                     rule.get("extra_context"),
                     rule.get("specific_risks"),
                     rule.get("normative_refs"),

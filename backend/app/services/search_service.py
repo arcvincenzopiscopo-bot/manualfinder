@@ -952,7 +952,7 @@ async def search_manual(
     # LIVELLO 0: Manuali salvati dagli ispettori su Supabase (alta affidabilità)
     try:
         from app.services import saved_manuals_service
-        db_rows = saved_manuals_service.find_for_search(brand, model, machine_type)
+        db_rows = saved_manuals_service.find_for_search(brand, model, machine_type, machine_type_id=machine_type_id)
         for row in db_rows:
             match_type = row.get("_match_type", "generic")
             is_generic = row.get("manual_brand", "").upper() == "GENERICO"

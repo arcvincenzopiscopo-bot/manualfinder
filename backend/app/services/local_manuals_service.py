@@ -1,33 +1,35 @@
 """
 Servizio per la gestione dei manuali locali INAIL.
-Mappa i tipi di macchina ai PDF locali nella cartella 'pdf manuali'.
 
-Design:
-  - LOCAL_MANUALS_MAP  : chiave canonica → nome file PDF (file noti, con alias espliciti)
-  - MACHINE_ALIASES    : qualsiasi variante (it/en/brand-specific) → chiave canonica
-  - find_local_manual(): normalizza → alias → mappa → discovery dinamica da disco
-  - Discovery dinamica: qualsiasi PDF aggiunto alla cartella viene rilevato
-    automaticamente estraendo il nome canonico dal filename
-    (es. "Scheda 23 - POMPE IDRAULICHE.pdf" → canonical "pompe idrauliche").
+Design post-migrazione:
+  - Le associazioni macchina → PDF sono in DB (tabella inail_manual_assignments).
+  - Gli alias macchina sono in DB (tabella machine_aliases).
+  - find_local_manual(machine_type, machine_type_id): lookup per ID → testo → disco.
+  - I dict _LOCAL_MANUALS_MAP_SEED e _MACHINE_ALIASES_SEED sono usati SOLO dalle
+    funzioni di seed al primo avvio; non vengono usati a runtime.
 """
 from typing import Optional, Dict, List
 from pathlib import Path
 import re as _re
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Percorso della cartella PDF manuali.
-# Cerca prima nella root di progetto (dove l'utente aggiunge i file),
-# poi fallback alla cartella backend/ per compatibilità.
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent  # manualfinder/
 _BACKEND_ROOT  = Path(__file__).parent.parent.parent         # backend/
 _root_dir    = _PROJECT_ROOT / "pdf manuali"
 _backend_dir = _BACKEND_ROOT / "pdf manuali"
 PDF_MANUALS_DIR = _root_dir if _root_dir.exists() else _backend_dir
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Mappa canonica: chiave → nome file PDF
-# Le chiavi sono i termini INAIL ufficiali (usati anche in quality_service)
+# Dati seed — usati SOLO da _seed_local_aliases_into_db() e
+# _seed_inail_assignments_if_empty() al primo avvio.
+# A runtime il sistema usa esclusivamente le tabelle DB.
 # ─────────────────────────────────────────────────────────────────────────────
-LOCAL_MANUALS_MAP: Dict[str, str] = {
+
+_LOCAL_MANUALS_MAP_SEED: Dict[str, str] = {
     "gru a torre":                          "Scheda 1 - GRU A TORRE.pdf",
     "gru su autocarro":                     "Scheda 2 - GRU SU AUTOCARRO.pdf",
     "piattaforma aerea":                    "Scheda 3 - PIATTAFORME MOBILI DI LAVORO ELEVABILI.pdf",
@@ -52,13 +54,7 @@ LOCAL_MANUALS_MAP: Dict[str, str] = {
     "macchina movimento terra":             "Scheda 22 - MOVIMENTO TERRA.pdf",
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tabella alias: OGNI variante/sinonimo/termine-inglese → chiave canonica
-# Tutto quello che NON è qui dentro NON viene abbinato a nessun manuale INAIL.
-# Aggiungere qui varianti nuove, MAI affidarsi al partial-match fuzzy.
-# ─────────────────────────────────────────────────────────────────────────────
-MACHINE_ALIASES: Dict[str, str] = {
-
+_MACHINE_ALIASES_SEED: Dict[str, str] = {
     # ── GRU A TORRE ──────────────────────────────────────────────────────────
     "gru a torre":                          "gru a torre",
     "gru":                                  "gru a torre",
@@ -66,7 +62,6 @@ MACHINE_ALIASES: Dict[str, str] = {
     "top-slewing crane":                    "gru a torre",
     "top slewing crane":                    "gru a torre",
     "self-erecting crane":                  "gru a torre",
-
     # ── GRU SU AUTOCARRO ─────────────────────────────────────────────────────
     "gru su autocarro":                     "gru su autocarro",
     "camion gru":                           "gru su autocarro",
@@ -80,7 +75,6 @@ MACHINE_ALIASES: Dict[str, str] = {
     "knuckle boom crane":                   "gru su autocarro",
     "gru a braccio":                        "gru su autocarro",
     "gru idraulica":                        "gru su autocarro",
-
     # ── PIATTAFORME AEREE ─────────────────────────────────────────────────────
     "piattaforma aerea":                    "piattaforma aerea",
     "piattaforma":                          "piattaforma aerea",
@@ -99,10 +93,7 @@ MACHINE_ALIASES: Dict[str, str] = {
     "mewp":                                 "piattaforma aerea",
     "awp":                                  "piattaforma aerea",
     "platform":                             "piattaforma aerea",
-
     # ── ASCENSORE DA CANTIERE ─────────────────────────────────────────────────
-    # ATTENZIONE: "elevatore" da solo NON mappa qui — troppo generico.
-    # Solo termini che identificano univocamente l'ascensore da cantiere.
     "ascensore da cantiere":                "ascensore da cantiere",
     "ascensore di cantiere":                "ascensore da cantiere",
     "ascensori da cantiere":                "ascensore da cantiere",
@@ -117,18 +108,13 @@ MACHINE_ALIASES: Dict[str, str] = {
     "construction hoist":                   "ascensore da cantiere",
     "builder's hoist":                      "ascensore da cantiere",
     "personnel hoist":                      "ascensore da cantiere",
-
     # ── ELEVATORE A BANDIERA ─────────────────────────────────────────────────
-    # Separato dall'ascensore di cantiere — strumento diverso
     "elevatore a bandiera":                 "elevatore a bandiera",
     "elevatore":                            "elevatore a bandiera",
     "paranco":                              "elevatore a bandiera",
     "argano":                               "elevatore a bandiera",
     "hoisting winch":                       "elevatore a bandiera",
-
     # ── CARRELLO ELEVATORE TELESCOPICO ───────────────────────────────────────
-    # Include carrelli frontali, laterali, reach stacker, retrattili
-    # (La Scheda 5 INAIL copre tutti i carrelli industriali)
     "carrello elevatore telescopico":       "carrello elevatore telescopico",
     "carrello elevatore":                   "carrello elevatore telescopico",
     "sollevatore telescopico":              "carrello elevatore telescopico",
@@ -150,7 +136,6 @@ MACHINE_ALIASES: Dict[str, str] = {
     "fork lift":                            "carrello elevatore telescopico",
     "telehandler":                          "carrello elevatore telescopico",
     "telescopic handler":                   "carrello elevatore telescopico",
-
     # ── ESCAVATORE ────────────────────────────────────────────────────────────
     "escavatore idraulico":                 "escavatore idraulico",
     "escavatore":                           "escavatore idraulico",
@@ -163,8 +148,7 @@ MACHINE_ALIASES: Dict[str, str] = {
     "hydraulic excavator":                  "escavatore idraulico",
     "backhoe":                              "escavatore idraulico",
     "backhoe loader":                       "escavatore idraulico",
-    "terna":                                "escavatore idraulico",     # Scheda INAIL più vicina
-
+    "terna":                                "escavatore idraulico",
     # ── PALA CARICATRICE ─────────────────────────────────────────────────────
     "pala caricatrice frontale":            "pala caricatrice frontale",
     "pala caricatrice":                     "pala caricatrice frontale",
@@ -176,9 +160,8 @@ MACHINE_ALIASES: Dict[str, str] = {
     "wheel loader":                         "pala caricatrice frontale",
     "front loader":                         "pala caricatrice frontale",
     "loader":                               "pala caricatrice frontale",
-    "bulldozer":                            "pala caricatrice frontale",   # approssimazione
+    "bulldozer":                            "pala caricatrice frontale",
     "apripista":                            "pala caricatrice frontale",
-
     # ── RULLO COMPATTATORE ───────────────────────────────────────────────────
     "rullo compattatore":                   "rullo compattatore",
     "rullo compressore":                    "rullo compattatore",
@@ -190,7 +173,6 @@ MACHINE_ALIASES: Dict[str, str] = {
     "vibratory roller":                     "rullo compattatore",
     "drum roller":                          "rullo compattatore",
     "tandem roller":                        "rullo compattatore",
-
     # ── FINITRICE ────────────────────────────────────────────────────────────
     "finitrice":                            "finitrice",
     "finitrice asfalto":                    "finitrice",
@@ -199,7 +181,6 @@ MACHINE_ALIASES: Dict[str, str] = {
     "asphalt paver":                        "finitrice",
     "asphalt finisher":                     "finitrice",
     "finisher":                             "finitrice",
-
     # ── PERFORATRICE ─────────────────────────────────────────────────────────
     "perforatrice micropali":               "perforatrice micropali",
     "perforatrice":                         "perforatrice micropali",
@@ -209,10 +190,7 @@ MACHINE_ALIASES: Dict[str, str] = {
     "drilling rig":                         "perforatrice micropali",
     "drill rig":                            "perforatrice micropali",
     "drill":                                "perforatrice micropali",
-
     # ── BETONIERA ────────────────────────────────────────────────────────────
-    # NOTA: pompa calcestruzzo ≠ betoniera — ma in assenza di scheda INAIL dedicata
-    # la Scheda 11 è la più vicina. Il quality_service gestisce la distinzione.
     "betoniera":                            "betoniera",
     "betoniera a caricamento frontale":     "betoniera",
     "pompa calcestruzzo":                   "betoniera",
@@ -220,33 +198,29 @@ MACHINE_ALIASES: Dict[str, str] = {
     "concrete mixer":                       "betoniera",
     "mixer":                                "betoniera",
     "concrete pump":                        "betoniera",
-
     # ── SEGA CIRCOLARE ───────────────────────────────────────────────────────
     "sega circolare":                       "sega circolare",
     "sega a disco":                         "sega circolare",
     "sega da banco":                        "sega circolare",
     "sega circolare da banco":              "sega circolare",
     "sega":                                 "sega circolare",
-    "sega a nastro":                        "sega circolare",   # approssimazione
+    "sega a nastro":                        "sega circolare",
     "circular saw":                         "sega circolare",
     "table saw":                            "sega circolare",
     "band saw":                             "sega circolare",
     "saw":                                  "sega circolare",
-
     # ── TAGLIALATERIZI ───────────────────────────────────────────────────────
     "taglialaterizi":                       "taglialaterizi",
     "taglia laterizi":                      "taglialaterizi",
     "tagliablocchi":                        "taglialaterizi",
     "block cutter":                         "taglialaterizi",
     "brick cutter":                         "taglialaterizi",
-
     # ── PIASTRA VIBRANTE ─────────────────────────────────────────────────────
     "piastra vibrante":                     "piastra vibrante",
     "piastra compattante":                  "piastra vibrante",
     "plate compactor":                      "piastra vibrante",
     "vibratory plate":                      "piastra vibrante",
     "rammer":                               "piastra vibrante",
-
     # ── TAGLIASFALTO ─────────────────────────────────────────────────────────
     "tagliasfalto":                         "tagliasfalto",
     "taglia asfalto":                       "tagliasfalto",
@@ -254,35 +228,30 @@ MACHINE_ALIASES: Dict[str, str] = {
     "scarifier":                            "tagliasfalto",
     "floor saw":                            "tagliasfalto",
     "road cutter":                          "tagliasfalto",
-
     # ── CAROTATRICE ──────────────────────────────────────────────────────────
     "carotatrice":                          "carotatrice",
     "carotatrice elettrica":                "carotatrice",
     "coring machine":                       "carotatrice",
     "core drill":                           "carotatrice",
-
     # ── DECESPUGLIATORE ──────────────────────────────────────────────────────
     "decespugliatore":                      "decespugliatore",
     "brushcutter":                          "decespugliatore",
     "brush cutter":                         "decespugliatore",
     "trimmer":                              "decespugliatore",
-
     # ── TRONCATRICE ──────────────────────────────────────────────────────────
     "troncatrice":                          "troncatrice",
     "troncatrice portatile":                "troncatrice",
     "troncatrice a disco":                  "troncatrice",
     "cut-off saw":                          "troncatrice",
     "angle grinder":                        "troncatrice",
-    "martello demolitore":                  "troncatrice",     # approssimazione
-    "martello demolitore idraulico":        "troncatrice",     # accessorio, scheda INAIL più vicina
+    "martello demolitore":                  "troncatrice",
+    "martello demolitore idraulico":        "troncatrice",
     "jackhammer":                           "troncatrice",
     "breaker":                              "troncatrice",
-
     # ── MOTOSEGA ─────────────────────────────────────────────────────────────
     "motosega":                             "motosega",
     "chainsaw":                             "motosega",
     "chain saw":                            "motosega",
-
     # ── TRATTORI AGRICOLI ─────────────────────────────────────────────────────
     "trattore agricolo":                    "trattore agricolo",
     "trattore":                             "trattore agricolo",
@@ -291,71 +260,46 @@ MACHINE_ALIASES: Dict[str, str] = {
     "trattore a cingoli":                   "trattore agricolo",
     "agricultural tractor":                 "trattore agricolo",
     "tractor":                              "trattore agricolo",
-
     # ── MACCHINE MOVIMENTO TERRA ──────────────────────────────────────────────
     "macchina movimento terra":             "macchina movimento terra",
     "movimento terra":                      "macchina movimento terra",
     "dumper":                               "macchina movimento terra",
-    "apripista":                            "macchina movimento terra",
-    "bulldozer":                            "macchina movimento terra",
     "scraper":                              "macchina movimento terra",
     "livellatrice":                         "macchina movimento terra",
     "grader":                               "macchina movimento terra",
-    "terna":                                "macchina movimento terra",
     "escavatore a filo":                    "macchina movimento terra",
     "earth moving machine":                 "macchina movimento terra",
     "earthmover":                           "macchina movimento terra",
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers interni
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _normalize_machine_type(machine_type: str) -> str:
-    """Normalizza la stringa (lower + strip). Usata anche da altri servizi."""
     return machine_type.lower().strip()
 
 
 def _extract_canonical_from_filename(filename: str) -> str:
-    """
-    Estrae il nome canonico dal filename del quaderno INAIL.
-    Es. "Scheda 21 - TRATTORI AGRICOLI.pdf"  → "trattori agricoli"
-        "Scheda 22 - MOVIMENTO TERRA.pdf"    → "movimento terra"
-        "Qualcosa - POMPE IDRAULICHE.pdf"    → "pompe idrauliche"
-        "POMPE IDRAULICHE.pdf"               → "pompe idrauliche"
-    """
     stem = Path(filename).stem
-    # Rimuove prefisso tipo "Scheda N -" o "N -" o "Scheda N–"
     name = _re.sub(r'^(?:scheda\s+)?\d+\s*[-–]\s*', '', stem, flags=_re.IGNORECASE)
     return name.lower().strip()
 
 
-def _get_dynamic_files() -> List[Dict[str, str]]:
-    """
-    Scansiona PDF_MANUALS_DIR e ritorna i file NON già presenti in LOCAL_MANUALS_MAP,
-    con il canonical estratto automaticamente dal filename.
-    Chiamato a runtime: rileva i nuovi file senza riavvio né modifica al codice.
-    """
-    if not PDF_MANUALS_DIR.exists():
-        return []
-    known_files = set(LOCAL_MANUALS_MAP.values())
-    result = []
-    for f in sorted(PDF_MANUALS_DIR.glob("*.pdf")):
-        if f.name in known_files:
-            continue
-        canonical = _extract_canonical_from_filename(f.name)
-        if canonical:
-            result.append({
-                "filename": f.name,
-                "canonical": canonical,
-                "filepath": str(f),
-                "title": f.stem.strip(),
-            })
-    return result
+def _get_conn():
+    from app.config import settings
+    import psycopg2
+    return psycopg2.connect(settings.database_url)
 
 
-def find_local_manual_by_filename(filename: str) -> Optional[Dict[str, str]]:
-    """
-    Cerca un manuale locale direttamente per nome file.
-    Usato quando l'admin ha associato esplicitamente un file a un tipo macchina.
-    """
+def _db_available() -> bool:
+    from app.config import settings
+    return bool(settings.database_url)
+
+
+def _make_result(filename: str) -> Optional[Dict[str, str]]:
+    """Costruisce il dict risultato per un filename, controlla esistenza su disco."""
     if not filename:
         return None
     filepath = PDF_MANUALS_DIR / filename
@@ -369,94 +313,306 @@ def find_local_manual_by_filename(filename: str) -> Optional[Dict[str, str]]:
     }
 
 
-def find_local_manual(machine_type: str, db_filename: Optional[str] = None) -> Optional[Dict[str, str]]:
+# ─────────────────────────────────────────────────────────────────────────────
+# Seed functions — chiamate da main.py al primo avvio (idempotenti)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _seed_local_aliases_into_db() -> None:
+    """
+    Esporta _MACHINE_ALIASES_SEED nella tabella machine_aliases.
+    Idempotente grazie a ON CONFLICT DO NOTHING.
+    Chiamata dopo _ensure_tables() (che ha già inserito _SEED_ALIASES da machine_type_service).
+    """
+    if not _db_available():
+        return
+    try:
+        from app.services.machine_type_service import resolve_machine_type_id
+        conn = _get_conn()
+        inserted = 0
+        skipped = 0
+        with conn.cursor() as cur:
+            for alias_text, inail_canonical in _MACHINE_ALIASES_SEED.items():
+                target_id = resolve_machine_type_id(inail_canonical)
+                if target_id is None:
+                    # Prova il testo dell'alias stesso come fallback
+                    target_id = resolve_machine_type_id(alias_text)
+                if target_id is None:
+                    skipped += 1
+                    continue
+                normalized = alias_text.lower().strip()
+                cur.execute(
+                    """
+                    INSERT INTO machine_aliases (machine_type_id, alias_text, normalized_alias, source)
+                    VALUES (%s, %s, %s, 'inail_seed')
+                    ON CONFLICT (normalized_alias) DO NOTHING
+                    """,
+                    (target_id, alias_text, normalized),
+                )
+                inserted += 1
+        conn.commit()
+        conn.close()
+        logger.info(
+            "local_manuals_service: seed alias → machine_aliases completato "
+            "(%d inseriti, %d saltati senza match)", inserted, skipped
+        )
+    except Exception as e:
+        logger.warning("local_manuals_service: _seed_local_aliases_into_db fallito: %s", e)
+
+
+def _seed_inail_assignments_if_empty() -> None:
+    """
+    Popola inail_manual_assignments da _LOCAL_MANUALS_MAP_SEED.
+    Eseguito solo se la tabella è vuota (primo avvio).
+    """
+    if not _db_available():
+        return
+    try:
+        from app.services.machine_type_service import resolve_machine_type_id
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM inail_manual_assignments")
+            count = cur.fetchone()[0]
+        if count > 0:
+            conn.close()
+            logger.info("local_manuals_service: inail_manual_assignments già popolata (%d righe)", count)
+            return
+        with conn.cursor() as cur:
+            seeded = 0
+            for canonical_name, pdf_filename in _LOCAL_MANUALS_MAP_SEED.items():
+                mt_id = resolve_machine_type_id(canonical_name)
+                if mt_id is None:
+                    logger.warning(
+                        "local_manuals_service: seed INAIL — nessun ID per '%s'", canonical_name
+                    )
+                    continue
+                display_title = Path(pdf_filename).stem.strip()
+                cur.execute(
+                    """
+                    INSERT INTO inail_manual_assignments
+                        (machine_type_id, pdf_filename, display_title)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (machine_type_id) DO NOTHING
+                    """,
+                    (mt_id, pdf_filename, display_title),
+                )
+                seeded += 1
+        conn.commit()
+        conn.close()
+        logger.info(
+            "local_manuals_service: inail_manual_assignments seeded (%d assegnazioni)", seeded
+        )
+    except Exception as e:
+        logger.warning("local_manuals_service: _seed_inail_assignments_if_empty fallito: %s", e)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DB CRUD — funzioni per gestione assegnazioni INAIL (usate anche da admin)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_inail_assignment_by_id(machine_type_id: int) -> Optional[Dict[str, str]]:
+    """Cerca assegnazione INAIL per machine_type_id. Ritorna dict con filename o None."""
+    if not _db_available():
+        return None
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pdf_filename FROM inail_manual_assignments "
+                "WHERE machine_type_id = %s AND is_active = true LIMIT 1",
+                (machine_type_id,),
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return _make_result(row[0])
+    except Exception as e:
+        logger.debug("get_inail_assignment_by_id(%s): %s", machine_type_id, e)
+        return None
+
+
+def list_inail_assignments() -> List[Dict]:
+    """
+    Lista tutte le assegnazioni attive con nome del tipo macchina.
+    Usata dall'admin panel e da list_local_manuals().
+    """
+    if not _db_available():
+        return []
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ia.id, ia.machine_type_id, mt.name AS machine_type_name,
+                       ia.pdf_filename, ia.display_title, ia.is_active
+                FROM inail_manual_assignments ia
+                JOIN machine_types mt ON mt.id = ia.machine_type_id
+                ORDER BY mt.name
+                """
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "machine_type_id": r[1],
+                "machine_type_name": r[2],
+                "pdf_filename": r[3],
+                "display_title": r[4] or r[3].replace(".pdf", "").strip(),
+                "is_active": r[5],
+                "exists_on_disk": (PDF_MANUALS_DIR / r[3]).exists(),
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("list_inail_assignments: %s", e)
+        return []
+
+
+def upsert_inail_assignment(
+    machine_type_id: int,
+    pdf_filename: str,
+    display_title: Optional[str] = None,
+) -> None:
+    """Crea o aggiorna l'assegnazione INAIL per un tipo macchina."""
+    if not _db_available():
+        return
+    title = display_title or pdf_filename.replace(".pdf", "").strip()
+    conn = _get_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO inail_manual_assignments
+                (machine_type_id, pdf_filename, display_title, is_active, updated_at)
+            VALUES (%s, %s, %s, true, NOW())
+            ON CONFLICT (machine_type_id) DO UPDATE
+                SET pdf_filename  = EXCLUDED.pdf_filename,
+                    display_title = EXCLUDED.display_title,
+                    is_active     = true,
+                    updated_at    = NOW()
+            """,
+            (machine_type_id, pdf_filename, title),
+        )
+    conn.commit()
+    conn.close()
+
+
+def list_all_pdf_files() -> List[Dict[str, str]]:
+    """
+    Lista tutti i PDF fisicamente presenti nella cartella manuali.
+    Usata dall'admin per il dropdown di selezione file.
+    """
+    if not PDF_MANUALS_DIR.exists():
+        return []
+    return sorted(
+        [
+            {
+                "filename": f.name,
+                "title": f.stem.strip(),
+            }
+            for f in PDF_MANUALS_DIR.glob("*.pdf")
+        ],
+        key=lambda x: x["filename"],
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lookup principale
+# ─────────────────────────────────────────────────────────────────────────────
+
+def find_local_manual_by_filename(filename: str) -> Optional[Dict[str, str]]:
+    """Cerca un manuale locale direttamente per nome file."""
+    return _make_result(filename) if filename else None
+
+
+def find_local_manual(
+    machine_type: str = "",
+    db_filename: Optional[str] = None,
+    machine_type_id: Optional[int] = None,
+) -> Optional[Dict[str, str]]:
     """
     Cerca il manuale INAIL locale per il tipo di macchina.
 
     Algoritmo:
-    0. Se admin ha associato un file esplicito → lo usa direttamente
-    1. Normalizza → lowercase strip
-    2. Cerca in MACHINE_ALIASES → ottieni la chiave canonica
-    3. Cerca se mt è già chiave in LOCAL_MANUALS_MAP
-    4. Substring match su alias lunghi (>= 12 chars)
-    5. Discovery dinamica: cerca nei PDF su disco non presenti in LOCAL_MANUALS_MAP,
-       usando il canonical estratto dal filename
+    0. Se db_filename esplicito → usa direttamente (priorità assoluta)
+    1. Se machine_type_id → lookup in inail_manual_assignments per ID
+    2. Se machine_type text → resolve_machine_type_id() → step 1
+    3. Fallback: discovery su disco (PDF fisici presenti ma non assegnati)
     """
-    if not machine_type:
-        return None
-
-    # Passo 0: associazione esplicita dell'admin — priorità assoluta
+    # Passo 0: file esplicito passato dall'admin
     if db_filename:
         result = find_local_manual_by_filename(db_filename)
         if result:
             return result
 
-    mt = _normalize_machine_type(machine_type)
+    # Passo 1: lookup per ID diretto
+    if machine_type_id is not None:
+        result = get_inail_assignment_by_id(machine_type_id)
+        if result:
+            return result
 
-    # Passo 1: alias esatto
-    canonical = MACHINE_ALIASES.get(mt)
+    # Passo 2: risolvi testo → ID → lookup
+    if machine_type and machine_type.strip():
+        try:
+            from app.services.machine_type_service import resolve_machine_type_id
+            resolved_id = resolve_machine_type_id(machine_type)
+            if resolved_id is not None:
+                result = get_inail_assignment_by_id(resolved_id)
+                if result:
+                    return result
+        except Exception:
+            pass
 
-    # Passo 2: mt è già una chiave canonica
-    if not canonical and mt in LOCAL_MANUALS_MAP:
-        canonical = mt
-
-    # Passo 3: mt contiene un alias lungo (>= 12 chars)
-    if not canonical:
-        best_match_len = 0
-        for alias, canon in MACHINE_ALIASES.items():
-            if len(alias) >= 12 and alias in mt:
-                if len(alias) > best_match_len:
-                    canonical = canon
-                    best_match_len = len(alias)
-
-    # Passo 4: lookup in LOCAL_MANUALS_MAP via canonical trovato
-    if canonical:
-        filename = LOCAL_MANUALS_MAP.get(canonical)
-        if filename:
-            filepath = PDF_MANUALS_DIR / filename
-            if filepath.exists():
+    # Passo 3: fallback a discovery da disco (non assegnato in DB)
+    if machine_type and PDF_MANUALS_DIR.exists():
+        mt_norm = _normalize_machine_type(machine_type)
+        for f in sorted(PDF_MANUALS_DIR.glob("*.pdf")):
+            canonical = _extract_canonical_from_filename(f.name)
+            if canonical and (canonical in mt_norm or mt_norm in canonical):
                 return {
-                    "filename": filename,
-                    "filepath": str(filepath),
-                    "title": filename.replace(".pdf", "").strip(),
+                    "filename": f.name,
+                    "filepath": str(f),
+                    "title": f.stem.strip(),
                     "source": "local_inail",
                 }
 
-    # Passo 5: file extra su disco non in LOCAL_MANUALS_MAP — solo se già validati
-    # (raggiungibili solo tramite db_filename al passo 0, dopo che l'admin ha approvato la proposta)
     return None
 
 
 def list_local_manuals() -> List[Dict[str, str]]:
     """
-    Restituisce la lista di tutti i manuali locali disponibili:
-    quelli in LOCAL_MANUALS_MAP + quelli scoperti dinamicamente su disco.
+    Restituisce tutti i manuali locali disponibili:
+    - assegnazioni DB (inail_manual_assignments) con file esistente su disco
+    - PDF su disco non ancora assegnati in DB
     """
     manuals = []
-    seen_files: set = set()
+    assigned_filenames: set = set()
 
-    # File noti dalla mappa statica
-    for filename in LOCAL_MANUALS_MAP.values():
-        if filename in seen_files:
-            continue
-        seen_files.add(filename)
-        filepath = PDF_MANUALS_DIR / filename
+    # Sorgente primaria: assegnazioni DB
+    for assignment in list_inail_assignments():
+        fn = assignment["pdf_filename"]
+        assigned_filenames.add(fn)
+        filepath = PDF_MANUALS_DIR / fn
         if filepath.exists():
             manuals.append({
-                "filename": filename,
+                "filename": fn,
                 "filepath": str(filepath),
-                "title": filename.replace(".pdf", "").strip(),
+                "title": assignment["display_title"],
+                "machine_type_id": assignment["machine_type_id"],
                 "source": "local_inail",
             })
 
-    # File extra scoperti dinamicamente su disco
-    for entry in _get_dynamic_files():
-        manuals.append({
-            "filename": entry["filename"],
-            "filepath": entry["filepath"],
-            "title": entry["title"],
-            "source": "local_inail",
-        })
+    # Fallback: PDF fisici su disco non ancora assegnati
+    if PDF_MANUALS_DIR.exists():
+        for f in sorted(PDF_MANUALS_DIR.glob("*.pdf")):
+            if f.name not in assigned_filenames:
+                manuals.append({
+                    "filename": f.name,
+                    "filepath": str(f),
+                    "title": f.stem.strip(),
+                    "machine_type_id": None,
+                    "source": "local_inail",
+                })
 
     return sorted(manuals, key=lambda x: x["title"])
 

@@ -50,7 +50,7 @@ def get_dynamic_rules() -> tuple[set[str], set[str], list[dict]]:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT rule_type, rule_value, context_machine_type
+                    SELECT rule_type, rule_value, context_machine_type_id
                     FROM url_filter_rules
                     WHERE is_active = true
                     """
@@ -171,27 +171,39 @@ def _upsert_rule(
     reason: str,
     source_urls: list[str],
     feedback_count: int = 1,
+    context_machine_type_id: Optional[int] = None,
 ) -> str:
     """
     Inserisce o aggiorna una regola in url_filter_rules.
     Ritorna 'created' o 'updated'.
     """
+    # Auto-resolve context_machine_type_id se non fornito
+    if context_machine_type_id is None and context_machine_type:
+        try:
+            from app.services.machine_type_service import resolve_machine_type_id as _resolve
+            context_machine_type_id = _resolve(context_machine_type)
+        except Exception:
+            pass
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO url_filter_rules
-                (rule_type, rule_value, context_machine_type, reason, source_urls, feedback_count)
+                (rule_type, rule_value, context_machine_type_id,
+                 reason, source_urls, feedback_count)
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (rule_type, rule_value) DO UPDATE SET
-                feedback_count = url_filter_rules.feedback_count + EXCLUDED.feedback_count,
-                source_urls    = (
+                feedback_count          = url_filter_rules.feedback_count + EXCLUDED.feedback_count,
+                source_urls             = (
                     SELECT array_agg(DISTINCT u)
                     FROM unnest(url_filter_rules.source_urls || EXCLUDED.source_urls) AS u
                 ),
-                reason = EXCLUDED.reason
+                reason                  = EXCLUDED.reason,
+                context_machine_type_id = COALESCE(EXCLUDED.context_machine_type_id,
+                                                   url_filter_rules.context_machine_type_id)
             RETURNING (xmax = 0) AS inserted
             """,
-            (rule_type, rule_value, context_machine_type, reason, source_urls, feedback_count),
+            (rule_type, rule_value, context_machine_type_id,
+             reason, source_urls, feedback_count),
         )
         row = cur.fetchone()
         conn.commit()
@@ -301,7 +313,8 @@ async def run_analysis(provider: str) -> dict:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT url, feedback_type, brand, model, machine_type, useful_for_type, notes
+                    SELECT url, feedback_type, brand, model, machine_type, machine_type_id,
+                           useful_for_type_id, notes
                     FROM manual_feedback
                     WHERE feedback_type IN ('not_a_manual', 'wrong_category', 'useful_other_category')
                     ORDER BY ts DESC
@@ -377,22 +390,31 @@ async def run_analysis(provider: str) -> dict:
                 continue
 
             # useful_other_category → redirect_category direttamente (nessuna AI necessaria)
-            if fb["feedback_type"] == "useful_other_category" and fb.get("useful_for_type"):
+            useful_for_type_id = fb.get("useful_for_type_id")
+            useful_for_name = None
+            if useful_for_type_id:
+                try:
+                    from app.services.machine_type_service import get_name_by_id as _get_name
+                    useful_for_name = _get_name(useful_for_type_id)
+                except Exception:
+                    pass
+            if fb["feedback_type"] == "useful_other_category" and useful_for_name:
                 source_urls = [url]
                 mt_orig = fb.get("machine_type") or ""
-                reason = f"Manuale utile per '{fb['useful_for_type']}', non per '{mt_orig}'"
+                reason = f"Manuale utile per '{useful_for_name}', non per '{mt_orig}'"
                 action = _upsert_rule(
                     conn,
                     rule_type="redirect_category",
-                    rule_value=fb["useful_for_type"],
+                    rule_value=useful_for_name,
                     context_machine_type=mt_orig or None,
+                    context_machine_type_id=fb.get("machine_type_id"),
                     reason=reason,
                     source_urls=source_urls,
                     feedback_count=1,
                 )
                 if action == "created":
                     rules_created += 1
-                    new_rules.append({"rule_type": "redirect_category", "rule_value": fb["useful_for_type"], "reason": reason})
+                    new_rules.append({"rule_type": "redirect_category", "rule_value": useful_for_name, "reason": reason})
                 else:
                     rules_updated += 1
                 processed_urls.add(url)

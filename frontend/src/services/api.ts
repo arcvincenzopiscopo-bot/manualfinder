@@ -118,9 +118,11 @@ export interface SaveManualPayload {
   search_brand?: string
   search_model?: string
   search_machine_type?: string
+  search_machine_type_id?: number | null
   manual_brand: string
   manual_model: string
   manual_machine_type: string
+  machine_type_id?: number | null
   manual_year?: string
   manual_language?: string
   url: string
@@ -133,6 +135,7 @@ export interface UploadManualMeta {
   brand: string
   model: string
   machine_type: string
+  machine_type_id?: number | null
   manual_year?: string
   manual_language?: string
   is_generic?: boolean
@@ -200,6 +203,7 @@ export async function submitManualFeedback(payload: {
   brand?: string
   model?: string
   machine_type?: string
+  machine_type_id?: number | null
   useful_for_type?: string
   notes?: string
 }): Promise<void> {
@@ -209,6 +213,7 @@ export async function submitManualFeedback(payload: {
   if (payload.brand) fd.append('brand', payload.brand)
   if (payload.model) fd.append('model', payload.model)
   if (payload.machine_type) fd.append('machine_type', payload.machine_type)
+  if (payload.machine_type_id != null) fd.append('machine_type_id', String(payload.machine_type_id))
   if (payload.useful_for_type) fd.append('useful_for_type', payload.useful_for_type)
   if (payload.notes) fd.append('notes', payload.notes)
   await fetch(`${BASE_URL}/manuals/feedback`, { method: 'POST', body: fd })

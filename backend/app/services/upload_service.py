@@ -189,6 +189,8 @@ def save_uploaded_pdf(
     db_id = None
     try:
         from app.services import saved_manuals_service
+        from app.services.machine_type_service import resolve_machine_type_id
+        mt_id = resolve_machine_type_id(machine_type) if machine_type else None
         record = {
             "manual_brand": "GENERICO" if is_generic else brand,
             "manual_model": "CATEGORIA" if is_generic else model,
@@ -198,6 +200,8 @@ def save_uploaded_pdf(
             "title": f"{brand} {model} — {machine_type}" + (" (generico)" if is_generic else ""),
             "is_pdf": True,
         }
+        if mt_id:
+            record["machine_type_id"] = mt_id
         if manual_year:
             record["manual_year"] = manual_year
         if notes:
@@ -206,6 +210,8 @@ def save_uploaded_pdf(
             record["search_brand"] = brand
             record["search_model"] = model
             record["search_machine_type"] = machine_type
+            if mt_id:
+                record["search_machine_type_id"] = mt_id
 
         saved = saved_manuals_service.save_manual(record)
         db_id = str(saved.get("id"))

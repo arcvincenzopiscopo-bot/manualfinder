@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { saveManual, checkUrlSaved, submitManualFeedback, type FeedbackType } from '../../services/api'
+import { MachineTypeSelector } from '../ocr/MachineTypeSelector'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
@@ -10,6 +11,7 @@ interface Props {
   brand?: string
   model?: string
   machineType?: string
+  machineTypeId?: number | null
 }
 
 function buildPublicUrl(url: string): string {
@@ -66,9 +68,11 @@ function SaveManualForm({
   defaultBrand,
   defaultModel,
   defaultMachineType,
+  defaultMachineTypeId,
   searchBrand,
   searchModel,
   searchMachineType,
+  searchMachineTypeId,
   onSaved,
   onCancel,
 }: {
@@ -76,9 +80,11 @@ function SaveManualForm({
   defaultBrand: string
   defaultModel: string
   defaultMachineType: string
+  defaultMachineTypeId?: number | null
   searchBrand?: string
   searchModel?: string
   searchMachineType?: string
+  searchMachineTypeId?: number | null
   onSaved: () => void
   onCancel: () => void
 }) {
@@ -86,6 +92,7 @@ function SaveManualForm({
   const [brand, setBrand] = useState(defaultBrand)
   const [model, setModel] = useState(defaultModel)
   const [machineType, setMachineType] = useState(defaultMachineType)
+  const [machineTypeId, setMachineTypeId] = useState<number | null>(defaultMachineTypeId ?? null)
   const [year, setYear] = useState('')
   const [language, setLanguage] = useState('en')
   const [notes, setNotes] = useState('')
@@ -101,9 +108,11 @@ function SaveManualForm({
         search_brand: searchBrand,
         search_model: searchModel,
         search_machine_type: searchMachineType,
+        search_machine_type_id: searchMachineTypeId ?? null,
         manual_brand: isGeneric ? 'GENERICO' : brand.trim(),
         manual_model: isGeneric ? 'CATEGORIA' : model.trim(),
         manual_machine_type: machineType.trim(),
+        machine_type_id: machineTypeId,
         manual_year: year.trim() || undefined,
         manual_language: language,
         url: defaultUrl,
@@ -151,8 +160,11 @@ function SaveManualForm({
       )}
 
       <div style={{ marginBottom: 8 }}>
-        <label style={labelStyle}>Tipo di macchina {isGeneric && <span style={{ color: '#dc2626' }}>*</span>}</label>
-        <input style={inputStyle} value={machineType} onChange={e => setMachineType(e.target.value)} placeholder="es. carrello elevatore" />
+        <MachineTypeSelector
+          value={machineType}
+          valueId={machineTypeId}
+          onChange={(name, id) => { setMachineType(name); setMachineTypeId(id) }}
+        />
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
@@ -213,6 +225,7 @@ function FeedbackForm({
   brand,
   model,
   machineType,
+  machineTypeId,
   onDone,
   onCancel,
 }: {
@@ -220,6 +233,7 @@ function FeedbackForm({
   brand?: string
   model?: string
   machineType?: string
+  machineTypeId?: number | null
   onDone: () => void
   onCancel: () => void
 }) {
@@ -238,6 +252,7 @@ function FeedbackForm({
         brand,
         model,
         machine_type: machineType,
+        machine_type_id: machineTypeId ?? null,
         useful_for_type: usefulForType.trim() || undefined,
         notes: notes.trim() || undefined,
       })
@@ -315,7 +330,7 @@ function FeedbackForm({
   )
 }
 
-export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: Props) {
+export function ManualLink({ url, inailUrl, tipo, brand, model, machineType, machineTypeId }: Props) {
   const [showForm, setShowForm] = useState<'save' | 'feedback' | null>(null)
   const [saved, setSaved] = useState(false)
   const [reported, setReported] = useState(false)
@@ -440,9 +455,11 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
           defaultBrand={brand ?? ''}
           defaultModel={model ?? ''}
           defaultMachineType={machineType ?? ''}
+          defaultMachineTypeId={machineTypeId}
           searchBrand={brand}
           searchModel={model}
           searchMachineType={machineType}
+          searchMachineTypeId={machineTypeId}
           onSaved={() => { setSaved(true); setShowForm(null) }}
           onCancel={() => setShowForm(null)}
         />
@@ -454,6 +471,7 @@ export function ManualLink({ url, inailUrl, tipo, brand, model, machineType }: P
           brand={brand}
           model={model}
           machineType={machineType}
+          machineTypeId={machineTypeId}
           onDone={() => { setReported(true); setShowForm(null) }}
           onCancel={() => setShowForm(null)}
         />

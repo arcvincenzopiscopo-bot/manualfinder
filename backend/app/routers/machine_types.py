@@ -278,38 +278,200 @@ def admin_scan_image(scan_id: int):
 def list_inail_local_files():
     """
     Restituisce la lista dei PDF INAIL presenti nella cartella locale.
-    Include sia i file in LOCAL_MANUALS_MAP sia quelli scoperti dinamicamente su disco.
-    Risposta: [{ filename, title, exists }]
+    Include assegnazioni DB + file su disco non ancora assegnati.
+    Risposta: [{ filename, title, exists, machine_type_id? }]
     """
     from app.services.local_manuals_service import (
-        PDF_MANUALS_DIR, LOCAL_MANUALS_MAP, _get_dynamic_files
+        PDF_MANUALS_DIR, list_inail_assignments, list_all_pdf_files
     )
     result = []
     seen: set = set()
 
-    # File noti dalla mappa statica (mostrati anche se mancanti su disco, con flag exists=False)
-    for filename in LOCAL_MANUALS_MAP.values():
-        if filename in seen:
+    # Assegnazioni DB (con flag exists)
+    for assignment in list_inail_assignments():
+        fn = assignment["pdf_filename"]
+        if fn in seen:
             continue
-        seen.add(filename)
+        seen.add(fn)
         result.append({
-            "filename": filename,
-            "title": filename.replace(".pdf", "").strip(),
-            "exists": (PDF_MANUALS_DIR / filename).exists(),
+            "filename": fn,
+            "title": assignment["display_title"],
+            "machine_type_id": assignment["machine_type_id"],
+            "machine_type_name": assignment["machine_type_name"],
+            "exists": assignment["exists_on_disk"],
         })
 
-    # File extra scoperti dinamicamente su disco
-    for entry in _get_dynamic_files():
+    # File su disco non ancora assegnati
+    for entry in list_all_pdf_files():
         if entry["filename"] not in seen:
             seen.add(entry["filename"])
             result.append({
                 "filename": entry["filename"],
                 "title": entry["title"],
+                "machine_type_id": None,
+                "machine_type_name": None,
                 "exists": True,
             })
 
     result.sort(key=lambda x: x["filename"])
     return result
+
+
+# ── Normative (admin CRUD) ───────────────────────────────────────────────────
+
+@router.get("/normative/admin", dependencies=_admin)
+def admin_list_normative(machine_type_id: Optional[int] = None):
+    """[Admin] Lista normative da DB. machine_type_id=None restituisce tutto."""
+    from app.config import settings as _s
+    import psycopg2
+    import psycopg2.extras
+    if not _s.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    try:
+        conn = psycopg2.connect(_s.database_url)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if machine_type_id is not None:
+                cur.execute(
+                    "SELECT * FROM machine_type_normative WHERE machine_type_id = %s ORDER BY display_order",
+                    (machine_type_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT n.*, mt.name AS machine_type_name
+                    FROM machine_type_normative n
+                    LEFT JOIN machine_types mt ON mt.id = n.machine_type_id
+                    WHERE n.is_active = true
+                    ORDER BY n.machine_type_id NULLS FIRST, n.display_order
+                    """
+                )
+            rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/normative", dependencies=_admin)
+def admin_add_normativa(body: dict):
+    """[Admin] Aggiunge una norma. Body: { machine_type_id?: int|null, norm_text: str, display_order?: int }"""
+    from app.config import settings as _s
+    import psycopg2
+    norm_text = (body.get("norm_text") or "").strip()
+    if not norm_text:
+        raise HTTPException(status_code=422, detail="norm_text obbligatorio")
+    if not _s.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    try:
+        conn = psycopg2.connect(_s.database_url)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO machine_type_normative (machine_type_id, norm_text, display_order)
+                VALUES (%s, %s, %s)
+                RETURNING id
+                """,
+                (body.get("machine_type_id"), norm_text, body.get("display_order", 0)),
+            )
+            new_id = cur.fetchone()[0]
+        conn.commit()
+        conn.close()
+        # Invalida cache
+        try:
+            from app.data.machine_normative import _load_cache
+            _load_cache()
+        except Exception:
+            pass
+        return {"ok": True, "id": new_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/normative/{norm_id}", dependencies=_admin)
+def admin_delete_normativa(norm_id: int):
+    """[Admin] Disattiva una norma (is_active = false)."""
+    from app.config import settings as _s
+    import psycopg2
+    if not _s.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    try:
+        conn = psycopg2.connect(_s.database_url)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE machine_type_normative SET is_active = false WHERE id = %s",
+                (norm_id,),
+            )
+            updated = cur.rowcount
+        conn.commit()
+        conn.close()
+        if updated == 0:
+            raise HTTPException(status_code=404, detail="Norma non trovata")
+        try:
+            from app.data.machine_normative import _load_cache
+            _load_cache()
+        except Exception:
+            pass
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Riferimenti normativi (admin CRUD) ────────────────────────────────────────
+
+@router.get("/riferimenti/admin", dependencies=_admin)
+def admin_list_riferimenti():
+    """[Admin] Lista riferimenti normativi da DB."""
+    from app.config import settings as _s
+    import psycopg2
+    import psycopg2.extras
+    if not _s.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    try:
+        conn = psycopg2.connect(_s.database_url)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, norma_key, norma, titolo, machine_type_ids, is_active FROM riferimenti_normativi ORDER BY id"
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/riferimenti/{ref_id}", dependencies=_admin)
+def admin_update_riferimento(ref_id: int, body: dict):
+    """[Admin] Aggiorna machine_type_ids di un riferimento. Body: { machine_type_ids: int[] | null }"""
+    from app.config import settings as _s
+    import psycopg2
+    if not _s.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
+    try:
+        new_ids = body.get("machine_type_ids")  # None = universale, [] = nessuno
+        conn = psycopg2.connect(_s.database_url)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE riferimenti_normativi SET machine_type_ids = %s WHERE id = %s",
+                (new_ids, ref_id),
+            )
+            updated = cur.rowcount
+        conn.commit()
+        conn.close()
+        if updated == 0:
+            raise HTTPException(status_code=404, detail="Riferimento non trovato")
+        # Invalida cache riferimenti
+        try:
+            from app.data.riferimenti_normativi import _load_cache
+            _load_cache()
+        except Exception:
+            pass
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Ricerca email produttore ──────────────────────────────────────────────────

@@ -56,6 +56,7 @@ export function FeedbackWidget({ card }: Props) {
           brand: card.brand,
           model: card.model,
           machine_type: card.machine_type ?? null,
+          machine_type_id: card.machine_type_id ?? null,
           rating,
           problemi,
           strategy: card.source_metadata?.strategy ?? null,

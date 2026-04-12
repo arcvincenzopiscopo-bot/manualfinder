@@ -948,7 +948,7 @@ async def generate_safety_card(
     _log_rag_metadata(machine_type, card.fonte_tipo or "unknown")
 
     # Log asincrono strategia fonte → analysis_log (non bloccante)
-    _log_analysis_sync(brand, model, machine_type, _source_ctx)
+    _log_analysis_sync(brand, model, machine_type, _source_ctx, machine_type_id=machine_type_id)
 
     return card
 
@@ -958,10 +958,10 @@ def _validate_normative_refs(card: "SafetyCard") -> None:
     Se una norma non è nel dizionario, svuota prescrizione_precompilata (non rimuove l'item).
     """
     try:
-        from app.data.riferimenti_normativi import RIFERIMENTI
+        from app.data.riferimenti_normativi import _RIFERIMENTI_SEED
         # Estrae tutti gli articoli verificati dal dizionario
         norme_certe: set[str] = set()
-        for ref in RIFERIMENTI.values():
+        for ref in _RIFERIMENTI_SEED.values():
             norma = ref.get("norma") or ref.get("articolo") or ""
             if norma:
                 norme_certe.add(norma.lower())
@@ -990,6 +990,7 @@ def _log_analysis_sync(
     model: str,
     machine_type: Optional[str],
     ctx: "SourceContext",
+    machine_type_id: Optional[int] = None,
 ) -> None:
     """
     Inserisce un record in analysis_log con la strategia fonte usata.
@@ -1000,16 +1001,24 @@ def _log_analysis_sync(
         db_url = settings.database_url
         if not db_url:
             return
+        # Auto-resolve ID se non fornito
+        if machine_type_id is None and machine_type:
+            try:
+                from app.services.machine_type_service import resolve_machine_type_id
+                machine_type_id = resolve_machine_type_id(machine_type)
+            except Exception:
+                pass
         conn = psycopg2.connect(db_url)
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO analysis_log
-                        (brand, model, machine_type, strategy, badge_label, affidabilita, fonte_tipo)
+                        (brand, model, machine_type_id,
+                         strategy, badge_label, affidabilita, fonte_tipo)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (brand, model, machine_type,
+                    (brand, model, machine_type_id,
                      ctx.strategy, ctx.badge_label,
                      ctx.affidabilita, ctx.fonte_tipo),
                 )
