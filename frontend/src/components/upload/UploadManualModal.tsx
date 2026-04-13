@@ -62,7 +62,7 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
   const canSubmit = !!file && machineTypeId != null && (isGeneric || (brand.trim().length > 0 && model.trim().length > 0))
 
   const doUpload = async (force: boolean, overrides?: Partial<{ brand: string; model: string; machine_type: string }>) => {
-    if (!file) return
+    if (!file || uiState === 'uploading') return
     setUiState('uploading')
     try {
       const result = await uploadManual(file, {
@@ -89,6 +89,8 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
       setUiState('error')
     }
   }
+
+  const isUploading = uiState === 'uploading'
 
   return (
     <div style={{
@@ -219,10 +221,10 @@ export function UploadManualModal({ onClose, defaultBrand = '', defaultModel = '
 
             <button
               onClick={() => doUpload(false)}
-              disabled={!canSubmit}
+              disabled={!canSubmit || isUploading}
               style={{
                 width: '100%', padding: '14px',
-                background: canSubmit ? '#1e40af' : '#cbd5e1',
+                background: canSubmit && !isUploading ? '#1e40af' : '#cbd5e1',
                 color: '#fff', border: 'none', borderRadius: 8,
                 fontSize: 16, fontWeight: 700,
                 cursor: canSubmit ? 'pointer' : 'not-allowed',

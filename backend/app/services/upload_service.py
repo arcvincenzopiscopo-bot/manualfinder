@@ -61,8 +61,9 @@ async def validate_and_check(
             texts.append(page.get_text())
         doc.close()
         pdf_text = "\n".join(texts)[:3000].strip()
-    except Exception:
-        return {"ok": True}  # Impossibile estrarre testo — non blocchiamo
+    except Exception as e:
+        _logger.warning("validate_and_check: impossibile estrarre testo: %s", e)
+        return {"ok": True}
 
     if not pdf_text:
         return {"ok": True}  # PDF vuoto o scansione sfuggita alla validazione
@@ -119,8 +120,9 @@ async def validate_and_check(
         result = json.loads(match.group())
         return result if isinstance(result, dict) else {"ok": True}
 
-    except Exception:
-        return {"ok": True}  # Errore AI — non blocchiamo l'upload
+    except Exception as e:
+        _logger.warning("validate_and_check: errore AI: %s", e)
+        return {"ok": True}
 
 
 def _compress_pdf(pdf_bytes: bytes) -> bytes:
@@ -157,8 +159,9 @@ def _compress_pdf(pdf_bytes: bytes) -> bytes:
         doc.close()
         # Ritorna il più piccolo tra originale e compresso
         return compressed if len(compressed) < len(pdf_bytes) else pdf_bytes
-    except Exception:
-        return pdf_bytes  # fallback: usa originale se compressione fallisce
+    except Exception as e:
+        _logger.warning("compress_pdf fallback originale: %s", e)
+        return pdf_bytes
 
 
 async def _upload_to_supabase_storage(pdf_bytes: bytes, filename: str) -> Optional[str]:
@@ -264,7 +267,7 @@ def save_uploaded_pdf(
 
         saved = saved_manuals_service.save_manual(record)
         db_id = str(saved.get("id"))
-    except Exception:
-        pass  # Il file è salvato anche se Supabase non è raggiungibile
+    except Exception as e:
+        _logger.warning("save_uploaded_pdf: registrazione DB fallita: %s", e)
 
     return {"filename": filename, "url": url, "db_id": db_id}

@@ -13,11 +13,15 @@ POST /api/machine-types/{id}/aliases             → aggiungi alias
 DELETE /api/machine-types/aliases/{alias_id}     → elimina alias
 PATCH /api/machine-types/{id}/flags              → aggiorna flags normativi
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, Field
 from typing import Optional
 
 from app.services import machine_type_service, scan_log_service
+from app.utils.errors import internal_error
+
+logger = logging.getLogger(__name__)
 from app.config import settings
 
 
@@ -350,7 +354,8 @@ def admin_list_normative(machine_type_id: Optional[int] = None):
     if not _s.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
     try:
-        conn = psycopg2.connect(_s.database_url)
+        from app.services.db_pool import get_conn_raw
+        conn = get_conn_raw()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if machine_type_id is not None:
                 cur.execute(
@@ -371,7 +376,7 @@ def admin_list_normative(machine_type_id: Optional[int] = None):
         conn.close()
         return rows
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="list normative")
 
 
 @router.post("/normative", dependencies=_admin)
@@ -385,7 +390,8 @@ def admin_add_normativa(body: dict):
     if not _s.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
     try:
-        conn = psycopg2.connect(_s.database_url)
+        from app.services.db_pool import get_conn_raw
+        conn = get_conn_raw()
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -406,7 +412,7 @@ def admin_add_normativa(body: dict):
             pass
         return {"ok": True, "id": new_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="add normativa")
 
 
 @router.delete("/normative/{norm_id}", dependencies=_admin)
@@ -417,7 +423,8 @@ def admin_delete_normativa(norm_id: int):
     if not _s.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
     try:
-        conn = psycopg2.connect(_s.database_url)
+        from app.services.db_pool import get_conn_raw
+        conn = get_conn_raw()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE machine_type_normative SET is_active = false WHERE id = %s",
@@ -437,7 +444,7 @@ def admin_delete_normativa(norm_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="delete normativa")
 
 
 # ── Riferimenti normativi (admin CRUD) ────────────────────────────────────────
@@ -451,7 +458,8 @@ def admin_list_riferimenti():
     if not _s.database_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
     try:
-        conn = psycopg2.connect(_s.database_url)
+        from app.services.db_pool import get_conn_raw
+        conn = get_conn_raw()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT id, norma_key, norma, titolo, machine_type_ids, is_active FROM riferimenti_normativi ORDER BY id"
@@ -460,7 +468,7 @@ def admin_list_riferimenti():
         conn.close()
         return rows
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="list riferimenti")
 
 
 @router.patch("/riferimenti/{ref_id}", dependencies=_admin)
@@ -472,7 +480,8 @@ def admin_update_riferimento(ref_id: int, body: dict):
         raise HTTPException(status_code=503, detail="DATABASE_URL non configurata")
     try:
         new_ids = body.get("machine_type_ids")  # None = universale, [] = nessuno
-        conn = psycopg2.connect(_s.database_url)
+        from app.services.db_pool import get_conn_raw
+        conn = get_conn_raw()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE riferimenti_normativi SET machine_type_ids = %s WHERE id = %s",
@@ -493,7 +502,7 @@ def admin_update_riferimento(ref_id: int, body: dict):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="update riferimento")
 
 
 # ── Ricerca email produttore ──────────────────────────────────────────────────

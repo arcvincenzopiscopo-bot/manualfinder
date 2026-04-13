@@ -16,11 +16,15 @@ _TTL_SECONDS = 7 * 24 * 3600  # 7 giorni
 
 
 class _InMemoryTTLCache:
-    """Cache in-memory con scadenza TTL. Thread-safe per uso async."""
+    """Cache in-memory con scadenza TTL e limite LRU."""
 
-    def __init__(self, ttl: int = _TTL_SECONDS):
-        self._store: dict[str, tuple[float, Any]] = {}
+    _MAX_ITEMS = 500
+
+    def __init__(self, ttl: int = _TTL_SECONDS, max_items: int = _MAX_ITEMS):
+        from collections import OrderedDict
+        self._store: OrderedDict[str, tuple[float, Any]] = OrderedDict()
         self._ttl = ttl
+        self._max_items = max_items
 
     def _make_key(self, *parts) -> str:
         raw = "|".join(str(p).lower().strip() for p in parts)
@@ -35,12 +39,16 @@ class _InMemoryTTLCache:
         if time.time() - ts > self._ttl:
             del self._store[k]
             return None
+        self._store.move_to_end(k)
         return value
 
     def set(self, *key_parts_and_value) -> None:
         *key_parts, value = key_parts_and_value
         k = self._make_key(*key_parts)
         self._store[k] = (time.time(), value)
+        self._store.move_to_end(k)
+        while len(self._store) > self._max_items:
+            self._store.popitem(last=False)
 
     def evict_expired(self) -> int:
         now = time.time()

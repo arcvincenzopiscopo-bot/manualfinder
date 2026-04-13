@@ -39,8 +39,8 @@ def _conn():
     if not settings.database_url:
         return None
     try:
-        import psycopg2
-        return psycopg2.connect(settings.database_url)
+        from app.services.db_pool import get_conn_raw
+        return get_conn_raw()
     except Exception as e:
         logger.warning("config_service: connessione DB fallita: %s", e)
         return None

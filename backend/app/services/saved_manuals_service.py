@@ -2,16 +2,19 @@
 Servizio per il salvataggio e la ricerca di manuali confermati dagli ispettori.
 Usa connessione diretta PostgreSQL a Supabase (transaction pooler).
 """
+import logging
 from typing import Optional, List
 import psycopg2
 import psycopg2.extras
 from app.config import settings
+from app.utils.errors import log_and_swallow
+
+_logger = logging.getLogger(__name__)
 
 
 def _get_conn():
-    if not settings.database_url:
-        raise RuntimeError("DATABASE_URL non configurata")
-    return psycopg2.connect(settings.database_url)
+    from app.services.db_pool import get_conn
+    return get_conn()
 
 
 def _canonical_machine_type(mt: str) -> str:
@@ -26,12 +29,15 @@ def _canonical_machine_type(mt: str) -> str:
             name = get_name_by_id(mt_id)
             if name:
                 return name
-    except Exception:
-        pass
+    except Exception as e:
+        log_and_swallow(_logger, e, context="canonical machine type")
     return (mt or "").lower().strip()
 
 
 import time as _time
+import threading as _threading
+
+_cache_lock = _threading.RLock()
 
 # ── Cache URL bloccati ────────────────────────────────────────────────────────
 # Blocco assoluto: non sono manuali d'uso (brochure, cataloghi, ecc.)
@@ -47,6 +53,7 @@ _context_blocked_id_cache: set[tuple[str, int]] = set()
 _context_blocked_id_ts: float = 0.0
 
 _BLOCKED_CACHE_TTL = 900  # 15 minuti
+_TRIGRAM_MIN_SIMILARITY = 0.35
 
 
 def get_blocked_urls() -> set[str]:
@@ -57,23 +64,25 @@ def get_blocked_urls() -> set[str]:
     Cache in-memory TTL 15 min. Fallisce silenziosamente.
     """
     global _blocked_urls_cache, _blocked_urls_ts
-    now = _time.monotonic()
-    if now - _blocked_urls_ts < _BLOCKED_CACHE_TTL:
-        return _blocked_urls_cache
-    if not settings.database_url:
-        return set()
-    try:
-        with _get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT DISTINCT url FROM manual_feedback WHERE feedback_type = 'not_a_manual'"
-                )
-                urls = {row[0] for row in cur.fetchall()}
-        _blocked_urls_cache = urls
-        _blocked_urls_ts = now
-        return urls
-    except Exception:
-        return _blocked_urls_cache
+    with _cache_lock:
+        now = _time.monotonic()
+        if now - _blocked_urls_ts < _BLOCKED_CACHE_TTL:
+            return _blocked_urls_cache
+        if not settings.database_url:
+            return set()
+        try:
+            with _get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT DISTINCT url FROM manual_feedback WHERE feedback_type = 'not_a_manual'"
+                    )
+                    urls = {row[0] for row in cur.fetchall()}
+            _blocked_urls_cache = urls
+            _blocked_urls_ts = now
+            return urls
+        except Exception as e:
+            log_and_swallow(_logger, e, context="load blocked urls")
+            return _blocked_urls_cache
 
 
 def get_context_blocked_urls() -> set[tuple[str, str]]:
@@ -84,27 +93,29 @@ def get_context_blocked_urls() -> set[tuple[str, str]]:
     Cache in-memory TTL 15 min. Fallisce silenziosamente.
     """
     global _context_blocked_cache, _context_blocked_ts
-    now = _time.monotonic()
-    if now - _context_blocked_ts < _BLOCKED_CACHE_TTL:
-        return _context_blocked_cache
-    if not settings.database_url:
-        return set()
-    try:
-        with _get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT DISTINCT url, machine_type FROM manual_feedback
-                    WHERE feedback_type = 'wrong_category'
-                      AND machine_type IS NOT NULL AND machine_type != ''
-                    """
-                )
-                pairs = {(row[0], row[1].lower().strip()) for row in cur.fetchall()}
-        _context_blocked_cache = pairs
-        _context_blocked_ts = now
-        return pairs
-    except Exception:
-        return _context_blocked_cache
+    with _cache_lock:
+        now = _time.monotonic()
+        if now - _context_blocked_ts < _BLOCKED_CACHE_TTL:
+            return _context_blocked_cache
+        if not settings.database_url:
+            return set()
+        try:
+            with _get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT url, machine_type FROM manual_feedback
+                        WHERE feedback_type = 'wrong_category'
+                          AND machine_type IS NOT NULL AND machine_type != ''
+                        """
+                    )
+                    pairs = {(row[0], row[1].lower().strip()) for row in cur.fetchall()}
+            _context_blocked_cache = pairs
+            _context_blocked_ts = now
+            return pairs
+        except Exception as e:
+            log_and_swallow(_logger, e, context="load context blocked urls")
+            return _context_blocked_cache
 
 
 def get_context_blocked_url_ids() -> set[tuple[str, int]]:
@@ -113,27 +124,29 @@ def get_context_blocked_url_ids() -> set[tuple[str, int]]:
     Versione ID-based di get_context_blocked_urls(). Cache TTL 15 min.
     """
     global _context_blocked_id_cache, _context_blocked_id_ts
-    now = _time.monotonic()
-    if now - _context_blocked_id_ts < _BLOCKED_CACHE_TTL:
-        return _context_blocked_id_cache
-    if not settings.database_url:
-        return set()
-    try:
-        with _get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT DISTINCT url, machine_type_id FROM manual_feedback
-                    WHERE feedback_type = 'wrong_category'
-                      AND machine_type_id IS NOT NULL
-                    """
-                )
-                pairs = {(row[0], row[1]) for row in cur.fetchall()}
-        _context_blocked_id_cache = pairs
-        _context_blocked_id_ts = now
-        return pairs
-    except Exception:
-        return _context_blocked_id_cache
+    with _cache_lock:
+        now = _time.monotonic()
+        if now - _context_blocked_id_ts < _BLOCKED_CACHE_TTL:
+            return _context_blocked_id_cache
+        if not settings.database_url:
+            return set()
+        try:
+            with _get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT url, machine_type_id FROM manual_feedback
+                        WHERE feedback_type = 'wrong_category'
+                          AND machine_type_id IS NOT NULL
+                        """
+                    )
+                    pairs = {(row[0], row[1]) for row in cur.fetchall()}
+            _context_blocked_id_cache = pairs
+            _context_blocked_id_ts = now
+            return pairs
+        except Exception as e:
+            log_and_swallow(_logger, e, context="load context blocked url ids")
+            return _context_blocked_id_cache
 
 
 def delete_manual_by_url(url: str) -> bool:
@@ -151,7 +164,8 @@ def delete_manual_by_url(url: str) -> bool:
                 deleted = cur.rowcount
             conn.commit()
         return deleted > 0
-    except Exception:
+    except Exception as e:
+        log_and_swallow(_logger, e, context="delete manual by url")
         return False
 
 
@@ -164,7 +178,8 @@ def check_url_saved(url: str) -> bool:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM saved_manuals WHERE url = %s LIMIT 1", (url,))
                 return cur.fetchone() is not None
-    except Exception:
+    except Exception as e:
+        log_and_swallow(_logger, e, context="check url saved")
         return False
 
 
@@ -204,8 +219,8 @@ def save_feedback(
                      feedback_type, useful_for_type_id, notes),
                 )
                 conn.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        log_and_swallow(_logger, e, context="save feedback")
 
 
 def count_unanalyzed_feedback() -> int:
@@ -229,7 +244,8 @@ def count_unanalyzed_feedback() -> int:
                 )
                 row = cur.fetchone()
                 return row[0] if row else 0
-    except Exception:
+    except Exception as e:
+        log_and_swallow(_logger, e, context="count unanalyzed feedback")
         return 0
 
 
@@ -310,14 +326,14 @@ def find_for_search(
                 # 1) Specifici: brand+model corrispondenti (escludi GENERICO)
                 # Usa ILIKE substring + pg_trgm similarity per tollerare typo OCR
                 cur.execute(
-                    """
+                    f"""
                     SELECT *,
                            'specific' AS _match_type,
                            (similarity(manual_brand, %s) + similarity(manual_model, %s)) AS _score
                     FROM saved_manuals
                     WHERE manual_brand NOT ILIKE 'GENERICO'
-                      AND (manual_brand ILIKE %s OR similarity(manual_brand, %s) > 0.35)
-                      AND (manual_model ILIKE %s OR similarity(manual_model, %s) > 0.35)
+                      AND (manual_brand ILIKE %s OR similarity(manual_brand, %s) > {_TRIGRAM_MIN_SIMILARITY})
+                      AND (manual_model ILIKE %s OR similarity(manual_model, %s) > {_TRIGRAM_MIN_SIMILARITY})
                     ORDER BY _score DESC, created_at DESC
                     LIMIT 5
                     """,
@@ -339,7 +355,7 @@ def find_for_search(
                     mt_text = machine_type or ""
                     if machine_type_id is not None:
                         cur.execute(
-                            """
+                            f"""
                             SELECT *, 'generic' AS _match_type
                             FROM saved_manuals
                             WHERE (machine_type_id = %s
@@ -347,8 +363,8 @@ def find_for_search(
                                    OR manual_machine_type ILIKE %s
                                    OR search_machine_type ILIKE %s
                                    OR search_machine_type ILIKE %s
-                                   OR similarity(manual_machine_type, %s) > 0.35
-                                   OR similarity(search_machine_type, %s) > 0.35)
+                                   OR similarity(manual_machine_type, %s) > {_TRIGRAM_MIN_SIMILARITY}
+                                   OR similarity(search_machine_type, %s) > {_TRIGRAM_MIN_SIMILARITY})
                               AND id::text NOT IN %s
                             ORDER BY
                                 CASE WHEN machine_type_id = %s THEN 0 ELSE 1 END,
@@ -367,15 +383,15 @@ def find_for_search(
                         )
                     else:
                         cur.execute(
-                            """
+                            f"""
                             SELECT *, 'generic' AS _match_type
                             FROM saved_manuals
                             WHERE (manual_machine_type ILIKE %s
                                    OR manual_machine_type ILIKE %s
                                    OR search_machine_type ILIKE %s
                                    OR search_machine_type ILIKE %s
-                                   OR similarity(manual_machine_type, %s) > 0.35
-                                   OR similarity(search_machine_type, %s) > 0.35)
+                                   OR similarity(manual_machine_type, %s) > {_TRIGRAM_MIN_SIMILARITY}
+                                   OR similarity(search_machine_type, %s) > {_TRIGRAM_MIN_SIMILARITY})
                               AND id::text NOT IN %s
                             ORDER BY
                                 CASE WHEN manual_brand ILIKE 'GENERICO' THEN 0 ELSE 1 END,
@@ -415,5 +431,6 @@ def find_for_search(
                 ]
 
         return results
-    except Exception:
-        return []  # Non bloccare la pipeline se il DB non è raggiungibile
+    except Exception as e:
+        log_and_swallow(_logger, e, context="find for search")
+        return []

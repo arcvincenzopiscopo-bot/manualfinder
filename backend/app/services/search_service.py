@@ -269,7 +269,7 @@ def _build_inail_queries(machine_type: Optional[str], machine_type_id: Optional[
         except Exception:
             is_officina = any(k in inail_type_lower for k in _officina_types())
     else:
-        is_officina = any(k in inail_type_lower for k in _OFFICINA_MACHINE_TYPES)
+        is_officina = any(k in inail_type_lower for k in _officina_types())
 
     is_edilizia = (not is_officina) and any(k in inail_type_lower for k in _edilizia_types())
 

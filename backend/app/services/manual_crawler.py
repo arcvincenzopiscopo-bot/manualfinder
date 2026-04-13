@@ -30,8 +30,8 @@ def _manuals_dir() -> str:
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _get_conn():
-    import psycopg2
-    return psycopg2.connect(settings.database_url)
+    from app.services.db_pool import get_conn_raw
+    return get_conn_raw()
 
 
 def _ensure_table() -> None:

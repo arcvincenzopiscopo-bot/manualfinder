@@ -3,12 +3,16 @@ Router per servire i manuali locali INAIL, gestire i manuali salvati su Supabase
 e gestire l'upload di nuovi manuali PDF da parte degli ispettori.
 """
 import asyncio
+import logging
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from typing import List, Optional
 from app.services import local_manuals_service, saved_manuals_service, upload_service
 from app.services import feedback_analyzer_service
 from app.models.requests import SaveManualRequest
+from app.utils.errors import internal_error, service_unavailable
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -33,10 +37,19 @@ async def get_local_manuals(
 @router.get("/local/file/{filename}")
 async def get_local_manual_file(filename: str):
     """Scarica un manuale locale specifico."""
-    filepath = local_manuals_service.PDF_MANUALS_DIR / filename
-    if not filepath.exists():
+    import re as _re
+    if not _re.match(r'^[\w\-. ]+\.pdf$', filename, _re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="Nome file non valido.")
+    base_dir = local_manuals_service.PDF_MANUALS_DIR.resolve()
+    filepath = (base_dir / filename).resolve()
+    # Path traversal guard: il percorso risolto deve restare dentro base_dir
+    try:
+        filepath.relative_to(base_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Percorso non consentito.")
+    if not filepath.is_file():
         raise HTTPException(status_code=404, detail=f"File non trovato: {filename}")
-    
+
     return FileResponse(
         path=str(filepath),
         filename=filename,
@@ -149,7 +162,7 @@ async def get_feedback(
             r["ts"] = str(r["ts"])
         return {"count": len(rows), "entries": rows}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="list feedback")
 
 
 @router.post("/feedback/analyze")
@@ -164,7 +177,7 @@ async def analyze_feedback():
         result = await feedback_analyzer_service.run_analysis(provider)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="analyze feedback")
 
 
 @router.get("/feedback/rules")
@@ -194,7 +207,7 @@ async def get_filter_rules(limit: int = Query(100, ge=1, le=500)):
             r["created_at"] = str(r["created_at"])
         return {"count": len(rows), "rules": rows}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="get filter rules")
 
 
 @router.post("/save")
@@ -221,9 +234,9 @@ async def save_manual(body: SaveManualRequest):
         result["created_at"] = str(result["created_at"])
         return result
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise service_unavailable(logger, e, context="save manual")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore salvataggio: {e}")
+        raise internal_error(logger, e, context="save manual")
 
 
 @router.get("/saved")
@@ -248,9 +261,9 @@ async def get_saved_manuals(
             r["created_at"] = str(r["created_at"])
         return results
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise service_unavailable(logger, e, context="search saved manuals")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore ricerca: {e}")
+        raise internal_error(logger, e, context="search saved manuals")
 
 
 # ── Upload manuali PDF da ispettori ──────────────────────────────────────────
@@ -344,9 +357,10 @@ async def upload_manual(
             _precompressed_bytes=compressed_bytes,
         )
     except ValueError as e:
+        # Messaggi di ValueError sono controllati e pensati per essere mostrati
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore salvataggio: {e}")
+        raise internal_error(logger, e, context="save uploaded pdf")
 
     storage_warning = None
     if not storage_url:
@@ -394,7 +408,7 @@ async def get_prompt_rules(limit: int = Query(100, ge=1, le=500)):
                 r["updated_at"] = str(r["updated_at"])
         return {"count": len(rows), "rules": rows}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="get prompt rules")
 
 
 @router.post("/prompt-rules")
@@ -453,7 +467,7 @@ async def upsert_prompt_rule(body: dict):
             pass
         return {"status": "ok", "machine_type": machine_type}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="upsert prompt rule")
 
 
 @router.post("/prompt-rules/{machine_type}/improve")
@@ -502,7 +516,7 @@ async def delete_prompt_rule(machine_type: str):
             pass
         return {"status": "ok", "disabled": updated > 0}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error(logger, e, context="delete prompt rule")
 
 
 @router.get("/local/available-pdfs")

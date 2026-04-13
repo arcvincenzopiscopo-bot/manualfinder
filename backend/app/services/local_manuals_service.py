@@ -288,9 +288,8 @@ def _extract_canonical_from_filename(filename: str) -> str:
 
 
 def _get_conn():
-    from app.config import settings
-    import psycopg2
-    return psycopg2.connect(settings.database_url)
+    from app.services.db_pool import get_conn_raw
+    return get_conn_raw()
 
 
 def _db_available() -> bool:

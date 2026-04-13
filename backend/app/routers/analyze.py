@@ -103,11 +103,19 @@ def _sse(event: SSEEvent) -> str:
     return f"data: {payload}\n\n"
 
 
-async def _pipeline(request: FullAnalysisRequest):
+async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request] = None):
     """Generatore SSE: search → download → analisi. OCR già fatto."""
+
+    async def _client_gone() -> bool:
+        if http_request is None:
+            return False
+        return await http_request.is_disconnected()
 
     brand = request.brand.strip()
     model = request.model.strip()
+    if not brand and not model:
+        yield _sse(SSEEvent(type="error", message="Brand e modello mancanti. Ripetere la scansione della targa."))
+        return
     machine_type = request.machine_type.strip() if request.machine_type else None
     machine_type_id: Optional[int] = getattr(request, "machine_type_id", None)
     machine_year = request.year.strip() if getattr(request, "year", None) else None
@@ -141,6 +149,8 @@ async def _pipeline(request: FullAnalysisRequest):
     has_local_inail: bool = _local_inail is not None
 
     # ── STEP 1: Ricerca Manuale ──────────────────────────────────────────
+    if await _client_gone():
+        return
     search_msg = f"Ricerca manuale per {brand} {model}"
     if machine_type:
         search_msg += f" (tipo: {machine_type})"
@@ -250,6 +260,8 @@ async def _pipeline(request: FullAnalysisRequest):
     ))
 
     # ── STEP 2: Download PDF ─────────────────────────────────────────────
+    if await _client_gone():
+        return
     # (lo scraping HTML è ora dentro search_manual — i pdf_candidates già includono
     #  i PDF trovati per scraping di produttore e pagine HTML)
 
@@ -325,6 +337,7 @@ async def _pipeline(request: FullAnalysisRequest):
     _producer_scored_count = 0
     _similar_category_used = False  # Flag: usato fallback categoria simile locale
     producer_scored: list = []      # Risultati scored del download produttore (init safe)
+    best_score: int | None = None
 
     if pdf_candidates or (has_local_inail and _local_inail):
         download_parts = []
@@ -384,6 +397,10 @@ async def _pipeline(request: FullAnalysisRequest):
                     inail_bytes, inail_url = _ibytes, _iurl
                     break
 
+        if has_local_inail and inail_bytes is None:
+            has_local_inail = False
+            _log.warning("INAIL locale non trovato dopo pre-check (filesystem efimero?) — fallback ricerca online")
+
         # Scarica scheda tecnica commerciale (datasheet) — usata solo per limiti_operativi
         # Soglia pagine: <= 20 = datasheet breve. Se più lungo → reindirizza a producer.
         # Filtro specificità: il datasheet deve contenere brand o model nel testo per essere
@@ -418,107 +435,11 @@ async def _pipeline(request: FullAnalysisRequest):
                 except Exception:
                     continue
 
-        # Filtra URL con domini o path chiaramente non industriali prima di scaricare
-        def _is_industrial_url(url: str) -> bool:
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            domain = parsed.netloc.lower()
-            path = parsed.path.lower()
-            full = domain + path
-
-            # Domini non industriali
-            NON_INDUSTRIAL_DOMAINS = [
-                "ospedale", "hospital", "clinic", "sanit", "medic", "salute",
-                "infermier", "farmac", "bambin", "pediatr",
-                "universit", "scuola", "school", "college", "accadem", "istruzion",
-                "news", "giornale", "corriere", "gazzett", "notizie", "stampa",
-                "comune.", "provincia.", "regione.", "governo.", "pubblica-amminist",
-                "tribunale", "prefettura", "questura",
-            ]
-            if any(p in domain for p in NON_INDUSTRIAL_DOMAINS):
-                return False
-
-            # Attrezzatura per ufficio — non macchine da cantiere
-            # Controlla sia dominio che path dell'URL
-            OFFICE_EQUIPMENT = [
-                "ricoh", "canon", "epson", "brother", "xerox", "konica", "kyocera",
-                "streampunch", "laminator", "shredder", "binder", "binding",
-                "fellowes", "gbc.com", "acco.", "leitz", "rexel",
-                "printer", "copier", "scanner", "fax",
-            ]
-            if any(p in full for p in OFFICE_EQUIPMENT):
-                return False
-
-            # Cataloghi attrezzature/utensili — non manuali d'uso sicurezza
-            CATALOG_URL_SIGNALS = [
-                "tooling_catalog", "tooling-catalog", "tooling_guide",
-                "parts_catalog", "parts-catalog", "spare_parts",
-                "catalogo_ricambi", "catalogo_attrezzature", "catalogo_utensili",
-                "price_list", "listino_prezzi",
-                "depliant", "flyer", "leaflet",
-                "product-line", "product_line", "productline", "lineup", "line-up",
-                "tv-product", "range-overview", "portfolio",
-            ]
-            if any(p in path.replace(" ", "_").replace("%20", "_") for p in CATALOG_URL_SIGNALS):
-                return False
-
-            # Domini che producono solo cataloghi/listini
-            from app.services.search_service import _EXCLUDE_DOMAINS
-            if any(d in domain for d in _EXCLUDE_DOMAINS):
-                return False
-
-            # Regole dinamiche apprese dai feedback ispettori (cache 15 min)
-            try:
-                from app.services.feedback_analyzer_service import get_dynamic_rules
-                _dyn_domains, _dyn_fragments, _ = get_dynamic_rules()
-                if any(d in domain for d in _dyn_domains):
-                    return False
-                if any(f in path for f in _dyn_fragments):
-                    return False
-            except Exception:
-                pass
-
-            # URL segnalati dagli ispettori — blocco differenziato per tipo di segnalazione
-            try:
-                from app.services.saved_manuals_service import (
-                    get_blocked_urls, get_context_blocked_urls
-                )
-                # not_a_manual: non è un manuale → scarta sempre
-                if url in get_blocked_urls():
-                    return False
-                # wrong_category: manuale valido ma per altra categoria → scarta solo
-                # se la ricerca attuale è per lo stesso tipo macchina in cui è stato segnalato
-                if machine_type:
-                    mt_lower = machine_type.lower().strip()
-                    ctx_blocked = get_context_blocked_urls()
-                    if (url, mt_lower) in ctx_blocked:
-                        return False
-            except Exception:
-                pass
-
-            return True
-
-        producer_candidates = [c for c in producer_candidates if _is_industrial_url(c.url)]
-
-        # Filtra per titolo: scarta risultati il cui titolo contraddice il brand/modello cercato
-        def _title_is_plausible(candidate, brand: str, model: str) -> bool:
-            title = candidate.title.lower()
-            brand_l = brand.lower()
-            # Marchi palesemente estranei nel titolo → scarta (da DB config_lists:"office_brands_in_title")
-            from app.services.config_service import get_list as _get_list
-            _office_brands = _get_list("office_brands_in_title", {
-                "ricoh", "canon", "epson", "brother", "xerox", "konica", "kyocera",
-                "streampunch", "fellowes", "leitz", "rexel", "acco", "dymo",
-                "samsung", "lg", "sony", "philips", "siemens home",
-            })
-            if any(b in title for b in _office_brands):
-                # Ammetti solo se il titolo menziona anche il brand cercato
-                return brand_l in title
-            return True
-
-        producer_candidates = [
-            c for c in producer_candidates if _title_is_plausible(c, brand, model)
-        ]
+        # Filtra candidati produttore: rimuove URL non industriali e titoli contraddittori
+        from app.services.pipeline.producer_filter import filter_producer_candidates
+        producer_candidates = filter_producer_candidates(
+            producer_candidates, brand=brand, model=model, machine_type=machine_type
+        )
 
         # Selezione candidati produttore per tier di affidabilità:
         # Tier 1 (score >= 55): produttore ufficiale o portale noleggio con PDF
@@ -632,6 +553,10 @@ async def _pipeline(request: FullAnalysisRequest):
             else:
                 _brochure_note = None
                 best_score, producer_bytes, producer_url, _, producer_pages = best
+
+        # Libera i PDF scaricati ma non selezionati per ridurre memory pressure
+        del download_results
+        producer_scored = []
 
         # Classifica il PDF produttore selezionato: exact | category | unrelated
         if producer_bytes:
@@ -776,7 +701,7 @@ async def _pipeline(request: FullAnalysisRequest):
             parts_ok.append(f"INAIL ({pdf_service.count_pdf_pages(inail_bytes)} pag.)")
         if producer_bytes:
             n_tried = _producer_scored_count
-            safety_score = producer_scored[0][0] if producer_scored else 0
+            safety_score = best_score if best_score is not None else 0
             quality_label = "" if safety_score >= LOW_QUALITY_THRESHOLD else " ⚠ bassa pertinenza"
             match_label = "" if producer_match_type == "exact" else " ⚠ categoria simile"
             parts_ok.append(
@@ -814,6 +739,8 @@ async def _pipeline(request: FullAnalysisRequest):
         ))
 
     # ── STEP 3: Analisi Sicurezza ────────────────────────────────────────
+    if await _client_gone():
+        return
     has_both = inail_bytes and producer_bytes
     if has_both:
         match_note = "" if producer_match_type == "exact" else " (categoria simile)"
@@ -1015,7 +942,7 @@ async def analyze_full(request: Request, body: FullAnalysisRequest):
     Riceve brand e model già confermati/corretti dall'utente.
     """
     return StreamingResponse(
-        _pipeline(body),
+        _pipeline(body, http_request=request),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
