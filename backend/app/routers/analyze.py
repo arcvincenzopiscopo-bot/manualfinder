@@ -104,39 +104,48 @@ def _sse(event: SSEEvent) -> str:
 
 
 async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request] = None):
-    """Generatore SSE: search → download → analisi. OCR già fatto."""
+    """
+    Generatore SSE: search → download → analisi. OCR già fatto dal frontend.
+    Orchestratore snello: le fasi pesanti sono delegate a pipeline/search_phase.py
+    e pipeline/download_phase.py.
+    """
+    from app.services.pipeline.search_phase import (
+        compute_year_flags,
+        build_search_start_message,
+        run_search_phase,
+    )
+    from app.services.pipeline.download_phase import run_download_phase, DownloadPhaseResult
 
     async def _client_gone() -> bool:
         if http_request is None:
             return False
         return await http_request.is_disconnected()
 
+    # ── Parsing request ──────────────────────────────────────────────────
     brand = request.brand.strip()
     model = request.model.strip()
     if not brand and not model:
         yield _sse(SSEEvent(type="error", message="Brand e modello mancanti. Ripetere la scansione della targa."))
         return
+
     machine_type = request.machine_type.strip() if request.machine_type else None
     machine_type_id: Optional[int] = getattr(request, "machine_type_id", None)
     machine_year = request.year.strip() if getattr(request, "year", None) else None
     serial_number = getattr(request, "serial_number", None) or None
     norme = getattr(request, "norme", None) or []
+
     # Risolve qr_urls: usa lista nuova se disponibile, altrimenti fallback su singolo qr_url
     _qr_urls_raw: list[str] = list(getattr(request, "qr_urls", None) or [])
     _qr_legacy = getattr(request, "qr_url", None)
     if not _qr_urls_raw and _qr_legacy:
         _qr_urls_raw = [_qr_legacy]
     qr_urls = _filter_qr_urls(_qr_urls_raw)
-    qr_url = qr_urls[0] if qr_urls else None  # backward compat per messaggi SSE
+    qr_url = qr_urls[0] if qr_urls else None
 
-    # ── PRE-CHECK: Manuale INAIL locale ──────────────────────────────────
+    # ── PRE-CHECK: Manuale INAIL locale ─────────────────────────────────
     # Verifica prima della ricerca se esiste un manuale INAIL locale per questo tipo
     # macchina. Se sì, la ricerca INAIL online (livelli 1-2) viene saltata.
-    from app.services.local_manuals_service import (
-        find_local_manual as _find_local_manual,
-        find_similar_category_local_manuals as _find_similar_cat,
-        PDF_MANUALS_DIR as _PDF_MANUALS_DIR,
-    )
+    from app.services.local_manuals_service import find_local_manual as _find_local_manual
     _local_inail: Optional[dict] = None
     if machine_type or machine_type_id:
         try:
@@ -148,590 +157,72 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
             _local_inail = None
     has_local_inail: bool = _local_inail is not None
 
-    # ── STEP 1: Ricerca Manuale ──────────────────────────────────────────
+    # ── STEP 1: Ricerca ──────────────────────────────────────────────────
     if await _client_gone():
         return
-    search_msg = f"Ricerca manuale per {brand} {model}"
-    if machine_type:
-        search_msg += f" (tipo: {machine_type})"
-    is_ante_ce = False
-    is_allegato_v = False  # Macchine ante-1996: Allegato V D.Lgs. 81/08
-    if machine_year:
-        try:
-            year_int = int(machine_year)
-            # Marcatura CE obbligatoria dal 21/09/1996 (DPR 459/96 — recepimento Dir. 89/392/CEE)
-            # Direttiva Macchine aggiornata: 98/37/CE (1998) → 2006/42/CE (29/12/2009)
-            is_allegato_v = year_int < 1996  # Prima della prima Direttiva Macchine — nessuna CE
-            is_ante_ce = 1996 <= year_int < 2006  # CE presente ma sotto vecchia direttiva 98/37/CE
-            search_msg += f", anno {machine_year}"
-            if is_allegato_v:
-                search_msg += " ⚠ Allegato V D.Lgs.81"
-            elif is_ante_ce:
-                search_msg += " ⚠ Dir. 98/37/CE (ante 2006/42/CE)"
-        except (ValueError, TypeError):
-            pass
-    search_msg += "..."
 
+    is_ante_ce, is_allegato_v = compute_year_flags(machine_year)
     yield _sse(SSEEvent(
         step="search", status="started", progress=10,
-        message=search_msg,
+        message=build_search_start_message(brand, model, machine_type, machine_year, is_ante_ce, is_allegato_v),
     ))
     await asyncio.sleep(0)
 
-    # Timeout differenziati: ricerca manuale lenta (120s), safety alerts breve (30s).
-    # Eseguiamo i due task con timeout individuali così uno slow brand non blocca tutto.
-    _log = __import__("logging").getLogger(__name__)
-
-    async def _search_with_timeout():
-        try:
-            results, warnings = await asyncio.wait_for(
-                search_service.search_manual(
-                    brand=brand,
-                    model=model,
-                    machine_type=machine_type,
-                    lang=request.preferred_language,
-                    machine_year=machine_year,
-                    serial_number=serial_number,
-                    machine_type_id=machine_type_id,
-                    has_local_inail=has_local_inail,
-                ),
-                timeout=120,
-            )
-            return results, warnings
-        except asyncio.TimeoutError:
-            _log.warning("search_manual timeout (120s) per %s %s", brand, model)
-            return [], ["⏱ Timeout ricerca (120s): il provider di ricerca non ha risposto in tempo."]
-        except Exception as e:
-            _log.warning("search_manual errore per %s %s: %s", brand, model, e)
-            return [], [f"❌ Errore ricerca: {e}"]
-
-    async def _alerts_with_timeout():
-        try:
-            return await asyncio.wait_for(
-                safety_gate_service.check_safety_alerts(brand, model),
-                timeout=30,
-            )
-        except asyncio.TimeoutError:
-            _log.warning("check_safety_alerts timeout (30s) per %s %s", brand, model)
-            return []
-        except Exception:
-            return []
-
-    (search_results, search_warnings), safety_alerts = await asyncio.gather(
-        _search_with_timeout(),
-        _alerts_with_timeout(),
+    sr = await run_search_phase(
+        brand=brand, model=model,
+        machine_type=machine_type, machine_type_id=machine_type_id,
+        machine_year=machine_year, serial_number=serial_number,
+        preferred_language=request.preferred_language,
+        has_local_inail=has_local_inail,
+        qr_url=qr_url,
     )
-
-    pdf_candidates = [r for r in search_results if r.is_pdf]
-
-    # `local_manual_found`: True se abbiamo il manuale locale (pre-check o nei risultati)
-    local_manual_found = has_local_inail or any(
-        r.source_type == "inail" and "Locale" in r.title for r in search_results
-    )
-
-    search_message = f"Trovati {len(search_results)} risultati ({len(pdf_candidates)} PDF)."
-    if qr_url:
-        search_message = f"QR Code rilevato sulla targa — link diretto al manuale. " + search_message
-    if has_local_inail:
-        search_message = (
-            f"Manuale INAIL locale disponibile per '{machine_type}' — ricerca INAIL online saltata. "
-            + search_message
-        )
-
-    # Prepara alert Safety Gate da includere nel payload
-    safety_alerts_data = [a.to_dict() for a in safety_alerts] if safety_alerts else []
-    if safety_alerts:
-        serious = [a for a in safety_alerts if a.risk_level == "serious"]
-        alert_msg = f" ⚠ ATTENZIONE: {len(safety_alerts)} avviso/i Safety Gate EU"
-        if serious:
-            alert_msg = f" 🚨 ALERT: {len(serious)} avviso GRAVE Safety Gate EU per {brand} {model}!"
-        search_message += alert_msg
 
     yield _sse(SSEEvent(
         step="search", status="completed", progress=35,
-        message=search_message if search_results else "Nessun manuale trovato online. Procedo con analisi AI.",
+        message=sr.search_message if sr.search_results else "Nessun manuale trovato online. Procedo con analisi AI.",
         data={
-            "results": [r.model_dump() for r in search_results[:5]],
-            "found": bool(search_results),
-            "local_manual": local_manual_found,
-            "safety_alerts": safety_alerts_data,
-            "debug_warnings": search_warnings,  # Lista warning visibili in UI per debug admin
+            "results": [r.model_dump() for r in sr.search_results[:5]],
+            "found": bool(sr.search_results),
+            "local_manual": sr.local_manual_found,
+            "safety_alerts": sr.safety_alerts_data,
+            "debug_warnings": sr.search_warnings,
         },
     ))
 
     # ── STEP 2: Download PDF ─────────────────────────────────────────────
     if await _client_gone():
         return
-    # (lo scraping HTML è ora dentro search_manual — i pdf_candidates già includono
-    #  i PDF trovati per scraping di produttore e pagine HTML)
 
-    # Se i QR Code sulla targa puntano direttamente a manuali, aggiungili come candidati prioritari
-    if qr_urls:
-        from app.models.responses import ManualSearchResult as MSR
-        for i, qu in enumerate(qr_urls):
-            qr_candidate = MSR(
-                url=qu,
-                title=f"Manuale da QR Code — {brand} {model}",
-                source_type="manufacturer",
-                language="unknown",
-                is_pdf=qu.lower().endswith(".pdf"),
-                relevance_score=95 - i,  # Alta priorità; primo QR > secondo
-            )
-            pdf_candidates.insert(i, qr_candidate)
-
-    # Domini che ospitano schede normative/INAIL — ora in DB (config_lists:"inail_mirror_domains")
-    from app.services.config_service import get_domains as _get_domains
-    _FB_INAIL_MIRROR = {
-        "necsi.it", "aliseo", "ispesl.it", "dors.it",
-        "salute.gov.it", "lavoro.gov.it", "inail.it",
-        "ausl.", "asl.", "spresal", "spisal",
-        "portaleagenti.it", "sicurezzaentipubblici",
-        "formediltorinofsc.it", "puntosicuro.it", "suva.ch",
-    }
-    _inail_mirror_domains = _get_domains("inail_mirror") or _FB_INAIL_MIRROR
-
-    def _is_inail_mirror(url: str) -> bool:
-        from urllib.parse import urlparse
-        full = (urlparse(url).netloc + urlparse(url).path).lower()
-        return any(d in full for d in _inail_mirror_domains)
-
-    # Separa candidati: INAIL locale/mirror vs supplemental (3ª fonte) vs datasheet vs produttore
-    # I risultati "supplemental" (fonti istituzionali equiv. quando abbiamo già local INAIL)
-    # vengono trattati separatamente per deduplicazione rispetto al locale.
-    from app.models.responses import ManualSearchResult as _MSR
-    supplemental_candidates = [r for r in pdf_candidates if r.source_type == "supplemental"]
-    inail_candidates = [r for r in pdf_candidates
-                        if r.source_type == "inail" or _is_inail_mirror(r.url)]
-    datasheet_candidates = [r for r in pdf_candidates
-                            if r.source_type == "datasheet" and not _is_inail_mirror(r.url)]
-    producer_candidates = [r for r in pdf_candidates
-                           if r.source_type not in ("inail", "datasheet", "supplemental")
-                           and not _is_inail_mirror(r.url)]
-
-    # Se abbiamo il manuale INAIL locale, iniettalo come primo candidato INAIL.
-    # Viene prima di qualsiasi altro per garantire priorità assoluta nel download.
-    if has_local_inail and _local_inail:
-        _local_url = f"/manuals/local/{_local_inail['filename']}"
-        _local_result = _MSR(
-            url=_local_url,
-            title=f"{_local_inail['title']} (INAIL - Locale)",
-            source_type="inail",
-            language="it",
-            is_pdf=True,
-            relevance_score=100,
-        )
-        inail_candidates.insert(0, _local_result)
-
-    inail_bytes = None
-    inail_url = None
-    supplemental_bytes = None
-    supplemental_url = None
-    datasheet_bytes = None
-    datasheet_url = None
-    producer_bytes = None
-    producer_url = None
-    producer_pages = 0
-    producer_match_type = "unknown"
-    producer_source_label = f"Produttore ({brand})"
-    _brochure_note = None
-    _producer_scored_count = 0
-    _similar_category_used = False  # Flag: usato fallback categoria simile locale
-    producer_scored: list = []      # Risultati scored del download produttore (init safe)
-    best_score: int | None = None
-
-    if pdf_candidates or (has_local_inail and _local_inail):
-        download_parts = []
-        if inail_candidates:
-            download_parts.append("scheda INAIL")
-        if producer_candidates:
-            download_parts.append("manuale produttore")
-
+    if sr.pdf_candidates or (has_local_inail and _local_inail):
+        # Messaggio "started": stima veloce i tipi di fonte disponibili
+        _dl_parts: list[str] = []
+        if has_local_inail or any(r.source_type == "inail" for r in sr.pdf_candidates):
+            _dl_parts.append("scheda INAIL")
+        if any(r.source_type not in ("inail", "datasheet", "supplemental") for r in sr.pdf_candidates):
+            _dl_parts.append("manuale produttore")
         yield _sse(SSEEvent(
             step="download", status="started", progress=40,
-            message=f"Download {' + '.join(download_parts)} in corso...",
+            message=f"Download {' + '.join(_dl_parts)} in corso..." if _dl_parts else "Download PDF in corso...",
         ))
 
-        # Scarica scheda INAIL — prova fino a 3 candidati in parallelo, scegli il più pertinente
-        async def _download_inail(candidate):
-            pdf_data, _ = await pdf_service.download_pdf(candidate.url)
-            if pdf_data:
-                score = pdf_service.score_pdf_safety_relevance(
-                    pdf_data, brand=brand, model=model,
-                    machine_type=machine_type or "", machine_type_id=machine_type_id,
-                )
-                return (score, pdf_data, candidate.url)
-            return None
-
-        inail_downloads = await asyncio.gather(
-            *[_download_inail(c) for c in inail_candidates[:3]], return_exceptions=True
+        dr = await run_download_phase(
+            brand=brand, model=model,
+            machine_type=machine_type, machine_type_id=machine_type_id,
+            pdf_candidates=sr.pdf_candidates,
+            qr_urls=qr_urls,
+            has_local_inail=has_local_inail,
+            local_inail=_local_inail,
+            analysis_provider=settings.get_analysis_provider(),
         )
-        inail_scored = sorted(
-            [r for r in inail_downloads if isinstance(r, tuple)],
-            key=lambda x: x[0], reverse=True
-        )
-        if inail_scored:
-            INAIL_MIN_SCORE = 5
-            # Passo 1: priorità assoluta ai PDF locali (/manuals/local/).
-            # Schede INAIL preapprovate dall'admin: si usano sempre, nessun controllo
-            # score/classify (sono scansionate, generiche di categoria, il brand/model
-            # non ci sarà mai). Regola esplicita dell'utente.
-            for inail_entry in inail_scored:
-                _iscore, _ibytes, _iurl = inail_entry
-                if _iurl.startswith("/manuals/local/"):
-                    inail_bytes, inail_url = _ibytes, _iurl
-                    break
-            # Passo 2: nessun locale → usa il miglior PDF online non-unrelated
-            if inail_bytes is None:
-                for inail_entry in inail_scored:
-                    _iscore, _ibytes, _iurl = inail_entry
-                    if _iscore < INAIL_MIN_SCORE:
-                        continue
-                    if _iurl.startswith("/manuals/local/"):
-                        continue  # già tentato nel passo 1
-                    if machine_type:
-                        _imatch = pdf_service.classify_pdf_match(
-                            _ibytes, brand, model, machine_type, machine_type_id=machine_type_id,
-                        )
-                        if _imatch == "unrelated":
-                            continue
-                    inail_bytes, inail_url = _ibytes, _iurl
-                    break
-
-        if has_local_inail and inail_bytes is None:
-            has_local_inail = False
-            _log.warning("INAIL locale non trovato dopo pre-check (filesystem efimero?) — fallback ricerca online")
-
-        # Scarica scheda tecnica commerciale (datasheet) — usata solo per limiti_operativi
-        # Soglia pagine: <= 20 = datasheet breve. Se più lungo → reindirizza a producer.
-        # Filtro specificità: il datasheet deve contenere brand o model nel testo per essere
-        # accettato — evitiamo dati di limiti operativi di macchine diverse.
-        DATASHEET_MAX_PAGES = 20
-        if datasheet_candidates:
-            for ds_candidate in datasheet_candidates[:2]:
-                try:
-                    ok, _ = await pdf_service.head_check_url(ds_candidate.url)
-                    if not ok:
-                        continue
-                    ds_data, _ = await pdf_service.download_pdf(ds_candidate.url)
-                    if not ds_data:
-                        continue
-                    ds_pages = pdf_service.count_pdf_pages(ds_data)
-                    if ds_pages > DATASHEET_MAX_PAGES:
-                        # Documento troppo lungo: reindirizza al percorso manuale
-                        if not producer_bytes:
-                            producer_bytes = ds_data
-                            producer_url = ds_candidate.url
-                            producer_pages = ds_pages
-                    else:
-                        # Verifica specificità: brand o model nel testo del datasheet
-                        _ds_text = pdf_service.extract_full_text(ds_data)[:8000].lower()
-                        _brand_in_ds = brand.lower() in _ds_text
-                        _model_in_ds = model.lower() in _ds_text
-                        if _brand_in_ds or _model_in_ds:
-                            datasheet_bytes = ds_data
-                            datasheet_url = ds_candidate.url
-                        # Se non specifico: scartiamo silenziosamente (non usiamo dati di altre macchine)
-                    break
-                except Exception:
-                    continue
-
-        # Filtra candidati produttore: rimuove URL non industriali e titoli contraddittori
-        from app.services.pipeline.producer_filter import filter_producer_candidates
-        producer_candidates = filter_producer_candidates(
-            producer_candidates, brand=brand, model=model, machine_type=machine_type
-        )
-
-        # Selezione candidati produttore per tier di affidabilità:
-        # Tier 1 (score >= 55): produttore ufficiale o portale noleggio con PDF
-        # Tier 2 (score 25–54): aggregatori e web con PDF
-        # Scarica prima il tier 1, poi tier 2 solo se tier 1 non basta
-        tier1 = [c for c in producer_candidates if c.relevance_score >= 55]
-        tier2 = [c for c in producer_candidates if c.relevance_score < 55]
-        ordered_candidates = (tier1 + tier2)[:5]
-
-        _analysis_provider = settings.get_analysis_provider()
-
-        async def _download_and_score(candidate):
-            # Pre-screening HEAD: evita di scaricare pagine HTML o file troppo grandi
-            import logging as _log
-            ok, reason = await pdf_service.head_check_url(candidate.url)
-            if not ok:
-                _log.getLogger(__name__).info("HEAD skip: %s — %s", candidate.url[:80], reason)
-                return None
-            pdf_data, err = await pdf_service.download_pdf(candidate.url)
-            if pdf_data:
-                pages = pdf_service.count_pdf_pages(pdf_data)
-                score = pdf_service.score_pdf_safety_relevance(
-                    pdf_data, brand=brand, model=model,
-                    machine_type=machine_type or "",
-                    machine_type_id=machine_type_id,
-                )
-                # Validazione AI per casi ambigui: score basso su PDF di dimensione media
-                # (troppo corto per sicuri, ma non chiaramente una brochure)
-                if 5 <= score <= 30 and pages < 25 and _analysis_provider in ("anthropic", "gemini"):
-                    is_manual = await pdf_service.ai_quick_validate(
-                        pdf_data, brand, model, machine_type or "", _analysis_provider
-                    )
-                    if not is_manual:
-                        score = 0  # Forza rifiuto — l'AI ha confermato non-manuale
-                return (score, pdf_data, candidate.url, candidate.relevance_score, pages)
-            _log.getLogger(__name__).info("PDF download failed: %s — %s", candidate.url[:80], err)
-            return None
-
-        download_tasks = [_download_and_score(c) for c in ordered_candidates]
-        download_results = await asyncio.gather(*download_tasks)
-        producer_scored: list[tuple[int, bytes, str, int, int]] = [r for r in download_results if r is not None]
-        _producer_scored_count = len(producer_scored)  # conta prima degli scarti
-
-        # Soglie qualità:
-        # Un PDF viene accettato se:
-        #   A) Ha testo estraibile (score > 0) ed è abbastanza lungo (>= 8 pag.)
-        #   B) È molto lungo (>= 30 pag.) anche con score 0 — probabilmente scansionato
-        #      ma comunque un documento reale, non una brochure da 2 pagine
-        #   C) È corto ma con score di sicurezza molto alto (>= 40) — spec sheet con
-        #      sezioni sicurezza esplicite
-        # Viene scartato SOLO se è corto E non ha contenuto sicurezza rilevante.
-        LOW_QUALITY_THRESHOLD = 8   # score minimo per PDF corti (< 30 pag.)
-        MIN_MANUAL_PAGES = 5        # sotto questa soglia serve score >= 40; schede tecniche 5-7pp già validate dall'AI ora accettate
-        SCANNED_PAGES_THRESHOLD = 30  # PDF lungo anche senza testo → probabilmente scansionato
-
-        if producer_scored:
-            # Sort combinato: content score (70%) + autorità fonte dalla ricerca (30%).
-            producer_scored.sort(
-                key=lambda x: x[0] * 0.7 + x[3] * 0.3,
-                reverse=True
-            )
-
-            best = None
-            rejection_reasons = []
-            # Set URL dei manuali DB (preapprovati dall'admin): bypassano il quality
-            # threshold e hanno priorità assoluta sui risultati web, anche con score
-            # più basso. Sono stati verificati a mano dall'admin: se presenti, si usano.
-            _db_urls = {
-                c.url for c in ordered_candidates if c.title.startswith("[DB]")
-            }
-            # Pass 1: priorità assoluta ai manuali DB preapprovati.
-            _db_entries = [e for e in producer_scored if e[2] in _db_urls]
-            if _db_entries:
-                # Preferisci specifico (brand+model in titolo) vs categoria
-                def _db_priority(entry):
-                    url = entry[2]
-                    cand = next((c for c in ordered_candidates if c.url == url), None)
-                    if cand is None:
-                        return 0
-                    title = cand.title.lower()
-                    specific = brand.lower() in title and model.lower() in title
-                    return (2 if specific else 1, entry[0])
-                _db_entries.sort(key=_db_priority, reverse=True)
-                best = _db_entries[0]
-            for entry in (producer_scored if best is None else []):
-                score, pdf_data, url, rel_score, pages = entry
-                short_url = url[-60:]
-                # Accetta PDF lunghi anche se scansionati (score=0): sono documenti reali
-                if pages >= SCANNED_PAGES_THRESHOLD:
-                    best = entry
-                    break
-                # Accetta PDF con testo e abbastanza pagine
-                if pages >= MIN_MANUAL_PAGES and score >= LOW_QUALITY_THRESHOLD:
-                    best = entry
-                    break
-                # Accetta PDF corti ma con alto contenuto sicurezza
-                if pages < MIN_MANUAL_PAGES and score >= 40:
-                    best = entry
-                    break
-                rejection_reasons.append(f"{pages}pp score={score} ({short_url})")
-
-            if best is None:
-                best_pages = producer_scored[0][4]
-                best_score_val = producer_scored[0][0]
-                reasons_str = "; ".join(rejection_reasons[:3])
-                producer_scored = []  # forza fallback AI
-                _brochure_note = (
-                    f"PDF scartato: {best_pages} pag., score {best_score_val}/100 "
-                    f"(brochure/datasheet). Dettagli: {reasons_str}. Procedo con analisi AI."
-                )
-            else:
-                _brochure_note = None
-                best_score, producer_bytes, producer_url, _, producer_pages = best
-
-        # Libera i PDF scaricati ma non selezionati per ridurre memory pressure
-        del download_results
-        producer_scored = []
-
-        # Classifica il PDF produttore selezionato: exact | category | unrelated
-        if producer_bytes:
-            # Riconosci risultati dal DB Supabase (titolo inizia con "[DB]")
-            _producer_from_db = producer_url and any(
-                c.url == producer_url and c.title.startswith("[DB]")
-                for c in ordered_candidates
-            )
-            if _producer_from_db:
-                # Manuali DB verificati da ispettori: skip classify, label dedicata.
-                # Distingue tra:
-                #   - Manuale specifico: brand+model combaciano con quelli cercati
-                #   - Manuale di categoria: brand/model GENERICO o diversi da quelli cercati
-                _db_candidate = next(
-                    (c for c in ordered_candidates if c.url == producer_url and c.title.startswith("[DB]")),
-                    None,
-                )
-                _is_db_generic = _db_candidate and "generico" in _db_candidate.title.lower()
-                _db_title_lower = (_db_candidate.title.lower() if _db_candidate else "")
-                _brand_in_title = brand.lower() in _db_title_lower
-                _model_in_title = model.lower() in _db_title_lower
-                _is_db_exact_match = _brand_in_title and _model_in_title
-
-                if _is_db_generic:
-                    producer_source_label = f"Manuale DB — categoria {machine_type or 'macchina'}"
-                    producer_match_type = "category"
-                elif _is_db_exact_match:
-                    producer_source_label = f"Manuale DB {brand} {model}"
-                    producer_match_type = "exact"
-                else:
-                    producer_source_label = f"Manuale DB categoria simile ({machine_type or 'macchina'})"
-                    producer_match_type = "category"
-            else:
-                producer_match_type = pdf_service.classify_pdf_match(
-                    producer_bytes, brand, model, machine_type or "",
-                    machine_type_id=machine_type_id,
-                )
-                if producer_match_type == "category":
-                    producer_source_label = f"Manuale categoria simile ({machine_type or 'macchina'})"
-                elif producer_match_type == "unrelated":
-                    producer_bytes = None
-                    producer_source_label = "AI"
-                    _brochure_note = (
-                        f"PDF scartato: non pertinente per {machine_type or brand} "
-                        "(documento di categoria diversa). Procedo con analisi AI."
-                    )
-
-        # Deduplica: se il PDF produttore è lo stesso documento dell'INAIL (mirror),
-        # non ha senso analizzarlo due volte — meglio fallback AI per le raccomandazioni
-        if producer_bytes and inail_bytes:
-            if pdf_service.are_pdfs_same_content(producer_bytes, inail_bytes):
-                producer_bytes = None
-                producer_source_label = "AI"
-                _brochure_note = (
-                    "Manuale produttore identico alla scheda INAIL — "
-                    "raccomandazioni specifiche generate da conoscenza AI."
-                )
-
-        # ── FALLBACK CATEGORIA SIMILE (solo se abbiamo local INAIL e nessun produttore) ──
-        # Se abbiamo il manuale INAIL locale ma non siamo riusciti a trovare/scaricare
-        # il manuale specifico del produttore, cerchiamo manuali di categoria simile in locale.
-        # Algoritmo: score safety → confronto AI tra top-2 → seleziona il migliore.
-        if has_local_inail and producer_bytes is None and _local_inail:
-            try:
-                _similar_candidates = _find_similar_cat(
-                    machine_type=machine_type or "",
-                    machine_type_id=machine_type_id,
-                    exclude_filename=_local_inail.get("filename"),
-                )
-                if _similar_candidates:
-                    # Step A: score safety relevance per ogni candidato
-                    _scored_sim: list[tuple[int, bytes, dict]] = []
-                    for _sc in _similar_candidates:
-                        try:
-                            _sc_bytes = (_PDF_MANUALS_DIR / _sc["filename"]).read_bytes()
-                            _sc_score = pdf_service.score_pdf_safety_relevance(
-                                _sc_bytes, brand=brand, model=model,
-                                machine_type=machine_type or "",
-                                machine_type_id=machine_type_id,
-                            )
-                            _scored_sim.append((_sc_score, _sc_bytes, _sc))
-                        except Exception:
-                            continue
-                    if _scored_sim:
-                        _scored_sim.sort(key=lambda x: x[0], reverse=True)
-                        # Step B: confronto AI se 2+ candidati
-                        if len(_scored_sim) >= 2:
-                            _best_idx = await pdf_service.ai_compare_manuals(
-                                _scored_sim[0][1], _scored_sim[1][1],
-                                machine_type or "", _analysis_provider,
-                            )
-                            _winner = _scored_sim[_best_idx]
-                        else:
-                            _winner = _scored_sim[0]
-                        _w_score, producer_bytes, _w_cand = _winner
-                        producer_url = f"/manuals/local/{_w_cand['filename']}"
-                        producer_source_label = f"Manuale categoria ({machine_type or 'macchina'})"
-                        producer_match_type = "category"
-                        producer_pages = pdf_service.count_pdf_pages(producer_bytes)
-                        _similar_category_used = True
-                        _brochure_note = None
-            except Exception as _sim_err:
-                _log.warning("Ricerca categoria simile fallita: %s", _sim_err)
-
-        # ── SUPPLEMENTAL (3ª fonte istituzionale) — solo se abbiamo local INAIL ──
-        # Scarica il miglior candidato supplemental e verifica non sia duplicato del locale.
-        if has_local_inail and supplemental_candidates and inail_bytes:
-            for _supp_cand in supplemental_candidates[:2]:
-                try:
-                    _supp_data, _ = await pdf_service.download_pdf(_supp_cand.url)
-                    if not _supp_data:
-                        continue
-                    # Scarta se contenuto identico al manuale INAIL locale già usato
-                    if pdf_service.are_pdfs_same_content(_supp_data, inail_bytes):
-                        continue
-                    # Verifica categoria pertinente (non unrelated)
-                    if machine_type:
-                        _supp_match = pdf_service.classify_pdf_match(
-                            _supp_data, brand, model, machine_type, machine_type_id=machine_type_id,
-                        )
-                        if _supp_match == "unrelated":
-                            continue
-                    supplemental_bytes = _supp_data
-                    supplemental_url = _supp_cand.url
-                    break
-                except Exception:
-                    continue
-
-        # Determina label della fonte supplementale per messaggi e analisi
-        _supplemental_label: Optional[str] = None
-        if supplemental_url:
-            from urllib.parse import urlparse as _urlparse
-            _supp_domain = _urlparse(supplemental_url).netloc.lower()
-            for _known in ("suva.ch", "cpt.", "formedil", "euosha", "eu-osha", "ucimu", "enama"):
-                if _known in _supp_domain:
-                    _supplemental_label = _known.upper().split(".")[0].replace("-", "")
-                    break
-            _supplemental_label = _supplemental_label or "Fonte istituzionale"
-
-        parts_ok = []
-        if inail_bytes:
-            parts_ok.append(f"INAIL ({pdf_service.count_pdf_pages(inail_bytes)} pag.)")
-        if producer_bytes:
-            n_tried = _producer_scored_count
-            safety_score = best_score if best_score is not None else 0
-            quality_label = "" if safety_score >= LOW_QUALITY_THRESHOLD else " ⚠ bassa pertinenza"
-            match_label = "" if producer_match_type == "exact" else " ⚠ categoria simile"
-            parts_ok.append(
-                f"produttore ({producer_pages} pag., "
-                f"selezionato tra {n_tried} — sicurezza: {safety_score}/100{quality_label}{match_label})"
-            )
-        if supplemental_bytes:
-            parts_ok.append(f"3ª fonte istituzionale ({_supplemental_label or 'supplemental'}, {pdf_service.count_pdf_pages(supplemental_bytes)} pag.)")
-
-        n_pdf_found = len(pdf_candidates)
-        n_downloaded = _producer_scored_count + (1 if inail_bytes else 0)
-
-        if not parts_ok and _brochure_note:
-            dl_msg = _brochure_note
-        elif parts_ok:
-            dl_msg = f"Scaricati: {', '.join(parts_ok)}."
-        elif n_pdf_found > 0 and n_downloaded == 0:
-            dl_msg = f"Trovati {n_pdf_found} PDF ma nessuno scaricabile (timeout o accesso negato). Procedo con analisi AI."
-        elif n_pdf_found > 0 and n_downloaded > 0:
-            dl_msg = f"Trovati {n_pdf_found} PDF, {n_downloaded} scaricati ma tutti scartati (score troppo basso o non pertinenti). Procedo con analisi AI."
-        else:
-            dl_msg = "Nessun PDF trovato nella ricerca. Procedo con analisi AI."
 
         yield _sse(SSEEvent(
             step="download", status="completed", progress=60,
-            message=dl_msg,
-            data={"inail_url": inail_url, "producer_url": producer_url,
-                  "producer_pages": producer_pages},
+            message=dr.dl_message,
+            data={"inail_url": dr.inail_url, "producer_url": dr.producer_url,
+                  "producer_pages": dr.producer_pages},
         ))
     else:
+        dr = DownloadPhaseResult()
         yield _sse(SSEEvent(
             step="download", status="completed", progress=60,
             message="Nessun PDF disponibile. Analisi basata su conoscenza AI.",
@@ -741,39 +232,40 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
     # ── STEP 3: Analisi Sicurezza ────────────────────────────────────────
     if await _client_gone():
         return
-    has_both = inail_bytes and producer_bytes
-    if has_both:
-        match_note = "" if producer_match_type == "exact" else " (categoria simile)"
-        msg = f"Analisi combinata INAIL + manuale produttore{match_note}..."
-    elif inail_bytes:
-        msg = f"Analisi scheda INAIL ({pdf_service.count_pdf_pages(inail_bytes)} pag.)..."
-    elif producer_bytes:
-        match_note = "" if producer_match_type == "exact" else " (categoria simile)"
-        msg = f"Analisi manuale produttore{match_note} ({producer_pages} pag.)..."
-    else:
-        msg = "Generazione scheda sicurezza dalla conoscenza AI..."
 
-    yield _sse(SSEEvent(step="analysis", status="started", progress=65, message=msg))
+    has_both = dr.inail_bytes and dr.producer_bytes
+    if has_both:
+        match_note = "" if dr.producer_match_type == "exact" else " (categoria simile)"
+        analysis_msg = f"Analisi combinata INAIL + manuale produttore{match_note}..."
+    elif dr.inail_bytes:
+        analysis_msg = f"Analisi scheda INAIL ({pdf_service.count_pdf_pages(dr.inail_bytes)} pag.)..."
+    elif dr.producer_bytes:
+        match_note = "" if dr.producer_match_type == "exact" else " (categoria simile)"
+        analysis_msg = f"Analisi manuale produttore{match_note} ({dr.producer_pages} pag.)..."
+    else:
+        analysis_msg = "Generazione scheda sicurezza dalla conoscenza AI..."
+
+    yield _sse(SSEEvent(step="analysis", status="started", progress=65, message=analysis_msg))
 
     try:
         safety_card = await analysis_service.generate_safety_card(
             brand=brand, model=model,
-            inail_bytes=inail_bytes, inail_url=inail_url,
-            producer_bytes=producer_bytes, producer_url=producer_url,
-            producer_page_count=producer_pages,
-            datasheet_bytes=datasheet_bytes, datasheet_url=datasheet_url,
+            inail_bytes=dr.inail_bytes, inail_url=dr.inail_url,
+            producer_bytes=dr.producer_bytes, producer_url=dr.producer_url,
+            producer_page_count=dr.producer_pages,
+            datasheet_bytes=dr.datasheet_bytes, datasheet_url=dr.datasheet_url,
             machine_year=machine_year,
             machine_type=machine_type,
             machine_type_id=machine_type_id,
             is_ante_ce=is_ante_ce,
             is_allegato_v=is_allegato_v,
             norme=norme,
-            producer_source_label=producer_source_label,
+            producer_source_label=dr.producer_source_label,
             workplace_context=getattr(request, "workplace_context", None),
-            similar_category_local=_similar_category_used,
-            supplemental_bytes=supplemental_bytes,
-            supplemental_url=supplemental_url,
-            supplemental_label=_supplemental_label,
+            similar_category_local=dr.similar_category_used,
+            supplemental_bytes=dr.supplemental_bytes,
+            supplemental_url=dr.supplemental_url,
+            supplemental_label=dr.supplemental_label,
         )
     except Exception as e:
         yield _sse(SSEEvent(
@@ -783,8 +275,8 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
         return
 
     # Aggiungi alert Safety Gate alla scheda
-    if safety_alerts_data:
-        safety_card.safety_alerts = safety_alerts_data
+    if sr.safety_alerts_data:
+        safety_card.safety_alerts = sr.safety_alerts_data
 
     # ── Inietta vita utile e hazard intelligence dal catalogo machine_types ──
     if machine_type_id:
@@ -798,42 +290,36 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
             safety_card.focus_rischi_categoria = _hazard.get("focus_testo")
             safety_card.categoria_inail = _hazard.get("categoria_inail")
 
-    # ── Quality logging (non-blocking, non solleva eccezioni) ─────────────
+    # ── Quality logging (non-blocking) ────────────────────────────────────
     quality_service.log_analysis(
         brand=brand, model=model, machine_type=machine_type,
         safety_card=safety_card,
-        producer_match_type=producer_match_type,
-        producer_pages=producer_pages,
-        inail_url=inail_url,
-        producer_url=producer_url,
+        producer_match_type=dr.producer_match_type,
+        producer_pages=dr.producer_pages,
+        inail_url=dr.inail_url,
+        producer_url=dr.producer_url,
     )
 
-    # ── Scan log: storico letture targa per batch e analytics ──────────────
+    # ── Scan log ─────────────────────────────────────────────────────────
     from app.services import scan_log_service
     _scan_id = scan_log_service.log_scan(
         brand=brand, model=model,
-        machine_type=machine_type,
-        machine_type_id=machine_type_id,
-        serial_number=serial_number,
-        machine_year=machine_year,
-        norme=norme,
-        qr_urls=qr_urls,
-        inail_url=inail_url,
-        producer_url=producer_url,
-        producer_pages=producer_pages,
+        machine_type=machine_type, machine_type_id=machine_type_id,
+        serial_number=serial_number, machine_year=machine_year,
+        norme=norme, qr_urls=qr_urls,
+        inail_url=dr.inail_url, producer_url=dr.producer_url,
+        producer_pages=dr.producer_pages,
         fonte_tipo=getattr(safety_card, "fonte_tipo", None),
-        is_ante_ce=is_ante_ce,
-        is_allegato_v=is_allegato_v,
-        safety_alerts_count=len(safety_alerts_data),
+        is_ante_ce=is_ante_ce, is_allegato_v=is_allegato_v,
+        safety_alerts_count=len(sr.safety_alerts_data),
         session_id=getattr(request, "session_id", None),
     )
-    # Salva foto etichetta compressa (max 800px JPEG q=65, ~60-100KB, conservata 30gg)
     if _scan_id and request.image_base64:
         scan_log_service.store_scan_image(_scan_id, request.image_base64)
 
     yield _sse(SSEEvent(step="analysis", status="completed", progress=90, message="Scheda generata."))
 
-    # ── COMPLETE ──────────────────────��──────────────────────────────────
+    # ── COMPLETE ──────────────────────────────────────────────────────────
     yield _sse(SSEEvent(
         step="complete", status="completed", progress=100,
         message="Analisi completata.",
