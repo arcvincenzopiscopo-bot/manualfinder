@@ -8,6 +8,7 @@
 .env.production
 .env.development
 backend/.env
+deploy/.env
 
 # ── Python: ambienti virtuali (NON caricare) ─────────────────
 backend/venv/

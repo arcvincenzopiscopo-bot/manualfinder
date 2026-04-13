@@ -7,10 +7,13 @@ Provider: Perplexity (L1) → Brave Search (L2) → Google CSE (L2) → DuckDuck
 """
 import asyncio
 import httpx
+import logging
 import re
 from typing import List, Set, Optional
 from app.config import settings
 from app.models.responses import ManualSearchResult
+
+logger = logging.getLogger(__name__)
 
 
 # Mappatura tipi macchina -> termini di ricerca INAIL — ora in DB (config_maps:"inail_machine_types")

@@ -339,16 +339,26 @@ async def run_download_phase(
             )
 
     # ── Fallback categoria simile locale ─────────────────────────────────────
-    if result.has_local_inail and result.producer_bytes is None and local_inail:
+    # Scatta quando: sappiamo che esiste un'assegnazione INAIL locale per questa
+    # categoria (local_inail != None) ma non abbiamo trovato il manuale produttore.
+    # Nota: NON condizionato su result.has_local_inail — quello può essere False
+    # per ghost file (Render efimero), ma i PDF di categoria simile possono
+    # comunque esistere sul disco.
+    if local_inail and result.producer_bytes is None:
         try:
             from app.services.local_manuals_service import (
                 find_similar_category_local_manuals as _find_similar_cat,
                 PDF_MANUALS_DIR as _PDF_MANUALS_DIR,
             )
+            _exclude = local_inail.get("filename") if result.inail_bytes else None
             _similar_candidates = _find_similar_cat(
                 machine_type=machine_type or "",
                 machine_type_id=machine_type_id,
-                exclude_filename=local_inail.get("filename"),
+                exclude_filename=_exclude,
+            )
+            _logger.info(
+                "Fallback categoria simile: %d candidati trovati per '%s' (escluso: %s)",
+                len(_similar_candidates), machine_type or "", _exclude,
             )
             if _similar_candidates:
                 _scored_sim: list[tuple[int, bytes, dict]] = []
@@ -360,7 +370,9 @@ async def run_download_phase(
                             machine_type=machine_type or "", machine_type_id=machine_type_id,
                         )
                         _scored_sim.append((_sc_score, _sc_bytes, _sc))
-                    except Exception:
+                        _logger.info("  candidato simile: %s score=%d", _sc["filename"], _sc_score)
+                    except Exception as _sc_err:
+                        _logger.warning("  skip %s: %s", _sc.get("filename"), _sc_err)
                         continue
                 if _scored_sim:
                     _scored_sim.sort(key=lambda x: x[0], reverse=True)
@@ -379,6 +391,7 @@ async def run_download_phase(
                     result.producer_pages = pdf_service.count_pdf_pages(result.producer_bytes)
                     result.similar_category_used = True
                     _brochure_note = None
+                    _logger.info("Categoria simile selezionata: %s", _w_cand["filename"])
         except Exception as _sim_err:
             _logger.warning("Ricerca categoria simile fallita: %s", _sim_err)
 
