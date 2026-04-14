@@ -199,7 +199,7 @@ async def extract_plate_info(image_base64: str) -> PlateOCRResult:
     if result.brand and result.model:
         ocr_hint = (result.machine_type or "").strip()
         # Passa il tipo OCR come hint — l'AI può confermarlo o correggerlo
-        enriched, mt_id = await _infer_machine_type(result.brand, result.model, provider, ocr_hint=ocr_hint or None)
+        enriched, mt_id = await _infer_machine_type(result.brand, result.model, ocr_hint=ocr_hint or None)
         if enriched:
             result.machine_type = enriched
         # Registra l'ID canonico (None se tipo non nel catalogo — backward compat)
@@ -601,7 +601,7 @@ def _lookup_brand_type(brand: str, model: str) -> Optional[str]:
 
 
 async def _infer_machine_type(
-    brand: str, model: str, provider: str, ocr_hint: Optional[str] = None
+    brand: str, model: str, ocr_hint: Optional[str] = None
 ) -> tuple[Optional[str], Optional[int]]:
     """
     Determina il tipo di macchina da brand+modello.
