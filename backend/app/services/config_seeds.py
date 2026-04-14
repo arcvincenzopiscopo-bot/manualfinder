@@ -574,4 +574,18 @@ def bootstrap_all_seeds() -> None:
     }
     config_service.seed_map_if_empty("ai_provider_order", _AI_PROVIDER_ORDER)
 
+    # Migrazione: rimuovi 'gemini' da qualsiasi entry di ai_provider_order (provider deprecato)
+    _current_order = config_service.get_map("ai_provider_order")
+    for _task_type, _default_providers in _AI_PROVIDER_ORDER.items():
+        _existing = _current_order.get(_task_type)
+        if isinstance(_existing, list) and "gemini" in _existing:
+            _new_order = [p for p in _existing if p != "gemini"]
+            if not _new_order:
+                _new_order = _default_providers
+            config_service.set_map_entry("ai_provider_order", _task_type, _new_order)
+            logger.info(
+                "config_seeds: rimosso 'gemini' da ai_provider_order[%s] → %s",
+                _task_type, _new_order,
+            )
+
     logger.info("config_seeds: bootstrap completato")

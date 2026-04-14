@@ -21,9 +21,9 @@ const TASK_LABELS: Record<string, string> = {
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
-  gemini:    'Gemini',
   groq1:     'Groq 1',
   groq2:     'Groq 2',
+  mistral:   'Mistral OCR',
   tesseract: 'Tesseract (locale)',
 }
 
@@ -79,7 +79,7 @@ function SectionAi({ cfgFetch }: { cfgFetch: (p: string, o?: RequestInit) => Pro
     }
   }
 
-  const LIMIT_COLORS: Record<string, string> = { gemini: '#0284c7', groq1: '#7c3aed', groq2: '#be185d' }
+  const LIMIT_COLORS: Record<string, string> = { groq1: '#7c3aed', groq2: '#be185d', mistral: '#0284c7' }
 
   return (
     <div>
