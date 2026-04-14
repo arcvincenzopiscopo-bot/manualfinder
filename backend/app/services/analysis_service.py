@@ -1,6 +1,6 @@
 """
 Generazione della scheda di sicurezza dal manuale del macchinario.
-Usa Claude (L1) o Gemini (L2) per analizzare PDF e produrre JSON strutturato.
+Usa Mistral OCR + Groq per analizzare PDF e produrre JSON strutturato.
 Strategia dual-source: INAIL (normativa) + produttore (raccomandazioni specifiche).
 
 Layer RAG: il contesto normativo (D.Lgs 81/08 dizionario + Direttiva Macchine/INAIL ChromaDB)
@@ -745,6 +745,8 @@ async def generate_safety_card(
     supplemental_bytes: Optional[bytes] = None,
     supplemental_url: Optional[str] = None,
     supplemental_label: Optional[str] = None,
+    debug_info: Optional[dict] = None,
+    progress_fn=None,
 ) -> SafetyCard:
     """
     Genera la scheda di sicurezza combinando INAIL (normativa) + produttore (raccomandazioni).
@@ -831,6 +833,19 @@ async def generate_safety_card(
     # Fallback silenzioso: se dizionario+RAG non disponibili → stringa vuota
     _norm_ctx = _get_normative_context(machine_type)
 
+    # Popola debug_info con le informazioni note prima dell'analisi AI
+    if debug_info is not None:
+        from app.services.llm_router import _DEFAULT_ORDER, DAILY_LIMITS
+        debug_info.update({
+            "provider": provider,
+            "task_type": "pdf_analysis",
+            "has_inail": inail_bytes is not None,
+            "has_producer": producer_bytes is not None,
+            "producer_pages": producer_page_count,
+            "rag_available": bool(_norm_ctx),
+            "order_tried": _DEFAULT_ORDER.get("pdf_analysis", []),
+        })
+
     # Inietta contesto sopralluogo all'inizio del contesto normativo (se fornito)
     if workplace_context and isinstance(workplace_context, dict):
         _cat_labels = {
@@ -859,6 +874,8 @@ async def generate_safety_card(
         _norm_ctx = _ctx_block + ("\n\n" + _norm_ctx if _norm_ctx else "")
 
     if not has_inail and not has_producer:
+        if progress_fn:
+            await progress_fn("Generazione scheda sicurezza dalla conoscenza AI...", 68)
         card = await _generate_fallback(
             brand, model, provider, norme=norme or [],
             allegato_v_context=allegato_v_context,
@@ -883,6 +900,8 @@ async def generate_safety_card(
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
     elif has_inail and has_producer:
+        if progress_fn:
+            await progress_fn("Analisi combinata INAIL + manuale produttore...", 67)
         card = await _analyze_dual_source(
             brand, model, inail_bytes, inail_url, producer_bytes, producer_url, producer_page_count, provider,
             allegato_v_context=allegato_v_context,
@@ -894,29 +913,38 @@ async def generate_safety_card(
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
     elif has_inail:
+        if progress_fn:
+            await progress_fn("Analisi scheda INAIL in corso...", 67)
         card = await _analyze_pdf_direct(
             brand, model, inail_bytes, inail_url, provider,
             allegato_v_context=allegato_v_context,
             fonte_tipo="inail",
             normative_context=_norm_ctx,
             workplace_context=workplace_context,
+            progress_fn=progress_fn,
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
     elif producer_page_count <= 100:
+        if progress_fn:
+            await progress_fn("Analisi manuale produttore in corso...", 67)
         card = await _analyze_pdf_direct(
             brand, model, producer_bytes, producer_url, provider,
             allegato_v_context=allegato_v_context,
             is_category_match="categoria" in (producer_source_label or "").lower(),
             normative_context=_norm_ctx,
             workplace_context=workplace_context,
+            progress_fn=progress_fn,
         )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
     else:
-        card = await _analyze_pdf_map_reduce(brand, model, producer_bytes, producer_url, provider,
-                                             workplace_context=workplace_context,
-                                             is_category_match="categoria" in (producer_source_label or "").lower())
+        card = await _analyze_pdf_map_reduce(
+            brand, model, producer_bytes, producer_url, provider,
+            workplace_context=workplace_context,
+            is_category_match="categoria" in (producer_source_label or "").lower(),
+            progress_fn=progress_fn,
+        )
         if ante_ce_note:
             card.note = f"{ante_ce_note} | {card.note}" if card.note else ante_ce_note
 
@@ -1633,6 +1661,7 @@ async def _analyze_pdf_direct(
     is_category_match: bool = False,
     normative_context: str = "",
     workplace_context: Optional[dict] = None,
+    progress_fn=None,
 ) -> SafetyCard:
     """Analisi diretta del PDF (≤100 pagine) — inviato come documento nativo."""
     pdf_b64 = pdf_service.pdf_to_base64(pdf_bytes)
@@ -1650,7 +1679,7 @@ async def _analyze_pdf_direct(
     lang = _detect_language(text)
     prompt += _translation_note(lang)
 
-    result_json = await _call_claude_with_pdf(pdf_b64, prompt, text_fallback=text)
+    result_json = await _call_claude_with_pdf(pdf_b64, prompt, text_fallback=text, progress_fn=progress_fn)
 
     card = _build_safety_card(brand, model, result_json, pdf_url, fonte_tipo)
     card.gap_ce_ante = result_json.get("gap_ce_ante")
@@ -1662,21 +1691,40 @@ async def _analyze_pdf_map_reduce(
     brand: str, model: str, pdf_bytes: bytes, pdf_url: Optional[str], provider: str,
     workplace_context: Optional[dict] = None,
     is_category_match: bool = False,
+    progress_fn=None,
 ) -> SafetyCard:
-    """Analisi map-reduce per PDF grandi (>100 pagine)."""
-    text = pdf_service.extract_safety_relevant_text(pdf_bytes, max_pages=50)
-    chunks = pdf_service.chunk_text(text, max_chars=80000)
+    """Analisi map-reduce per PDF grandi (>100 pagine).
+    Usa Mistral OCR per estrazione testo (supporta PDF scansionati), con fallback a pdfminer.
+    Chunk ridotto a 16K chars per rispettare il limite TPM 12K di Groq.
+    """
+    from app.services.llm_router import llm_router as _router
+    # Fase OCR: prova Mistral per testo di qualità (funziona anche su PDF scansionati)
+    if progress_fn:
+        await progress_fn("Estrazione testo PDF con Mistral OCR (documento grande)...", 67)
+    pdf_b64 = pdf_service.pdf_to_base64(pdf_bytes)
+    text = await _router.extract_pdf_markdown(pdf_b64, progress_fn=progress_fn)
+    if not text:
+        # Fallback a pdfminer (solo PDF nativi)
+        if progress_fn:
+            await progress_fn("Lettura testo PDF in corso...", 69)
+        text = pdf_service.extract_safety_relevant_text(pdf_bytes, max_pages=50)
+    chunks = pdf_service.chunk_text(text, max_chars=16000)
     prompt = _build_analysis_prompt(brand, model, is_category_match=is_category_match,
                                     workplace_context=workplace_context)
 
     # MAP: analizza ogni chunk
+    total_chunks = min(8, len(chunks))
     partial = []
     for i, chunk in enumerate(chunks[:8]):  # Max 8 chunk (aumentato da 5 per manuali molto grandi)
+        if progress_fn:
+            # Progresso lineare da 74% a 85% durante i chunk
+            chunk_pct = 74 + int((i / max(total_chunks, 1)) * 11)
+            await progress_fn(f"Analisi AI: blocco {i+1}/{total_chunks}...", chunk_pct)
         try:
             partial_json = await _call_ai_with_text(chunk, prompt, provider)
             partial.append(json.dumps(partial_json, ensure_ascii=False))
         except Exception as e:
-            logger.warning("map-reduce chunk %d/%d failed for %s %s: %s", i + 1, min(8, len(chunks)), brand, model, e)
+            logger.warning("map-reduce chunk %d/%d failed for %s %s: %s", i + 1, total_chunks, brand, model, e)
             continue
 
     if not partial:
@@ -1686,6 +1734,8 @@ async def _analyze_pdf_map_reduce(
         return _build_safety_card(brand, model, json.loads(partial[0]), pdf_url, "pdf")
 
     # REDUCE: sintetizza i risultati parziali
+    if progress_fn:
+        await progress_fn("Sintesi dei risultati dell'analisi...", 87)
     # Usa .replace() invece di .format() per evitare che i { } dell'output AI
     # (JSON delle analisi parziali) vengano interpretati come format specifier.
     partial_analyses_str = "\n\n---\n\n".join(partial)
@@ -1828,13 +1878,19 @@ def _check_gemini_finish_reason(response) -> None:
         pass  # Non bloccare mai per un warning di diagnostica
 
 
-async def _call_claude_with_pdf(pdf_b64: str, prompt: str, text_fallback: str = "") -> dict:
-    """Analisi PDF via llm_router: Gemini nativo se disponibile, altrimenti testo+Groq."""
+async def _call_claude_with_pdf(
+    pdf_b64: str, prompt: str, text_fallback: str = "",
+    debug_info: Optional[dict] = None,
+    progress_fn=None,
+) -> dict:
+    """Analisi PDF via llm_router: Mistral OCR → markdown → Groq, altrimenti testo pdfminer+Groq."""
     from app.services.llm_router import llm_router, LLMQuotaExceededError
     try:
         raw = await llm_router.generate_with_pdf(
             "pdf_analysis", pdf_b64, text_fallback, prompt,
             system=SYSTEM_PROMPT, max_tokens=16000,
+            debug_info=debug_info,
+            progress_fn=progress_fn,
         )
         return _parse_json_response(raw)
     except LLMQuotaExceededError:
@@ -1845,7 +1901,7 @@ async def _call_ai_with_text(
     text: str, prompt: str, provider: str = "auto",
     is_fallback: bool = False, is_reduce: bool = False
 ) -> dict:
-    """Analisi testo via llm_router con fallback automatico Gemini→Groq1→Groq2."""
+    """Analisi testo via llm_router con fallback automatico Groq1→Groq2."""
     from app.services.llm_router import llm_router, LLMQuotaExceededError
     # Rileva lingua e rafforza istruzione traduzione se non italiano
     if text and not is_fallback and not is_reduce:

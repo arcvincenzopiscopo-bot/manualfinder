@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -75,6 +75,7 @@ async def run_search_phase(
     preferred_language: str,
     has_local_inail: bool,
     qr_url: Optional[str],
+    debug_callback: Optional[Callable] = None,
 ) -> SearchPhaseResult:
     """
     Esegue ricerca manuale + safety alerts in parallelo con timeout individuali.
@@ -121,6 +122,32 @@ async def run_search_phase(
         _search_with_timeout(),
         _alerts_with_timeout(),
     )
+
+    if debug_callback:
+        query_str = " ".join(filter(None, [brand, model, machine_type]))
+        debug_callback("search", "info",
+            f"Query: \"{query_str}\" — {len(search_results)} risultati ({sum(1 for r in search_results if r.is_pdf)} PDF)",
+            {
+                "brand": brand, "model": model, "machine_type": machine_type,
+                "lang": preferred_language, "has_local_inail": has_local_inail,
+                "qr_url": qr_url, "total_results": len(search_results),
+                "pdf_count": sum(1 for r in search_results if r.is_pdf),
+            }
+        )
+        for r in search_results:
+            debug_callback("search", "info",
+                f"{'[PDF]' if r.is_pdf else '[WEB]'} score={r.relevance_score} [{r.source_type}] {r.title[:60]}",
+                {"url": r.url, "title": r.title, "source_type": r.source_type,
+                 "is_pdf": r.is_pdf, "relevance_score": r.relevance_score, "language": r.language}
+            )
+        for w in search_warnings:
+            debug_callback("search", "warning", w, {})
+        if safety_alerts:
+            debug_callback("search", "warning",
+                f"Safety Gate EU: {len(safety_alerts)} avviso/i per {brand} {model}",
+                {"alerts_count": len(safety_alerts),
+                 "serious": sum(1 for a in safety_alerts if getattr(a, 'risk_level', '') == 'serious')}
+            )
 
     pdf_candidates = [r for r in search_results if r.is_pdf]
 

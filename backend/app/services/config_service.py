@@ -271,6 +271,27 @@ def list_map_entries(map_key: str) -> list[dict]:
         conn.close()
 
 
+# ── debug overlay ────────────────────────────────────────────────────────────
+
+_DEBUG_MAP_KEY = "system"
+_DEBUG_ENTRY_KEY = "debug_overlay_enabled"
+
+
+def get_debug_mode() -> bool:
+    """Ritorna True se il debug overlay è attivo (impostazione admin)."""
+    val = get_map(_DEBUG_MAP_KEY).get(_DEBUG_ENTRY_KEY)
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val
+    return str(val).lower() in ("true", "1", "yes")
+
+
+def set_debug_mode(enabled: bool) -> bool:
+    """Salva la preferenza debug overlay nel DB. Invalida la cache maps."""
+    return set_map_entry(_DEBUG_MAP_KEY, _DEBUG_ENTRY_KEY, enabled)
+
+
 # ── domain_classifications ──────────────────────────────────────────────────
 
 def get_domains(kind: str) -> set[str]:

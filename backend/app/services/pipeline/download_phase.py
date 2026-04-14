@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ async def run_download_phase(
     has_local_inail: bool,
     local_inail: Optional[dict],
     analysis_provider: str,
+    debug_callback: Optional[Callable] = None,
 ) -> DownloadPhaseResult:
     """
     Scarica e seleziona i PDF migliori per ciascuna fonte (INAIL, produttore, datasheet, supplemental).
@@ -102,6 +103,11 @@ async def run_download_phase(
                 relevance_score=95 - i,
             )
             pdf_candidates.insert(i, qr_candidate)
+        if debug_callback:
+            debug_callback("download", "info",
+                f"QR Code rilevati: {len(qr_urls)} URL iniettati come priorità assoluta",
+                {"qr_urls": qr_urls}
+            )
 
     mirror_domains = _get_inail_mirror_domains()
 
@@ -114,6 +120,17 @@ async def run_download_phase(
     producer_candidates = [r for r in pdf_candidates
                            if r.source_type not in ("inail", "datasheet", "supplemental")
                            and not _is_inail_mirror(r.url, mirror_domains)]
+
+    if debug_callback:
+        debug_callback("download", "info",
+            f"Candidati: {len(inail_candidates)} INAIL, {len(producer_candidates)} produttore, "
+            f"{len(datasheet_candidates)} datasheet, {len(supplemental_candidates)} supplemental",
+            {
+                "inail": [{"url": r.url, "title": r.title, "score": r.relevance_score} for r in inail_candidates[:5]],
+                "producer": [{"url": r.url, "title": r.title, "score": r.relevance_score} for r in producer_candidates[:5]],
+                "datasheet": [{"url": r.url} for r in datasheet_candidates[:3]],
+            }
+        )
 
     # Inietta manuale INAIL locale come primo candidato (priorità assoluta)
     if has_local_inail and local_inail:
@@ -171,6 +188,21 @@ async def run_download_phase(
     if has_local_inail and result.inail_bytes is None:
         result.has_local_inail = False
         _logger.warning("INAIL locale non trovato dopo pre-check (filesystem efimero?) — fallback ricerca online")
+        if debug_callback:
+            debug_callback("download", "warning",
+                "INAIL locale atteso ma non trovato (filesystem efimero?) — fallback ricerca online", {}
+            )
+
+    if debug_callback:
+        if result.inail_url:
+            debug_callback("download", "info",
+                f"[✓] INAIL selezionato: {result.inail_url}",
+                {"url": result.inail_url, "is_local": result.inail_url.startswith("/manuals/local/")}
+            )
+        else:
+            debug_callback("download", "info",
+                "Nessun PDF INAIL selezionato (nessun candidato valido o score insufficiente)", {}
+            )
 
     # ── Download datasheet ──────────────────────────────────────────────────
     if datasheet_candidates:
@@ -219,7 +251,7 @@ async def run_download_phase(
                 pdf_data, brand=brand, model=model,
                 machine_type=machine_type or "", machine_type_id=machine_type_id,
             )
-            if 5 <= score <= 30 and pages < 25 and analysis_provider in ("anthropic", "gemini"):
+            if 5 <= score <= 30 and pages < 25 and analysis_provider in ("anthropic", "groq"):
                 is_manual = await pdf_service.ai_quick_validate(
                     pdf_data, brand, model, machine_type or "", analysis_provider
                 )
@@ -282,8 +314,26 @@ async def run_download_phase(
                 f"PDF scartato: {best_pages} pag., score {best_score_val}/100 "
                 f"(brochure/datasheet). Dettagli: {reasons_str}. Procedo con analisi AI."
             )
+            if debug_callback:
+                debug_callback("download", "warning",
+                    f"[✗] Nessun PDF produttore accettabile — {_brochure_note}",
+                    {"rejection_reasons": rejection_reasons[:5], "candidates_scored": len(producer_scored)}
+                )
         else:
             best_score, result.producer_bytes, result.producer_url, _, result.producer_pages = best
+            if debug_callback:
+                debug_callback("download", "info",
+                    f"[✓] Produttore selezionato: {result.producer_url} "
+                    f"({result.producer_pages} pag., score={best_score})",
+                    {
+                        "url": result.producer_url,
+                        "pages": result.producer_pages,
+                        "score": best_score,
+                        "candidates_evaluated": len(ordered_candidates),
+                        "candidates_downloaded": len(producer_scored),
+                        "rejected": rejection_reasons[:5],
+                    }
+                )
 
     # Libera memoria dei PDF scaricati ma non selezionati
     del download_results
@@ -392,6 +442,13 @@ async def run_download_phase(
                     result.similar_category_used = True
                     _brochure_note = None
                     _logger.info("Categoria simile selezionata: %s", _w_cand["filename"])
+                    if debug_callback:
+                        debug_callback("download", "info",
+                            f"[✓] Fallback categoria simile: {_w_cand['filename']} "
+                            f"({result.producer_pages} pag., score={_w_score})",
+                            {"filename": _w_cand["filename"], "score": _w_score,
+                             "machine_type": machine_type, "url": result.producer_url}
+                        )
         except Exception as _sim_err:
             _logger.warning("Ricerca categoria simile fallita: %s", _sim_err)
 
@@ -465,5 +522,20 @@ async def run_download_phase(
         )
     else:
         result.dl_message = "Nessun PDF trovato nella ricerca. Procedo con analisi AI."
+
+    if debug_callback:
+        debug_callback("download", "info",
+            f"Selezione finale — {result.dl_message}",
+            {
+                "inail_url": result.inail_url,
+                "producer_url": result.producer_url,
+                "producer_pages": result.producer_pages,
+                "producer_match_type": result.producer_match_type,
+                "datasheet_url": result.datasheet_url,
+                "supplemental_url": result.supplemental_url,
+                "similar_category_used": result.similar_category_used,
+                "brochure_note": result.brochure_note,
+            }
+        )
 
     return result

@@ -178,11 +178,21 @@ export interface WorkplaceContext {
 }
 
 export interface SSEEvent {
-  step: 'ocr' | 'search' | 'download' | 'analysis' | 'complete' | 'error'
-  status: 'started' | 'completed' | 'failed'
+  step: 'ocr' | 'search' | 'download' | 'analysis' | 'complete' | 'error' | 'debug'
+  status: 'started' | 'completed' | 'failed' | 'info' | 'warning' | 'error'
   data: Record<string, unknown>
   progress: number
   message: string
+}
+
+export interface DebugEvent {
+  id: number
+  ts: string
+  category: 'search' | 'download' | 'ai' | 'analysis' | 'error' | 'warning'
+  level: 'info' | 'warning' | 'error'
+  message: string
+  details: Record<string, unknown>
+  expanded?: boolean
 }
 
 export type PipelineStep = {
@@ -202,6 +212,7 @@ export interface PipelineState {
   isRunning: boolean
   isDone: boolean
   debugWarnings: string[]  // Warning dal backend: errori provider, crediti esauriti, ecc.
+  debugEvents: DebugEvent[]
 }
 
 export interface CachedResult {

@@ -1,6 +1,8 @@
 import { useState, useRef, useCallback } from 'react'
 import { analyzeFullSSE } from '../services/api'
-import type { PipelineState, PipelineStep, SSEEvent, ManualSearchResult, SafetyCard, WorkplaceContext } from '../types'
+import type { PipelineState, PipelineStep, SSEEvent, ManualSearchResult, SafetyCard, WorkplaceContext, DebugEvent } from '../types'
+
+let _debugEventCounter = 0
 
 // I 3 step della pipeline (OCR è separato)
 const INITIAL_STEPS: PipelineStep[] = [
@@ -20,6 +22,7 @@ const INITIAL_STATE: PipelineState = {
   isRunning: false,
   isDone: false,
   debugWarnings: [],
+  debugEvents: [],
 }
 
 export function usePipeline() {
@@ -31,13 +34,34 @@ export function usePipeline() {
       const next = { ...prev, progress: event.progress }
 
       const stepId = event.step as PipelineStep['id']
-      const stepStatus =
-        event.status === 'started'   ? 'running' :
-        event.status === 'completed' ? 'done'    : 'error'
 
-      next.steps = prev.steps.map(s =>
-        s.id === stepId ? { ...s, status: stepStatus, message: event.message } : s
-      )
+      // status='info': aggiorna solo il messaggio, mantieni lo status corrente (es. 'running')
+      const isInfoUpdate = event.status === 'info'
+      const stepStatus: PipelineStep['status'] =
+        event.status === 'started'   ? 'running' :
+        event.status === 'completed' ? 'done'    :
+        event.status === 'info'      ? 'running' :
+        'error'
+
+      next.steps = prev.steps.map(s => {
+        if (s.id !== stepId) return s
+        // Per eventi 'info' non fare downgrade da 'done' a 'running' (sicurezza)
+        const newStatus = isInfoUpdate ? (s.status === 'done' ? 'done' : stepStatus) : stepStatus
+        return { ...s, status: newStatus, message: event.message }
+      })
+
+      if (event.step === 'debug') {
+        const dbgEv: DebugEvent = {
+          id: ++_debugEventCounter,
+          ts: new Date().toISOString(),
+          category: (event.data.category as DebugEvent['category']) ?? 'search',
+          level: (event.status as DebugEvent['level']) ?? 'info',
+          message: event.message,
+          details: event.data,
+        }
+        next.debugEvents = [...prev.debugEvents, dbgEv]
+        return next
+      }
 
       if (event.step === 'search' && event.status === 'completed') {
         next.searchResults = (event.data.results as ManualSearchResult[]) ?? []

@@ -35,9 +35,42 @@ export function TabAiTools() {
   const [addingAlias, setAddingAlias] = useState(false)
   const [aliases, setAliases] = useState<Alias[]>([])
 
+  // ── Debug overlay ──
+  const [debugMode, setDebugMode] = useState<boolean | null>(null)
+  const [debugToggling, setDebugToggling] = useState(false)
+
   useEffect(() => {
     apiFetch('').then(setTypes).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    const token = localStorage.getItem('admin_token') || ''
+    fetch(`${BASE_URL}/admin/config/debug-mode`, {
+      headers: { 'X-Admin-Token': token },
+    })
+      .then(r => r.json())
+      .then(d => setDebugMode(!!d.enabled))
+      .catch(() => setDebugMode(false))
+  }, [])
+
+  const handleToggleDebug = async () => {
+    if (debugMode === null) return
+    setDebugToggling(true)
+    try {
+      const token = localStorage.getItem('admin_token') || ''
+      const next = !debugMode
+      await fetch(`${BASE_URL}/admin/config/debug-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+        body: JSON.stringify({ enabled: next }),
+      })
+      setDebugMode(next)
+    } catch {
+      /* ignore */
+    } finally {
+      setDebugToggling(false)
+    }
+  }
 
   const loadAliases = useCallback((id: number) => {
     apiFetch(`/${id}/aliases`).then(setAliases).catch(() => {})
@@ -423,6 +456,42 @@ export function TabAiTools() {
               )}
             </>
           )}
+        </div>
+
+        {/* ── Debug Overlay ── */}
+        <div style={{ ...card, marginTop: 16 }}>
+          <SectionTitle>Debug Overlay</SectionTitle>
+          <p style={{ fontSize: 13, color: COLORS.muted, marginBottom: 12 }}>
+            Quando attivo, mostra nella pagina principale un pannello in basso con i log
+            in tempo reale: provider AI usato, fonti trovate/scartate, query lanciate, errori.
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              onClick={handleToggleDebug}
+              disabled={debugMode === null || debugToggling}
+              style={{
+                padding: '8px 20px',
+                borderRadius: 8,
+                border: 'none',
+                cursor: debugMode === null || debugToggling ? 'not-allowed' : 'pointer',
+                fontWeight: 700,
+                fontSize: 14,
+                background: debugMode ? '#16a34a' : '#64748b',
+                color: '#fff',
+                minWidth: 90,
+                transition: 'background 0.2s',
+              }}
+            >
+              {debugToggling ? '...' : debugMode ? 'ON' : 'OFF'}
+            </button>
+            <span style={{
+              fontSize: 13,
+              color: debugMode ? COLORS.success : COLORS.muted,
+              fontWeight: 600,
+            }}>
+              {debugMode === null ? 'Caricamento...' : debugMode ? 'Debug overlay attivo' : 'Debug overlay disattivato'}
+            </span>
+          </div>
         </div>
 
       </div>

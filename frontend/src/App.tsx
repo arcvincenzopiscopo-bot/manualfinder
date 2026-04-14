@@ -13,6 +13,7 @@ import { OfflineBadge } from './components/ui/OfflineBadge'
 import { UploadManualModal } from './components/upload/UploadManualModal'
 import { AdminPanel } from './components/admin/AdminPanel'
 import { WorkplaceContextDialog, loadWorkplaceContext, clearWorkplaceContext, workplaceContextLabel } from './components/ui/WorkplaceContextDialog'
+import { DebugPanel } from './components/debug/DebugPanel'
 import type { PlateOCRResult, WorkplaceContext } from './types'
 
 // ── Error Boundary ────────────────────────────────────────────────────────────
@@ -103,6 +104,25 @@ function AppInner() {
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)
   }, [])
+
+  // ── Debug overlay: attivo solo se admin token presente e debug mode ON in DB ──
+  const [debugMode, setDebugMode] = useState(false)
+  const [debugEvents, setDebugEvents] = useState(pipeline.debugEvents)
+  const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '/api') as string
+
+  useEffect(() => {
+    const token = localStorage.getItem('admin_token')
+    if (!token) return
+    fetch(`${BASE_URL}/admin/config/debug-mode`, { headers: { 'X-Admin-Token': token } })
+      .then(r => r.json())
+      .then(d => setDebugMode(!!d.enabled))
+      .catch(() => {})
+  }, [])
+
+  // Sincronizza gli eventi debug dallo state della pipeline
+  useEffect(() => {
+    setDebugEvents(pipeline.debugEvents)
+  }, [pipeline.debugEvents])
 
   if (isAdmin) return <AdminPanel />
 
@@ -426,6 +446,14 @@ function AppInner() {
           </>
         )}
       </main>
+
+      {/* Debug overlay — visibile solo se admin ha attivato il debug mode */}
+      {debugMode && (
+        <DebugPanel
+          events={debugEvents}
+          onClear={() => setDebugEvents([])}
+        />
+      )}
     </div>
   )
 }

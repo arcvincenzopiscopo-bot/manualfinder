@@ -80,11 +80,16 @@ export function PipelineProgress({ steps, progress }: Props) {
             </p>
             {step.message && (
               <p style={{
-                margin: '2px 0 0',
+                margin: '3px 0 0',
                 fontSize: 12,
-                color: '#64748b',
+                color: step.status === 'running' ? '#1e40af' : '#64748b',
                 lineHeight: 1.4,
+                fontStyle: step.status === 'running' ? 'italic' : 'normal',
+                animation: step.status === 'running' ? 'msgPulse 2s ease-in-out infinite' : 'none',
               }}>
+                {step.status === 'running' && (
+                  <span style={{ marginRight: 4, fontSize: 10 }}>⟳</span>
+                )}
                 {step.message}
               </p>
             )}
@@ -96,6 +101,10 @@ export function PipelineProgress({ steps, progress }: Props) {
         @keyframes spin {
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
+        }
+        @keyframes msgPulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.55; }
         }
       `}</style>
     </div>

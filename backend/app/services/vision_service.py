@@ -1,5 +1,6 @@
 """
-OCR targa identificativa tramite Claude Vision (Livello 1) o Gemini Vision (Livello 2).
+OCR targa identificativa tramite Groq Vision (llama-3.2-11b-vision-preview).
+Fallback locale a Tesseract se quota Groq esaurita.
 Estrae: brand, modello, numero di serie, anno di fabbricazione.
 """
 import asyncio
@@ -98,7 +99,6 @@ REGOLE IMPORTANTI:
 
 Rispondi SOLO con il JSON valido, senza markdown, senza testo aggiuntivo."""
 
-GEMINI_MODEL = "gemini-2.5-flash"
 
 
 _FB_GENERIC_TYPES = {
@@ -176,10 +176,10 @@ async def validate_plate_image(image_base64: str) -> bool:
         answer = await llm_router.generate_vision(image_base64, _VALIDATE_PROMPT, max_tokens=5)
         return answer.strip().upper().startswith("S")
     except LLMQuotaExceededError:
-        logger.info("validate_plate_image: Gemini esaurito — immagine accettata per default")
+        logger.info("validate_plate_image: Groq esaurito — immagine accettata per default")
     except Exception as e:
         logger.warning("validate_plate_image: validazione AI fallita (%s) — immagine accettata per default", e)
-    # Se la validazione fallisce o Gemini è esaurito, lascia passare
+    # Se la validazione fallisce o Groq è esaurito, lascia passare
     return True
 
 
@@ -189,7 +189,7 @@ async def extract_plate_info(image_base64: str) -> PlateOCRResult:
         raw = await llm_router.generate_vision(image_base64, PLATE_OCR_PROMPT, max_tokens=1024)
         result = _parse_ocr_json(raw.strip())
     except LLMQuotaExceededError:
-        logger.info("extract_plate_info: Gemini esaurito — fallback a Tesseract")
+        logger.info("extract_plate_info: Groq esaurito — fallback a Tesseract")
         result = await _extract_with_tesseract(image_base64)
 
     # Determina sempre il tipo di macchina da brand+modello tramite AI.
@@ -679,24 +679,6 @@ async def _infer_machine_type(
     return (normalized, None)
 
 
-async def _extract_with_gemini(image_base64: str) -> PlateOCRResult:
-    from google import genai
-    from google.genai import types
-
-    client = genai.Client(api_key=settings.gemini_api_key)
-
-    response = await client.aio.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[
-            types.Part.from_bytes(
-                data=__import__('base64').b64decode(image_base64),
-                mime_type="image/jpeg",
-            ),
-            PLATE_OCR_PROMPT,
-        ],
-    )
-    return _parse_ocr_json(response.text.strip())
-
 
 async def _extract_with_tesseract(image_base64: str) -> PlateOCRResult:
     import base64, io
@@ -705,7 +687,14 @@ async def _extract_with_tesseract(image_base64: str) -> PlateOCRResult:
 
     image_bytes = base64.b64decode(image_base64)
     img = Image.open(io.BytesIO(image_bytes))
-    raw_text = pytesseract.image_to_string(img, lang="ita+eng")
+
+    # Tentativo 1: PSM 6 (blocco testo uniforme) con whitelist caratteri targa
+    config_psm6 = "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-./: "
+    raw_text = pytesseract.image_to_string(img, lang="ita+eng", config=config_psm6)
+
+    # Tentativo 2: PSM 3 (fully automatic) se PSM 6 produce troppo poco
+    if len(raw_text.strip()) < 20:
+        raw_text = pytesseract.image_to_string(img, lang="ita+eng", config="--psm 3")
 
     lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
     full_text = " ".join(lines)

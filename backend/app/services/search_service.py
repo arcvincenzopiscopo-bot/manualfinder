@@ -1424,22 +1424,11 @@ Rispondi SOLO con un JSON array di oggetti con i campi "i" (numero 1-based) e "s
 Includi TUTTI i {min(len(pdf_candidates), 12)} candidati. Nessun testo aggiuntivo."""
 
     try:
-        from app.config import settings
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=300,
-                temperature=0.0,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
+        from app.services.llm_router import llm_router as _router
         import json, re
-        text = response.text
+        text = await _router.generate_text(
+            "url_rule", prompt, max_tokens=300, fast=True
+        )
         # Estrai JSON array dalla risposta
         m = re.search(r'\[.*\]', text, re.DOTALL)
         if not m:
@@ -1855,12 +1844,11 @@ async def _search_gemini_grounding(query: str) -> List[ManualSearchResult]:
     Usa la chiave Gemini già disponibile — nessuna API aggiuntiva.
     Restituisce URL reali di Google con qualità superiore a DuckDuckGo.
     """
-    from google import genai
-    from google.genai import types
-    from app.config import settings
-
     results: List[ManualSearchResult] = []
     try:
+        from google import genai
+        from google.genai import types
+        from app.config import settings
         client = genai.Client(api_key=settings.gemini_api_key)
 
         response = await client.aio.models.generate_content(

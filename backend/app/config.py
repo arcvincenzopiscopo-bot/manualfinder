@@ -8,9 +8,11 @@ class Settings(BaseSettings):
     perplexity_api_key: Optional[str] = None
 
     # === Livello 2 - API gratuite (fallback) ===
+    mistral_api_key: Optional[str] = None  # MISTRAL_API_KEY — OCR PDF
+    groq_api_key: Optional[str] = None     # GROQ_API_KEY  — account 1
+    groq_api_key2: Optional[str] = None    # GROQ_API_KEY2 — account 2
+    # Gemini: non più usato nel flusso attivo (inaccessibile sul piano free in Italia)
     gemini_api_key: Optional[str] = None
-    groq_api_key: Optional[str] = None   # GROQ_API_KEY  — account 1
-    groq_api_key2: Optional[str] = None  # GROQ_API_KEY2 — account 2
     brave_search_api_key: Optional[str] = None
     google_cse_api_key: Optional[str] = None
     google_cse_cx: Optional[str] = None
@@ -59,8 +61,8 @@ class Settings(BaseSettings):
         """Restituisce il provider da usare per OCR/Vision."""
         if self.api_tier == "1" or (self.api_tier == "auto" and self.anthropic_api_key):
             return "anthropic"
-        if self.gemini_api_key:
-            return "gemini"
+        if self.groq_api_key:
+            return "groq"
         return "tesseract"
 
     def get_search_provider(self) -> str:
@@ -73,16 +75,14 @@ class Settings(BaseSettings):
             return "tavily"
         if self.google_cse_api_key and self.google_cse_cx:
             return "google_cse"
-        if self.gemini_api_key:
-            return "gemini_search"   # Google Search grounding via Gemini API
         return "duckduckgo"
 
     def get_analysis_provider(self) -> str:
         """Restituisce il provider da usare per l'analisi dei manuali."""
         if self.api_tier == "1" or (self.api_tier == "auto" and self.anthropic_api_key):
             return "anthropic"
-        if self.gemini_api_key:
-            return "gemini"
+        if self.groq_api_key:
+            return "groq"
         return "none"
 
 

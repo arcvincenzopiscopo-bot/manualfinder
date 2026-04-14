@@ -131,6 +131,25 @@ def delete_brand_hint(row_id: int):
     return {"status": "deleted"}
 
 
+# ─── debug overlay ───────────────────────────────────────────────────────────
+
+@router.get("/debug-mode")
+def get_debug_mode():
+    """Ritorna lo stato corrente del debug overlay."""
+    return {"enabled": config_service.get_debug_mode()}
+
+
+class DebugModeIn(BaseModel):
+    enabled: bool
+
+
+@router.post("/debug-mode")
+def set_debug_mode(body: DebugModeIn):
+    """Attiva o disattiva il debug overlay."""
+    config_service.set_debug_mode(body.enabled)
+    return {"status": "ok", "enabled": body.enabled}
+
+
 # ─── cache invalidation ───────────────────────────────────────────────────────
 
 @router.post("/cache-clear")
@@ -143,7 +162,7 @@ def clear_config_cache():
 
 @router.get("/ai-usage")
 async def get_ai_usage():
-    """Contatori utilizzo odierno per provider (gemini, groq1, groq2)."""
+    """Contatori utilizzo odierno per provider (groq1, groq2, mistral)."""
     from app.services.llm_router import llm_router
     return await llm_router.get_all_usage_today()
 

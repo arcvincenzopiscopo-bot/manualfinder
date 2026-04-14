@@ -564,13 +564,13 @@ def bootstrap_all_seeds() -> None:
 
     # Ordine provider AI per tipo di funzione (configurabile dal pannello admin)
     _AI_PROVIDER_ORDER = {
-        "ocr":           ["gemini", "tesseract"],
-        "pdf_analysis":  ["gemini", "groq1", "groq2"],
-        "text_analysis": ["gemini", "groq1", "groq2"],
-        "machine_type":  ["gemini", "groq1", "groq2"],
-        "url_rule":      ["gemini", "groq1", "groq2"],
-        "prompt_rule":   ["gemini", "groq1", "groq2"],
-        "quality_check": ["gemini", "groq1", "groq2"],
+        "ocr":           ["groq1", "groq2", "tesseract"],
+        "pdf_analysis":  ["mistral", "groq1", "groq2"],
+        "text_analysis": ["groq1", "groq2"],
+        "machine_type":  ["groq1", "groq2"],
+        "url_rule":      ["groq1", "groq2"],
+        "prompt_rule":   ["groq1", "groq2"],
+        "quality_check": ["groq1", "groq2"],
     }
     config_service.seed_map_if_empty("ai_provider_order", _AI_PROVIDER_ORDER)
 

@@ -115,6 +115,24 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
         run_search_phase,
     )
     from app.services.pipeline.download_phase import run_download_phase, DownloadPhaseResult
+    from app.services.config_service import get_debug_mode
+
+    # ── Debug overlay ─────────────────────────────────────────────────────────
+    _debug_enabled = get_debug_mode()
+    _debug_buf: list[SSEEvent] = []
+
+    def _emit_debug(category: str, level: str, message: str, details: dict = {}) -> None:
+        _debug_buf.append(SSEEvent(
+            step="debug", status=level, message=message,
+            data={"category": category, **details},
+        ))
+
+    _dbg = _emit_debug if _debug_enabled else None
+
+    async def _flush_debug():
+        for ev in _debug_buf:
+            yield _sse(ev)
+        _debug_buf.clear()
 
     async def _client_gone() -> bool:
         if http_request is None:
@@ -175,6 +193,7 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
         preferred_language=request.preferred_language,
         has_local_inail=has_local_inail,
         qr_url=qr_url,
+        debug_callback=_dbg,
     )
 
     yield _sse(SSEEvent(
@@ -188,6 +207,8 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
             "debug_warnings": sr.search_warnings,
         },
     ))
+    async for ev in _flush_debug():
+        yield ev
 
     # ── STEP 2: Download PDF ─────────────────────────────────────────────
     if await _client_gone():
@@ -213,6 +234,7 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
             has_local_inail=has_local_inail,
             local_inail=_local_inail,
             analysis_provider=settings.get_analysis_provider(),
+            debug_callback=_dbg,
         )
 
         yield _sse(SSEEvent(
@@ -221,6 +243,8 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
             data={"inail_url": dr.inail_url, "producer_url": dr.producer_url,
                   "producer_pages": dr.producer_pages},
         ))
+        async for ev in _flush_debug():
+            yield ev
     else:
         dr = DownloadPhaseResult()
         yield _sse(SSEEvent(
@@ -228,6 +252,10 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
             message="Nessun PDF disponibile. Analisi basata su conoscenza AI.",
             data={"inail_url": None, "producer_url": None, "producer_pages": 0},
         ))
+        if _dbg:
+            _dbg("download", "warning", "Nessun candidato PDF — analisi basata su sola conoscenza AI", {})
+        async for ev in _flush_debug():
+            yield ev
 
     # ── STEP 3: Analisi Sicurezza ────────────────────────────────────────
     if await _client_gone():
@@ -247,8 +275,20 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
 
     yield _sse(SSEEvent(step="analysis", status="started", progress=65, message=analysis_msg))
 
-    try:
-        safety_card = await analysis_service.generate_safety_card(
+    # Coda SSE per i sub-eventi di avanzamento emessi durante l'analisi AI.
+    # generate_safety_card() gira come task separato; il generatore SSE drena la
+    # coda ogni 300ms in modo da streamare i messaggi in tempo reale al browser.
+    _sub_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _emit_sub(message: str, sub_progress: int = 70) -> None:
+        await _sub_queue.put(_sse(SSEEvent(
+            step="analysis", status="info",
+            progress=sub_progress, message=message,
+        )))
+
+    _ai_debug_info: dict = {}
+    _analysis_task = asyncio.create_task(
+        analysis_service.generate_safety_card(
             brand=brand, model=model,
             inail_bytes=dr.inail_bytes, inail_url=dr.inail_url,
             producer_bytes=dr.producer_bytes, producer_url=dr.producer_url,
@@ -266,13 +306,40 @@ async def _pipeline(request: FullAnalysisRequest, http_request: Optional[Request
             supplemental_bytes=dr.supplemental_bytes,
             supplemental_url=dr.supplemental_url,
             supplemental_label=dr.supplemental_label,
+            debug_info=_ai_debug_info if _debug_enabled else None,
+            progress_fn=_emit_sub,
         )
+    )
+
+    # Drena la coda mentre il task gira: ogni 300ms yield gli eventi accumulati
+    try:
+        while not _analysis_task.done():
+            while not _sub_queue.empty():
+                yield _sub_queue.get_nowait()
+            await asyncio.sleep(0.3)
+        # Drena eventuali messaggi finali rimasti in coda
+        while not _sub_queue.empty():
+            yield _sub_queue.get_nowait()
+        safety_card = await _analysis_task  # propaga eccezioni se il task è fallito
     except Exception as e:
+        if _dbg:
+            _dbg("analysis", "error", f"Errore analisi: {e}", {"error": str(e)})
+        async for ev in _flush_debug():
+            yield ev
         yield _sse(SSEEvent(
             step="analysis", status="failed", progress=65,
             message=f"Errore analisi: {str(e)}", data={"error": str(e)},
         ))
         return
+
+    if _dbg and _ai_debug_info:
+        _dbg("ai", "info",
+            f"AI: {_ai_debug_info.get('provider','?')} — {_ai_debug_info.get('model','?')} "
+            f"[{_ai_debug_info.get('task_type','?')}] metodo={_ai_debug_info.get('method','text')}",
+            _ai_debug_info
+        )
+    async for ev in _flush_debug():
+        yield ev
 
     # Aggiungi alert Safety Gate alla scheda
     if sr.safety_alerts_data:
