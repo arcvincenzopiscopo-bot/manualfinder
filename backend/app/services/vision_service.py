@@ -171,75 +171,25 @@ async def validate_plate_image(image_base64: str) -> bool:
     Richiesta leggera (max_tokens=5) — usata come guard prima dell'OCR completo.
     Ritorna True se valida, False se non è una targa macchina.
     """
-    provider = settings.get_vision_provider()
+    from app.services.llm_router import llm_router, LLMQuotaExceededError
     try:
-        if provider == "anthropic":
-            import anthropic
-            # Estrai mime type e dati base64
-            media_type = "image/jpeg"
-            b64_data = image_base64
-            if image_base64.startswith("data:"):
-                header, b64_data = image_base64.split(",", 1)
-                if "png" in header:
-                    media_type = "image/png"
-                elif "webp" in header:
-                    media_type = "image/webp"
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            resp = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=5,
-                temperature=0,
-                messages=[{
-                    "role": "user",
-                    "content": [{
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": media_type, "data": b64_data},
-                    }, {
-                        "type": "text",
-                        "text": _VALIDATE_PROMPT,
-                    }],
-                }],
-            )
-            answer = resp.content[0].text.strip().upper()
-            return answer.startswith("S")   # "SI" o "SÌ"
-
-        elif provider == "gemini":
-            import base64 as _b64
-            from google import genai
-            from google.genai import types
-            b64_data = image_base64
-            if image_base64.startswith("data:"):
-                b64_data = image_base64.split(",", 1)[1]
-            img_bytes = _b64.b64decode(b64_data)
-            client = genai.Client(api_key=settings.gemini_api_key)
-            resp = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
-                    _VALIDATE_PROMPT,
-                ],
-                config=types.GenerateContentConfig(
-                    max_output_tokens=5,
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
-            )
-            answer = (resp.text or "").strip().upper()
-            return answer.startswith("S")
+        answer = await llm_router.generate_vision(image_base64, _VALIDATE_PROMPT, max_tokens=5)
+        return answer.strip().upper().startswith("S")
+    except LLMQuotaExceededError:
+        logger.info("validate_plate_image: Gemini esaurito — immagine accettata per default")
     except Exception as e:
         logger.warning("validate_plate_image: validazione AI fallita (%s) — immagine accettata per default", e)
-    # Se la validazione fallisce (errore rete, provider disattivato), lascia passare
+    # Se la validazione fallisce o Gemini è esaurito, lascia passare
     return True
 
 
 async def extract_plate_info(image_base64: str) -> PlateOCRResult:
-    provider = settings.get_vision_provider()
-
-    if provider == "anthropic":
-        result = await _extract_with_claude(image_base64)
-    elif provider == "gemini":
-        result = await _extract_with_gemini(image_base64)
-    else:
+    from app.services.llm_router import llm_router, LLMQuotaExceededError
+    try:
+        raw = await llm_router.generate_vision(image_base64, PLATE_OCR_PROMPT, max_tokens=1024)
+        result = _parse_ocr_json(raw.strip())
+    except LLMQuotaExceededError:
+        logger.info("extract_plate_info: Gemini esaurito — fallback a Tesseract")
         result = await _extract_with_tesseract(image_base64)
 
     # Determina sempre il tipo di macchina da brand+modello tramite AI.
@@ -711,32 +661,8 @@ async def _infer_machine_type(
     )
     answer = None
     try:
-        if provider == "anthropic":
-            import anthropic
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            resp = await client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=50,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            answer = resp.content[0].text.strip().lower()
-        elif provider == "gemini":
-            from google import genai
-            from google.genai import types
-            client = genai.Client(api_key=settings.gemini_api_key)
-            resp = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=50,
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
-            )
-            answer = resp.text.strip().lower()
-        else:
-            return (None, None)
+        from app.services.llm_router import llm_router
+        answer = (await llm_router.generate_text("machine_type", prompt, max_tokens=50, fast=True)).strip().lower()
     except Exception:
         return (None, None)
 
@@ -751,31 +677,6 @@ async def _infer_machine_type(
         return (name, mt_id)
     # Tipo non nel catalogo — backward compat: testo libero senza ID
     return (normalized, None)
-
-
-async def _extract_with_claude(image_base64: str) -> PlateOCRResult:
-    import anthropic
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
-    response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1024,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": image_base64,
-                    },
-                },
-                {"type": "text", "text": PLATE_OCR_PROMPT},
-            ],
-        }],
-    )
-    return _parse_ocr_json(response.content[0].text.strip())
 
 
 async def _extract_with_gemini(image_base64: str) -> PlateOCRResult:

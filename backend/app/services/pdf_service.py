@@ -732,41 +732,12 @@ async def ai_quick_validate(
             "manuale officina/riparazione, service manual, listino prezzi"
         )
 
-        answer = ""
-        if provider == "anthropic":
-            import anthropic
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            resp = await _asyncio.wait_for(
-                client.messages.create(
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=5,
-                    messages=[{"role": "user", "content": prompt}],
-                ),
-                timeout=8,
-            )
-            answer = resp.content[0].text.strip().upper()
-
-        elif provider == "gemini":
-            from google import genai
-            from google.genai import types
-            client = genai.Client(api_key=settings.gemini_api_key)
-            resp = await _asyncio.wait_for(
-                client.aio.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        max_output_tokens=5, temperature=0.0,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    ),
-                ),
-                timeout=8,
-            )
-            answer = resp.text.strip().upper()
-
-        else:
-            return True
-
-        return "NON_MANUALE" not in answer
+        from app.services.llm_router import llm_router
+        resp_text = await _asyncio.wait_for(
+            llm_router.generate_text("quality_check", prompt, max_tokens=5, fast=True),
+            timeout=8,
+        )
+        return "NON_MANUALE" not in resp_text.strip().upper()
 
     except Exception:
         return True  # Fallback silenzioso — non blocca la pipeline
@@ -812,41 +783,12 @@ async def ai_compare_manuals(
             "Rispondi SOLO con una lettera: A oppure B"
         )
 
-        answer = ""
-        if provider == "anthropic":
-            import anthropic
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            resp = await _asyncio.wait_for(
-                client.messages.create(
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=3,
-                    messages=[{"role": "user", "content": prompt}],
-                ),
-                timeout=10,
-            )
-            answer = resp.content[0].text.strip().upper()
-
-        elif provider == "gemini":
-            from google import genai
-            from google.genai import types
-            client = genai.Client(api_key=settings.gemini_api_key)
-            resp = await _asyncio.wait_for(
-                client.aio.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        max_output_tokens=3, temperature=0.0,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    ),
-                ),
-                timeout=10,
-            )
-            answer = resp.text.strip().upper()
-
-        else:
-            return 0
-
-        return 1 if answer.startswith("B") else 0
+        from app.services.llm_router import llm_router
+        resp_text = await _asyncio.wait_for(
+            llm_router.generate_text("quality_check", prompt, max_tokens=3, fast=True),
+            timeout=10,
+        )
+        return 1 if resp_text.strip().upper().startswith("B") else 0
 
     except Exception:
         return 0  # Fallback silenzioso — usa A (già il migliore per score)

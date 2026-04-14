@@ -78,34 +78,14 @@ Rispondi SOLO con JSON valido, nessun altro testo:
         return None
 
 
-async def _call_ai_for_rule(prompt: str, provider: str) -> Optional[dict]:
+async def _call_ai_for_rule(prompt: str, provider: str = "auto") -> Optional[dict]:
     """
-    Chiamata AI economica (Haiku/Gemini-Flash) per generare o migliorare prompt rules.
+    Chiamata AI per generare o migliorare prompt rules via llm_router.
     Usata sia da generate_and_save_rule() che da prompt_optimizer_service.
     """
     try:
-        if provider == "anthropic":
-            import anthropic
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            r = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=900,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = r.content[0].text
-        elif provider == "gemini":
-            from google import genai
-            from google.genai import types as gtypes
-            client = genai.Client(api_key=settings.gemini_api_key)
-            r = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=gtypes.GenerateContentConfig(max_output_tokens=900, temperature=0),
-            )
-            text = r.text
-        else:
-            return None
+        from app.services.llm_router import llm_router
+        text = await llm_router.generate_text("prompt_rule", prompt, max_tokens=900, fast=True)
         # Estrai JSON dalla risposta (tollera testo prima/dopo il blocco JSON)
         m = re.search(r'\{[\s\S]+\}', text)
         if not m:

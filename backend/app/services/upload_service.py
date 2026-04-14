@@ -85,41 +85,14 @@ async def validate_and_check(
     )
 
     try:
-        raw = ""
-        if provider == "anthropic":
-            import anthropic
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            resp = await client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=200,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = resp.content[0].text.strip()
-        elif provider == "gemini":
-            from google import genai
-            from google.genai import types as gtypes
-            client = genai.Client(api_key=settings.gemini_api_key)
-            resp = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=gtypes.GenerateContentConfig(
-                    max_output_tokens=200,
-                    temperature=0.0,
-                    thinking_config=gtypes.ThinkingConfig(thinking_budget=0),
-                ),
-            )
-            raw = resp.text.strip()
-        else:
-            return {"ok": True}
-
+        from app.services.llm_router import llm_router
+        raw = (await llm_router.generate_text("text_analysis", prompt, max_tokens=200, fast=True)).strip()
         # Estrai JSON anche se l'AI ha aggiunto testo intorno
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if not match:
             return {"ok": True}
         result = json.loads(match.group())
         return result if isinstance(result, dict) else {"ok": True}
-
     except Exception as e:
         _logger.warning("validate_and_check: errore AI: %s", e)
         return {"ok": True}

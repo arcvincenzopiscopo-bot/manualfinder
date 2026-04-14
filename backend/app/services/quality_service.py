@@ -489,25 +489,13 @@ Sii CONCRETO e SPECIFICO: cita i tipi di macchine problematici, i domini problem
 Rispondi in italiano con markdown."""
 
     try:
-        from app.config import settings
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=4000,
-                temperature=0.0,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
+        from app.services.llm_router import llm_router
+        report_text = await llm_router.generate_text("quality_check", prompt, max_tokens=4000)
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "summary": summary,
             "n_entries_analyzed": len(log_digest),
-            "report": response.text,
+            "report": report_text,
         }
     except Exception as e:
         return {"error": f"Generazione report fallita: {e}", "summary": summary}

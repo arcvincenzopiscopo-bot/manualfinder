@@ -9,6 +9,8 @@ class Settings(BaseSettings):
 
     # === Livello 2 - API gratuite (fallback) ===
     gemini_api_key: Optional[str] = None
+    groq_api_key: Optional[str] = None   # GROQ_API_KEY  — account 1
+    groq_api_key2: Optional[str] = None  # GROQ_API_KEY2 — account 2
     brave_search_api_key: Optional[str] = None
     google_cse_api_key: Optional[str] = None
     google_cse_cx: Optional[str] = None

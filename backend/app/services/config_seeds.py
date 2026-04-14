@@ -562,4 +562,16 @@ def bootstrap_all_seeds() -> None:
     # Brand hints
     config_service.seed_brand_hints_if_empty(_BRAND_TYPE_MAP, _MODEL_PREFIX_OVERRIDES)
 
+    # Ordine provider AI per tipo di funzione (configurabile dal pannello admin)
+    _AI_PROVIDER_ORDER = {
+        "ocr":           ["gemini", "tesseract"],
+        "pdf_analysis":  ["gemini", "groq1", "groq2"],
+        "text_analysis": ["gemini", "groq1", "groq2"],
+        "machine_type":  ["gemini", "groq1", "groq2"],
+        "url_rule":      ["gemini", "groq1", "groq2"],
+        "prompt_rule":   ["gemini", "groq1", "groq2"],
+        "quality_check": ["gemini", "groq1", "groq2"],
+    }
+    config_service.seed_map_if_empty("ai_provider_order", _AI_PROVIDER_ORDER)
+
     logger.info("config_seeds: bootstrap completato")

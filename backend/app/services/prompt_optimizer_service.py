@@ -19,7 +19,7 @@ _MIN_ISSUE_RATE = 0.3      # almeno 30% delle analisi con almeno 1 issue
 _MIN_AVG_RISCHI = 3.0      # media rischi estratti inferiore a questo valore
 
 
-async def run_optimizer(provider: str, min_analyses: int = _MIN_ANALYSES) -> dict:
+async def run_optimizer(provider: str = "auto", min_analyses: int = _MIN_ANALYSES) -> dict:
     """
     Analizza quality_log + feedback per ogni tipo macchina e migliora i prompt rule
     per i tipi con qualità sistematicamente bassa.
@@ -74,7 +74,7 @@ async def run_optimizer(provider: str, min_analyses: int = _MIN_ANALYSES) -> dic
     }
 
 
-async def improve_single(machine_type: str, provider: str) -> Optional[dict]:
+async def improve_single(machine_type: str, provider: str = "auto") -> Optional[dict]:
     """
     Migliora la regola prompt per un singolo tipo macchina.
     Usato dall'endpoint admin POST /manuals/prompt-rules/{machine_type}/improve.

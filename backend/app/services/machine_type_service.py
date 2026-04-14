@@ -648,31 +648,10 @@ async def _llm_arbitrate_async(ocr_text: str, candidates: list[dict]) -> Optiona
         ocr_text=ocr_text,
         candidates_json=candidates_json,
     )
-    provider = settings.get_analysis_provider()
     text = None
     try:
-        if provider == "gemini" or settings.gemini_api_key:
-            from google import genai
-            from google.genai import types as gtypes
-            client = genai.Client(api_key=settings.gemini_api_key)
-            r = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=gtypes.GenerateContentConfig(max_output_tokens=50, temperature=0),
-            )
-            text = r.text
-        elif provider == "anthropic" and settings.anthropic_api_key:
-            import anthropic
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            r = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=50,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = r.content[0].text
-        else:
-            return None
+        from app.services.llm_router import llm_router
+        text = await llm_router.generate_text("machine_type", prompt, max_tokens=50, fast=True)
     except Exception as e:
         logger.error("machine_type_service._llm_arbitrate_async: %s", e)
         return None
@@ -1204,35 +1183,8 @@ async def _ai_classify_inail_category(machine_name: str, canonical_categories: l
         f"Il valore di 'categoria' deve essere identico a una delle voci elencate sopra."
     )
     try:
-        if provider == "anthropic":
-            import anthropic
-            from app.config import settings as _s
-            client = anthropic.AsyncAnthropic(api_key=_s.anthropic_api_key)
-            response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=200,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = response.content[0].text
-        elif provider == "gemini":
-            from google import genai
-            from google.genai import types
-            from app.config import settings as _s
-            client = genai.Client(api_key=_s.gemini_api_key)
-            response = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=200,
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
-            )
-            raw = response.text
-        else:
-            return None
-
+        from app.services.llm_router import llm_router
+        raw = await llm_router.generate_text("machine_type", prompt, max_tokens=200, fast=True)
         from app.services.analysis_service import _parse_json_response
         parsed = _parse_json_response(raw)
         return parsed.get("categoria") if isinstance(parsed, dict) else None
@@ -1264,33 +1216,8 @@ async def _ai_generate_foreign_aliases(machine_name: str, provider: str) -> list
         f"Nessun testo aggiuntivo, nessuna spiegazione."
     )
     try:
-        if provider == "anthropic":
-            import anthropic
-            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-            response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=400,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = response.content[0].text
-        elif provider == "gemini":
-            from google import genai
-            from google.genai import types
-            client = genai.Client(api_key=settings.gemini_api_key)
-            response = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=400,
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
-            )
-            raw = response.text
-        else:
-            return []
-
+        from app.services.llm_router import llm_router
+        raw = await llm_router.generate_text("machine_type", prompt, max_tokens=400, fast=True)
         from app.services.analysis_service import _parse_json_response
         parsed = _parse_json_response(raw)
         if not isinstance(parsed, dict):

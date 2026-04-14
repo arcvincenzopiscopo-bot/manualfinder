@@ -137,3 +137,45 @@ def delete_brand_hint(row_id: int):
 def clear_config_cache():
     config_service.invalidate_cache()
     return {"status": "ok", "message": "Config cache invalidata."}
+
+
+# ─── AI usage & provider order ────────────────────────────────────────────────
+
+@router.get("/ai-usage")
+async def get_ai_usage():
+    """Contatori utilizzo odierno per provider (gemini, groq1, groq2)."""
+    from app.services.llm_router import llm_router
+    return await llm_router.get_all_usage_today()
+
+
+class ProviderOrderIn(BaseModel):
+    order: list[str]
+
+
+@router.get("/ai-provider-order")
+def get_ai_provider_order():
+    """Ordine provider per ogni tipo di funzione AI (da config_maps)."""
+    from app.services.llm_router import _DEFAULT_ORDER
+    task_types = list(_DEFAULT_ORDER.keys())
+    result = {}
+    order_map = config_service.get_map("ai_provider_order")
+    for task_type in task_types:
+        val = order_map.get(task_type)
+        result[task_type] = val if isinstance(val, list) else _DEFAULT_ORDER.get(task_type, [])
+    return result
+
+
+@router.put("/ai-provider-order/{task_type}")
+def set_ai_provider_order(task_type: str, body: ProviderOrderIn):
+    """Aggiorna l'ordine provider per un task type e invalida la cache del router."""
+    from app.services.llm_router import llm_router, _DEFAULT_ORDER, DAILY_LIMITS
+    valid_task_types = set(_DEFAULT_ORDER.keys())
+    if task_type not in valid_task_types:
+        raise HTTPException(400, f"task_type non valido. Valori ammessi: {sorted(valid_task_types)}")
+    valid_providers = set(DAILY_LIMITS.keys()) | {"tesseract"}
+    invalid = [p for p in body.order if p not in valid_providers]
+    if invalid:
+        raise HTTPException(400, f"Provider non validi: {invalid}. Ammessi: {sorted(valid_providers)}")
+    config_service.set_map_entry("ai_provider_order", task_type, body.order)
+    llm_router.invalidate_order_cache()
+    return {"status": "ok", "task_type": task_type, "order": body.order}

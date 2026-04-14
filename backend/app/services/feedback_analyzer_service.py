@@ -81,86 +81,79 @@ def invalidate_dynamic_rules_cache() -> None:
 
 # ── Analisi feedback ─────────────────────────────────────────────────────────
 
-_AI_PROMPT = """\
+_AI_PROMPT_BATCH = """\
 Sei un esperto di classificazione URL per un sistema di ricerca manuali d'uso di macchine industriali italiane.
 
-URL segnalato: {url}
-Tipo feedback: {feedback_type}
-Note ispettore: {notes}
-Tipo macchina cercata: {machine_type}
+Analizza i seguenti URL segnalati e per ognuno decidi quale regola di filtraggio applicare.
 
-Analizza l'URL e decidi quale regola applicare per evitare di proporre ancora questo tipo di documento.
-
-Rispondi SOLO con JSON (nessun testo aggiuntivo):
-{{
-  "rule_type": "block_domain" | "block_url_fragment" | "redirect_category" | "skip",
-  "rule_value": "<valore della regola>",
-  "reason": "<spiegazione in 1 riga>",
-  "confidence": "high" | "medium" | "low"
-}}
-
-Regole:
+Regole applicabili:
 - block_domain: il dominio pubblica quasi sempre cataloghi/brochure/ricambi, non manuali d'uso. rule_value = netloc (es. "example.com")
-- block_url_fragment: il PATH contiene un frammento specifico che indica documenti non-manuali (es. "/depliant/", "/product-line/"). rule_value = frammento path (es. "/depliant/")
-- redirect_category: è un manuale d'uso valido ma per un tipo di macchina diverso. rule_value = tipo corretto (es. "carrello elevatore")
-- skip: caso isolato non generalizzabile come regola
+- block_url_fragment: il PATH contiene un frammento specifico che indica documenti non-manuali (es. "/depliant/"). rule_value = frammento path
+- redirect_category: manuale valido ma per tipo macchina diverso. rule_value = tipo corretto (es. "carrello elevatore")
+- skip: caso isolato non generalizzabile
 
-Genera regola SOLO se confidence="high". Se non sei sicuro, usa skip."""
+Genera regola SOLO se confidence="high". Se non sei sicuro, usa skip.
+
+Rispondi SOLO con un JSON array (un oggetto per ogni URL, stesso ordine dell'input):
+[
+  {{"url": "...", "rule_type": "...", "rule_value": "...", "reason": "...", "confidence": "high"|"medium"|"low"}},
+  ...
+]
+
+URL da analizzare:
+{items}"""
+
+_AI_PROMPT_ITEM = "{idx}. URL: {url}\n   Feedback: {feedback_type}\n   Note: {notes}\n   Tipo macchina: {machine_type}"
+
+_SKIP_RESULT = {"rule_type": "skip", "rule_value": "", "reason": "quota esaurita o AI non disponibile", "confidence": "low"}
 
 
-async def _call_ai_rule(
-    url: str,
-    feedback_type: str,
-    notes: str,
-    machine_type: str,
-    provider: str,
-) -> dict:
-    """Chiama l'AI per classificare un URL in una regola di filtraggio."""
-    prompt = _AI_PROMPT.format(
-        url=url,
-        feedback_type=feedback_type,
-        notes=notes or "(nessuna nota)",
-        machine_type=machine_type or "non specificato",
+async def _call_ai_rules_batch(
+    items: list[dict],  # ogni item: {url, feedback_type, notes, machine_type}
+) -> list[dict]:
+    """
+    Classifica una lista di URL in un'unica chiamata AI (batch).
+    Risparmia N-1 chiamate rispetto al loop singolo.
+    Ritorna una lista di risultati nello stesso ordine dell'input.
+    """
+    from app.services.llm_router import llm_router, LLMQuotaExceededError
+
+    items_text = "\n\n".join(
+        _AI_PROMPT_ITEM.format(
+            idx=i + 1,
+            url=item["url"],
+            feedback_type=item["feedback_type"],
+            notes=item.get("notes") or "(nessuna nota)",
+            machine_type=item.get("machine_type") or "non specificato",
+        )
+        for i, item in enumerate(items)
     )
+    prompt = _AI_PROMPT_BATCH.format(items=items_text)
 
-    raw_text = ""
-    if provider == "anthropic":
-        import anthropic
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",  # modello economico per task semplice
-            max_tokens=256,
-            temperature=0,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw_text = response.content[0].text
-
-    elif provider == "gemini":
-        from google import genai
-        from google.genai import types
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=256,
-                temperature=0.0,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
-        raw_text = response.text
-
-    else:
-        return {"rule_type": "skip", "rule_value": "", "reason": "nessun AI configurato", "confidence": "low"}
-
-    # Estrai JSON dalla risposta
     try:
-        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
+        raw_text = await llm_router.generate_text(
+            "url_rule", prompt, fast=True, max_tokens=min(256 * len(items), 4096)
+        )
+    except LLMQuotaExceededError:
+        return [_SKIP_RESULT.copy() for _ in items]
+    except Exception as e:
+        logger.warning("_call_ai_rules_batch: errore AI — %s", e)
+        return [_SKIP_RESULT.copy() for _ in items]
+
+    # Estrai array JSON dalla risposta
+    try:
+        start = raw_text.find("[")
+        end = raw_text.rfind("]")
+        if start != -1 and end != -1:
+            results = json.loads(raw_text[start:end + 1])
+            if isinstance(results, list):
+                # Allinea alla lunghezza attesa (l'AI potrebbe restituirne meno)
+                while len(results) < len(items):
+                    results.append(_SKIP_RESULT.copy())
+                return results[:len(items)]
     except Exception:
         pass
-    return {"rule_type": "skip", "rule_value": "", "reason": "risposta AI non parsabile", "confidence": "low"}
+    return [_SKIP_RESULT.copy() for _ in items]
 
 
 def _upsert_rule(
@@ -375,9 +368,11 @@ async def run_analysis(provider: str) -> dict:
                     rules_updated += 1
                 processed_urls.update(source_urls)
 
-        # ── Step 3: AI per casi ambigui ──────────────────────────────────────
+        # ── Step 3: AI per casi ambigui (batch) ──────────────────────────────
         remaining = [f for f in feedback if f["url"] not in processed_urls]
 
+        # Prima passata: gestisci i casi senza AI
+        ai_needed: list[dict] = []
         for fb in remaining:
             url = fb["url"]
             parsed = urlparse(url)
@@ -420,54 +415,55 @@ async def run_analysis(provider: str) -> dict:
                 processed_urls.add(url)
                 continue
 
-            # Chiama AI per casi rimanenti (provider disponibile)
-            if provider not in ("anthropic", "gemini"):
-                skipped += 1
-                continue
+            # Accodato per batch AI
+            ai_needed.append(fb)
 
-            try:
-                result = await _call_ai_rule(
-                    url=url,
-                    feedback_type=fb["feedback_type"],
-                    notes=fb.get("notes") or "",
-                    machine_type=fb.get("machine_type") or "",
-                    provider=provider,
+        # Seconda passata: una singola chiamata AI per tutti i casi ambigui (R3)
+        if ai_needed:
+            batch_input = [
+                {
+                    "url": fb["url"],
+                    "feedback_type": fb["feedback_type"],
+                    "notes": fb.get("notes") or "",
+                    "machine_type": fb.get("machine_type") or "",
+                }
+                for fb in ai_needed
+            ]
+            ai_results = await _call_ai_rules_batch(batch_input)
+
+            for fb, result in zip(ai_needed, ai_results):
+                url = fb["url"]
+                if result.get("confidence") != "high" or result.get("rule_type") == "skip":
+                    skipped += 1
+                    processed_urls.add(url)
+                    continue
+
+                rule_type = result.get("rule_type", "skip")
+                rule_value = result.get("rule_value", "").strip()
+                if not rule_value or rule_type == "skip":
+                    skipped += 1
+                    processed_urls.add(url)
+                    continue
+
+                ctx_mt = None
+                if rule_type == "redirect_category":
+                    ctx_mt = fb.get("machine_type") or None
+
+                action = _upsert_rule(
+                    conn,
+                    rule_type=rule_type,
+                    rule_value=rule_value,
+                    context_machine_type=ctx_mt,
+                    reason=result.get("reason", ""),
+                    source_urls=[url],
+                    feedback_count=1,
                 )
-            except Exception:
-                skipped += 1
-                continue
-
-            if result.get("confidence") != "high" or result.get("rule_type") == "skip":
-                skipped += 1
+                if action == "created":
+                    rules_created += 1
+                    new_rules.append({"rule_type": rule_type, "rule_value": rule_value, "reason": result.get("reason", "")})
+                else:
+                    rules_updated += 1
                 processed_urls.add(url)
-                continue
-
-            rule_type = result.get("rule_type", "skip")
-            rule_value = result.get("rule_value", "").strip()
-            if not rule_value or rule_type == "skip":
-                skipped += 1
-                processed_urls.add(url)
-                continue
-
-            ctx_mt = None
-            if rule_type == "redirect_category":
-                ctx_mt = fb.get("machine_type") or None
-
-            action = _upsert_rule(
-                conn,
-                rule_type=rule_type,
-                rule_value=rule_value,
-                context_machine_type=ctx_mt,
-                reason=result.get("reason", ""),
-                source_urls=[url],
-                feedback_count=1,
-            )
-            if action == "created":
-                rules_created += 1
-                new_rules.append({"rule_type": rule_type, "rule_value": rule_value, "reason": result.get("reason", "")})
-            else:
-                rules_updated += 1
-            processed_urls.add(url)
 
     # Invalida cache dopo aggiornamenti
     total_created = rules_created + ql_created
@@ -479,7 +475,7 @@ async def run_analysis(provider: str) -> dict:
     prompts_improved = 0
     try:
         from app.services import prompt_optimizer_service
-        opt_result = await prompt_optimizer_service.run_optimizer(provider, min_analyses=5)
+        opt_result = await prompt_optimizer_service.run_optimizer(min_analyses=5)
         prompts_improved = opt_result.get("types_improved", 0)
         if prompts_improved > 0:
             logger.info("prompt_optimizer: migliorati %d prompt rule", prompts_improved)

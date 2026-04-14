@@ -461,6 +461,26 @@ def _m020_config_tables(conn) -> None:
     conn.commit()
 
 
+def _m021_ai_usage(conn) -> None:
+    """
+    Tabella per tracciare l'utilizzo giornaliero delle API AI (Gemini, Groq).
+    La chiave primaria (provider, date) garantisce un reset automatico ogni nuovo giorno:
+    ogni chiamata INSERT ... ON CONFLICT DO UPDATE incrementa atomicamente il contatore.
+    Le righe vecchie restano come log storico dei consumi.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                provider      TEXT NOT NULL,
+                date          DATE NOT NULL DEFAULT CURRENT_DATE,
+                request_count INTEGER NOT NULL DEFAULT 0,
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (provider, date)
+            )
+        """)
+    conn.commit()
+
+
 MIGRATIONS: list[tuple[int, str, Callable]] = [
     (1,  "machine_types core tables",                    _m001_machine_types),
     (2,  "machine_type_hazard table",                    _m002_machine_type_hazard),
@@ -482,6 +502,7 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
     (18, "backfill machine_type_id from text columns",   _m018_backfill_machine_type_ids),
     (19, "drop redundant text columns",                  _m019_drop_redundant_text_columns),
     (20, "config_lists/maps, domain/brand hints, MT cols", _m020_config_tables),
+    (21, "ai_usage: tracciamento utilizzo giornaliero API AI", _m021_ai_usage),
 ]
 
 

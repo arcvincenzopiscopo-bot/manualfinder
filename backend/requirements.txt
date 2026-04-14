@@ -16,11 +16,9 @@ numpy>=1.26.0,<2.0
 # PDF processing
 PyMuPDF>=1.24.0
 
-# AI providers - Livello 1 (a pagamento)
-anthropic>=0.34.0
-
-# AI providers - Livello 2 (gratuito, opzionale)
+# AI providers - gratuiti
 google-genai>=0.21.0
+groq>=0.9.0
 
 # OCR fallback
 pytesseract>=0.3.13

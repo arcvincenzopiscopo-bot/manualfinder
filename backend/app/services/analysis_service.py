@@ -1650,10 +1650,7 @@ async def _analyze_pdf_direct(
     lang = _detect_language(text)
     prompt += _translation_note(lang)
 
-    if provider == "anthropic":
-        result_json = await _call_claude_with_pdf(pdf_b64, prompt)
-    else:
-        result_json = await _call_ai_with_text(text, prompt, provider)
+    result_json = await _call_claude_with_pdf(pdf_b64, prompt, text_fallback=text)
 
     card = _build_safety_card(brand, model, result_json, pdf_url, fonte_tipo)
     card.gap_ce_ante = result_json.get("gap_ce_ante")
@@ -1831,80 +1828,37 @@ def _check_gemini_finish_reason(response) -> None:
         pass  # Non bloccare mai per un warning di diagnostica
 
 
-async def _call_claude_with_pdf(pdf_b64: str, prompt: str) -> dict:
-    import anthropic
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
-    response = await client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=16000,
-        temperature=0,
-        system=SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "application/pdf",
-                        "data": pdf_b64,
-                    },
-                },
-                {"type": "text", "text": prompt},
-            ],
-        }],
-    )
-    _check_anthropic_finish_reason(response)
-    return _parse_json_response(response.content[0].text)
+async def _call_claude_with_pdf(pdf_b64: str, prompt: str, text_fallback: str = "") -> dict:
+    """Analisi PDF via llm_router: Gemini nativo se disponibile, altrimenti testo+Groq."""
+    from app.services.llm_router import llm_router, LLMQuotaExceededError
+    try:
+        raw = await llm_router.generate_with_pdf(
+            "pdf_analysis", pdf_b64, text_fallback, prompt,
+            system=SYSTEM_PROMPT, max_tokens=16000,
+        )
+        return _parse_json_response(raw)
+    except LLMQuotaExceededError:
+        raise RuntimeError("Limite giornaliero raggiunto per tutti i provider AI, riprova domani.")
 
 
 async def _call_ai_with_text(
-    text: str, prompt: str, provider: str,
+    text: str, prompt: str, provider: str = "auto",
     is_fallback: bool = False, is_reduce: bool = False
 ) -> dict:
+    """Analisi testo via llm_router con fallback automatico Gemini→Groq1→Groq2."""
+    from app.services.llm_router import llm_router, LLMQuotaExceededError
     # Rileva lingua e rafforza istruzione traduzione se non italiano
     if text and not is_fallback and not is_reduce:
         lang = _detect_language(text)
         prompt = prompt + _translation_note(lang)
     full_prompt = prompt if (is_fallback or is_reduce) else f"{prompt}\n\nTESTO DEL MANUALE:\n{text}"
-
-    if provider == "anthropic":
-        import anthropic
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=16000,
-            temperature=0,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": full_prompt}],
+    try:
+        raw = await llm_router.generate_text(
+            "text_analysis", full_prompt, system=SYSTEM_PROMPT, max_tokens=16000
         )
-        _check_anthropic_finish_reason(response)
-        return _parse_json_response(response.content[0].text)
-
-    elif provider == "gemini":
-        from google import genai
-        from google.genai import types
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=full_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                max_output_tokens=16000,
-                temperature=0.0,
-                # thinking_budget=0 disabilita il reasoning interno del modello:
-                # senza thinking, gemini-2.5-flash rispetta temperature=0 correttamente.
-                # Il reasoning non serve per estrarre JSON strutturato da un documento.
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
-        )
-        _check_gemini_finish_reason(response)
-        return _parse_json_response(response.text)
-
-    else:
-        # Nessun provider disponibile
-        raise RuntimeError("Nessun provider AI configurato per l'analisi")
+        return _parse_json_response(raw)
+    except LLMQuotaExceededError:
+        raise RuntimeError("Limite giornaliero raggiunto per tutti i provider AI, riprova domani.")
 
 
 def _parse_json_response(text: str) -> dict:

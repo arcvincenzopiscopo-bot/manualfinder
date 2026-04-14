@@ -1,9 +1,167 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { rawFetch, COLORS, card, btn, input } from '../admin-shared'
 import { SectionTitle, EmptyState, ErrorBox } from '../admin-ui'
 
+// ── Tipi per sezione AI ───────────────────────────────────────────────────────
+
+interface ProviderUsage {
+  usage: number
+  limit: number
+  available: boolean
+}
+
+const TASK_LABELS: Record<string, string> = {
+  ocr:           'OCR / Vision (targhe)',
+  pdf_analysis:  'Analisi PDF diretto',
+  text_analysis: 'Analisi testo manuale',
+  machine_type:  'Inferenza tipo macchina',
+  url_rule:      'Classificazione URL feedback',
+  prompt_rule:   'Generazione regole prompt',
+  quality_check: 'Controllo qualità PDF',
+}
+
+const PROVIDER_LABELS: Record<string, string> = {
+  gemini:    'Gemini',
+  groq1:     'Groq 1',
+  groq2:     'Groq 2',
+  tesseract: 'Tesseract (locale)',
+}
+
+function SectionAi({ cfgFetch }: { cfgFetch: (p: string, o?: RequestInit) => Promise<unknown> }) {
+  const [usage, setUsage] = useState<Record<string, ProviderUsage>>({})
+  const [order, setOrder] = useState<Record<string, string[]>>({})
+  const [saving, setSaving] = useState<Record<string, boolean>>({})
+  const [msgs, setMsgs] = useState<Record<string, string>>({})
+  const [loadingUsage, setLoadingUsage] = useState(true)
+
+  const loadUsage = useCallback(() => {
+    cfgFetch('/ai-usage')
+      .then(r => setUsage(r as Record<string, ProviderUsage>))
+      .catch(() => {})
+      .finally(() => setLoadingUsage(false))
+  }, [cfgFetch])
+
+  const loadOrder = useCallback(() => {
+    cfgFetch('/ai-provider-order')
+      .then(r => setOrder(r as Record<string, string[]>))
+      .catch(() => {})
+  }, [cfgFetch])
+
+  useEffect(() => {
+    loadUsage()
+    loadOrder()
+    // Auto-refresh utilizzo ogni 30s
+    const id = setInterval(loadUsage, 30000)
+    return () => clearInterval(id)
+  }, [loadUsage, loadOrder])
+
+  const moveProvider = (taskType: string, idx: number, dir: -1 | 1) => {
+    const newOrder = [...(order[taskType] || [])]
+    const swapIdx = idx + dir
+    if (swapIdx < 0 || swapIdx >= newOrder.length) return
+    ;[newOrder[idx], newOrder[swapIdx]] = [newOrder[swapIdx], newOrder[idx]]
+    setOrder(prev => ({ ...prev, [taskType]: newOrder }))
+  }
+
+  const saveOrder = async (taskType: string) => {
+    setSaving(prev => ({ ...prev, [taskType]: true }))
+    setMsgs(prev => ({ ...prev, [taskType]: '' }))
+    try {
+      await cfgFetch(`/ai-provider-order/${taskType}`, {
+        method: 'PUT',
+        body: JSON.stringify({ order: order[taskType] }),
+      })
+      setMsgs(prev => ({ ...prev, [taskType]: '✅ Salvato' }))
+    } catch (e: unknown) {
+      setMsgs(prev => ({ ...prev, [taskType]: `❌ ${(e as Error).message}` }))
+    } finally {
+      setSaving(prev => ({ ...prev, [taskType]: false }))
+    }
+  }
+
+  const LIMIT_COLORS: Record<string, string> = { gemini: '#0284c7', groq1: '#7c3aed', groq2: '#be185d' }
+
+  return (
+    <div>
+      {/* Utilizzo oggi */}
+      <div style={card}>
+        <SectionTitle>Utilizzo oggi {loadingUsage ? '(caricamento...)' : ''}</SectionTitle>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {Object.entries(usage).map(([provider, data]) => {
+            const pct = Math.round((data.usage / data.limit) * 100)
+            const color = LIMIT_COLORS[provider] || '#64748b'
+            return (
+              <div key={provider} style={{
+                border: `2px solid ${color}`, borderRadius: 10, padding: '12px 18px',
+                minWidth: 180, background: data.available ? '#f0fdf4' : '#fef2f2',
+              }}>
+                <div style={{ fontWeight: 700, color, fontSize: 15 }}>
+                  {PROVIDER_LABELS[provider] || provider}
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: data.available ? '#16a34a' : '#dc2626', margin: '4px 0' }}>
+                  {data.usage} <span style={{ fontSize: 14, fontWeight: 400, color: '#64748b' }}>/ {data.limit}</span>
+                </div>
+                <div style={{ height: 6, borderRadius: 3, background: '#e2e8f0', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct > 85 ? '#dc2626' : pct > 60 ? '#d97706' : color }} />
+                </div>
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                  {pct}% — {data.available ? '✓ Disponibile' : '✗ Esaurito'}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        {Object.keys(usage).length === 0 && !loadingUsage && (
+          <EmptyState>Nessun dato disponibile — verifica che la tabella ai_usage esista.</EmptyState>
+        )}
+        <button onClick={loadUsage} style={{ ...btn('ghost', true), marginTop: 10 }}>🔄 Aggiorna</button>
+      </div>
+
+      {/* Ordine provider per funzione */}
+      <div style={card}>
+        <SectionTitle>Ordine provider per funzione AI</SectionTitle>
+        <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
+          Il primo provider disponibile sotto la quota giornaliera viene usato. Usa le frecce per riordinare.
+        </div>
+        {Object.entries(TASK_LABELS).map(([taskType, label]) => {
+          const providers = order[taskType] || []
+          return (
+            <div key={taskType} style={{ marginBottom: 12, padding: '10px 12px', border: `1px solid ${COLORS.border}`, borderRadius: 8, background: '#fafafa' }}>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>{label}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                {providers.map((p, i) => (
+                  <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{
+                      padding: '3px 10px', borderRadius: 14, fontSize: 12, fontWeight: 600,
+                      background: i === 0 ? '#dbeafe' : '#f1f5f9',
+                      color: i === 0 ? '#1e40af' : '#475569',
+                      border: `1px solid ${i === 0 ? '#93c5fd' : '#e2e8f0'}`,
+                    }}>
+                      {i + 1}. {PROVIDER_LABELS[p] || p}
+                    </span>
+                    <button onClick={() => moveProvider(taskType, i, -1)} disabled={i === 0} style={{ ...btn('ghost', true), padding: '2px 6px', fontSize: 11 }} title="Sposta su">↑</button>
+                    <button onClick={() => moveProvider(taskType, i, 1)} disabled={i === providers.length - 1} style={{ ...btn('ghost', true), padding: '2px 6px', fontSize: 11 }} title="Sposta giù">↓</button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => saveOrder(taskType)}
+                  disabled={saving[taskType]}
+                  style={{ ...btn('primary', true), marginLeft: 8 }}
+                >
+                  {saving[taskType] ? '...' : '💾 Salva'}
+                </button>
+                {msgs[taskType] && <span style={{ fontSize: 12, color: msgs[taskType].startsWith('✅') ? COLORS.success : COLORS.danger }}>{msgs[taskType]}</span>}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function TabConfig() {
-  const [section, setSection] = useState<'lists'|'maps'|'domains'|'brands'>('lists')
+  const [section, setSection] = useState<'ai'|'lists'|'maps'|'domains'|'brands'>('ai')
   const [listKeys, setListKeys]     = useState<string[]>([])
   const [mapKeys, setMapKeys]       = useState<string[]>([])
   const [selListKey, setSelListKey] = useState('')
@@ -114,7 +272,8 @@ export function TabConfig() {
     cfgFetch('/brand-hints').then(r => setBrandHints(r.hints || []))
   }
 
-  const sectionBtns: {id: 'lists'|'maps'|'domains'|'brands', label: string}[] = [
+  const sectionBtns: {id: 'ai'|'lists'|'maps'|'domains'|'brands', label: string}[] = [
+    { id: 'ai',     label: '🤖 Provider AI' },
     { id: 'lists',   label: 'Liste' },
     { id: 'maps',    label: 'Mappe' },
     { id: 'domains', label: 'Domini' },
@@ -139,6 +298,9 @@ export function TabConfig() {
           🔄 Invalida cache
         </button>
       </div>
+
+      {/* SECTION: AI Provider */}
+      {section === 'ai' && <SectionAi cfgFetch={cfgFetch} />}
 
       {/* SECTION: Liste */}
       {section === 'lists' && (
